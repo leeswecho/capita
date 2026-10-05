@@ -1,0 +1,783 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>World Map Globe</title>
+<style>
+  :root {
+    --bg: #05070d;
+    --panel: rgba(18, 22, 32, 0.92);
+    --panel-border: rgba(255, 255, 255, 0.08);
+    --text: #e6e9ef;
+    --muted: #8b93a7;
+    --accent: #ffd34d;
+    --river: #4fc3ff;
+    --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font: 14px/1.45 var(--font); }
+  #app { display: flex; height: 100%; }
+  #view { position: relative; flex: 1; min-width: 0; }
+  #view canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+  #view canvas.dragging { cursor: grabbing; }
+
+  #toolbar { position: absolute; top: 12px; left: 12px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .chip { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 18px; padding: 6px 12px; color: var(--text); font: inherit; font-size: 13px; cursor: pointer; user-select: none; display: inline-flex; align-items: center; gap: 6px; }
+  .chip input[type=checkbox] { margin: 0; accent-color: var(--accent); }
+  #goto { width: 200px; cursor: text; outline: none; }
+  #goto::placeholder { color: var(--muted); }
+
+  #status { position: absolute; left: 12px; bottom: 10px; font-size: 12px; color: var(--muted); background: rgba(0,0,0,0.45); padding: 4px 10px; border-radius: 6px; font-variant-numeric: tabular-nums; pointer-events: none; }
+  #loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 15px; pointer-events: none; }
+
+  #side { width: 340px; flex: none; background: var(--panel); border-left: 1px solid var(--panel-border); overflow-y: auto; padding: 18px 18px 28px; }
+  #side h1 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 14px; font-weight: 600; }
+  #side h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 20px 0 8px; font-weight: 600; }
+  #side h2 small { text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .empty { color: var(--muted); padding: 30px 0; text-align: center; }
+  .tid { font-size: 26px; font-weight: 700; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; display: flex; align-items: center; gap: 10px; }
+  .pin { font-size: 11px; font-weight: 600; color: #000; background: var(--accent); border-radius: 4px; padding: 1px 6px; letter-spacing: 0.04em; }
+  .sub { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-variant-numeric: tabular-nums; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; }
+
+  .stack { display: flex; height: 14px; border-radius: 4px; overflow: hidden; margin-bottom: 10px; background: #222; }
+  .bar-row { display: grid; grid-template-columns: 78px 1fr 38px; align-items: center; gap: 8px; font-size: 13px; margin: 3px 0; }
+  .bar-row .track { height: 8px; background: rgba(255,255,255,0.07); border-radius: 4px; overflow: hidden; }
+  .bar-row .fill { height: 100%; border-radius: 4px; }
+  .bar-row .pct { text-align: right; font-variant-numeric: tabular-nums; }
+  .bar-row.zero { color: var(--muted); }
+  .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+
+  .river-line { display: flex; align-items: center; gap: 8px; }
+  .river-name { color: var(--river); font-weight: 600; }
+  .none { color: var(--muted); }
+  .bignum { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .bignum small { font-size: 13px; font-weight: 400; color: var(--muted); }
+  .country { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+  .country code { color: var(--muted); font-size: 12px; font-weight: 400; margin-left: 6px; }
+  .levels { display: grid; grid-template-columns: repeat(5, 1fr); gap: 3px; margin: 8px 0 8px; }
+  .levels .lv { text-align: center; font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .levels .lv::before { content: ""; display: block; height: 10px; border-radius: 3px; margin-bottom: 2px;
+    background: linear-gradient(rgba(232, 228, 220, var(--a)), rgba(232, 228, 220, var(--a))), #556043; }
+  .levels .lv.on { color: var(--text); font-weight: 600; }
+  .levels .lv.on::before { box-shadow: 0 0 0 2px var(--accent); }
+  .note { color: var(--muted); font-size: 12px; margin-top: 6px; }
+
+  #legend { position: absolute; right: 12px; bottom: 10px; background: var(--panel); border: 1px solid var(--panel-border); border-radius: 8px; padding: 8px 12px; font-size: 11px; color: var(--muted); width: 230px; pointer-events: none; }
+  #legend .title { color: var(--text); font-size: 12px; margin-bottom: 6px; }
+  #legend .levels { margin: 0; }
+  #legend .updated { margin-top: 6px; font-variant-numeric: tabular-nums; }
+  #legend .updated.flash { color: var(--accent); }
+
+  .nbrs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+  .nbrs button { background: rgba(255,255,255,0.05); color: var(--text); border: 1px solid var(--panel-border); border-radius: 6px; padding: 6px 2px; font: inherit; font-size: 11px; cursor: pointer; font-variant-numeric: tabular-nums; line-height: 1.3; }
+  .nbrs button:hover:not(:disabled) { border-color: var(--accent); }
+  .nbrs button:disabled { opacity: 0.35; cursor: default; }
+  .nbrs button.self { background: rgba(255, 211, 77, 0.15); border-color: var(--accent); cursor: default; }
+  .nbrs .dir { color: var(--muted); display: block; text-transform: uppercase; font-size: 10px; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 22px; line-height: 1.6; }
+  kbd { background: rgba(255,255,255,0.08); border-radius: 3px; padding: 0 4px; font-size: 11px; }
+
+  @media (max-width: 760px) {
+    #app { flex-direction: column; }
+    #side { width: 100%; height: 42%; border-left: none; border-top: 1px solid var(--panel-border); }
+    #goto { width: 150px; }
+    #legend { display: none; }
+  }
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="app">
+  <div id="view">
+    <div id="loading">Loading map…</div>
+    <div id="toolbar">
+      <label class="chip"><input type="checkbox" id="optRivers" checked> Rivers</label>
+      <label class="chip"><input type="checkbox" id="optHeat" checked> Population heatmap</label>
+      <label class="chip"><input type="checkbox" id="optTerrain"> Terrain overlay</label>
+      <label class="chip"><input type="checkbox" id="optCover"> Cover overlay</label>
+      <label class="chip"><input type="checkbox" id="optGrid" checked> Tile grid</label>
+      <input class="chip" id="goto" placeholder="Go to: N275E0865 or 27.9, 86.9" spellcheck="false">
+    </div>
+    <div id="status"></div>
+    <div id="legend">
+      <div class="title">People per tile (none below 1M)</div>
+      <div id="legendLevels"></div>
+      <div class="updated" id="countryTint"></div>
+      <div class="updated" id="popUpdated"></div>
+    </div>
+  </div>
+  <aside id="side">
+    <h1>Tile info</h1>
+    <div id="info"><div class="empty">Hover over the globe to inspect a tile.</div></div>
+    <div class="hint">
+      Drag to rotate · scroll to zoom · double-click to fly there<br>
+      Click a tile to pin it · <kbd>Esc</kbd> to unpin
+      <div id="texInfo"></div>
+    </div>
+  </aside>
+</div>
+
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+const EARTH_KM = 6371;
+// Landform (terrain) and what is on the land (cover): two independent sets of percentages per tile.
+const TERRAIN_COLORS = {
+  water: "#2d6cb8", plains: "#c9c27a", hills: "#b98a4e", mountains: "#8d8580",
+};
+const COVER_COLORS = {
+  grass: "#9cc458", forest: "#2e7d3c", desert: "#e6c47c", sand: "#f2dfa7", wetlands: "#5f7f5a", tundra: "#cfe2e8",
+  ice: "#f4fbff",
+};
+
+// ---------- coordinate helpers (must match THREE.SphereGeometry's UV layout) ----------
+// u = (lon + 180) / 360, v = (90 - lat) / 180;  x = -cos(2πu)·sin(πv), y = cos(πv), z = sin(2πu)·sin(πv)
+function latLonToVec(lat, lon, r = 1) {
+  const theta = (lon + 180) / 360 * Math.PI * 2;
+  const phi = (90 - lat) / 180 * Math.PI;
+  return new THREE.Vector3(-Math.cos(theta) * Math.sin(phi) * r, Math.cos(phi) * r, Math.sin(theta) * Math.sin(phi) * r);
+}
+function vecToLatLon(v) {
+  const n = v.clone().normalize();
+  const lat = Math.asin(THREE.MathUtils.clamp(n.y, -1, 1)) * 180 / Math.PI;
+  let theta = Math.atan2(n.z, -n.x);
+  if (theta < 0) theta += Math.PI * 2;
+  let lon = theta / (Math.PI * 2) * 360 - 180;
+  if (lon >= 180) lon -= 360;
+  return { lat, lon };
+}
+// Tile grid: JavaScript copy of grid.py. TILE is replaced by META.map.tile_size_degrees on load.
+// Ids name the south-west corner in tenths of a degree: N395W1055 = 39.5N, 105.5W.
+let TILE = 0.5;
+function tileId(lat, lon) {
+  const la = Math.round(lat * 10), lo = Math.round(lon * 10);
+  return `${la >= 0 ? "N" : "S"}${String(Math.abs(la)).padStart(3, "0")}${lo >= 0 ? "E" : "W"}${String(Math.abs(lo)).padStart(4, "0")}`;
+}
+function parseTileId(tid) {
+  return { lat: +tid.slice(1, 4) / 10 * (tid[0] === "N" ? 1 : -1), lon: +tid.slice(5, 9) / 10 * (tid[4] === "E" ? 1 : -1) };
+}
+function tileAt(lat, lon) {
+  // Tiles span [corner, corner + TILE), so a point on a boundary belongs to the tile north/east of it.
+  const rows = Math.round(180 / TILE), cols = Math.round(360 / TILE);
+  const r = Math.max(0, Math.min(rows - 1, rows - 1 - Math.floor((lat + 90) / TILE)));
+  const c = ((Math.floor((lon + 180) / TILE) % cols) + cols) % cols;
+  return tileId(90 - (r + 1) * TILE, c * TILE - 180);
+}
+const TILE_ID_RE = /^[NS]\d{3}[EW]\d{4}$/;
+// Population heatmap: an off-white "concrete" tint in five steps by people per tile. The steps are
+// 1M..16M people per 1° x 1° area, scaled to the tile size (0.25M..4M+ for 0.5° tiles); tiles below
+// the first step get none. Capped well below opaque so terrain always shows through.
+const HEAT_RGB = [232, 228, 220];
+const HEAT_MAX_ALPHA = 0.5;
+const HEAT_LEVELS_PER_DEG2 = [1e6, 2e6, 4e6, 8e6, 16e6];
+let HEAT_LEVELS = HEAT_LEVELS_PER_DEG2.map(x => x * TILE * TILE);  // lower bound of each level
+const heatLevel = pop => HEAT_LEVELS.filter(x => pop >= x).length;  // 0 = no tint, 1..5
+const heatAlpha = level => HEAT_MAX_ALPHA * level / HEAT_LEVELS.length;
+const fmtMillions = x => `${+(x / 1e6).toFixed(2)}M`;
+function heatLevelsHtml(active) {
+  return `<div class="levels">${HEAT_LEVELS.map((x, i) =>
+    `<div class="lv${active === i + 1 ? " on" : ""}" style="--a:${heatAlpha(i + 1)}">${fmtMillions(x)}${i === HEAT_LEVELS.length - 1 ? "+" : ""}</div>`
+  ).join("")}</div>`;
+}
+const fmtInt = n => Math.round(n).toLocaleString();
+function fmtDensity(d) {
+  if (d === 0) return "0";
+  if (d < 1) return d.toFixed(2);
+  if (d < 100) return d.toFixed(1);
+  return fmtInt(d);
+}
+const fmtLat = (v, d = 2) => `${Math.abs(v).toFixed(d)}°${v >= 0 ? "N" : "S"}`;
+const fmtLon = (v, d = 2) => `${Math.abs(v).toFixed(d)}°${v >= 0 ? "E" : "W"}`;
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// ---------- scene ----------
+const view = document.getElementById("view");
+const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+view.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, 1, 0.0005, 200);
+camera.position.copy(latLonToVec(25, 10, 3.2));
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enablePan = false;
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 1.03;
+controls.maxDistance = 8;
+
+// Lighting: a "headlight" that follows the camera, like Google Earth's always-lit view.
+scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+scene.add(sun);
+
+// Stars
+{
+  const n = 4000, pos = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    const v = new THREE.Vector3().randomDirection().multiplyScalar(60 + Math.random() * 40);
+    pos.set([v.x, v.y, v.z], i * 3);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({ color: 0xffffff, size: 0.18, sizeAttenuation: true, transparent: true, opacity: 0.8 })));
+}
+
+// Globe. Its image is chosen once /api/meta has listed the available sizes (loadGlobeTexture).
+const globe = new THREE.Mesh(
+  new THREE.SphereGeometry(1, 192, 96),
+  new THREE.MeshPhongMaterial({ color: 0x0b1a2e, specular: 0x222222, shininess: 12 })
+);
+scene.add(globe);
+
+// Pick the largest globe image this graphics card accepts: WebGL can't use a texture wider than
+// MAX_TEXTURE_SIZE (16384 on most desktop browsers, 4096-8192 on older or low-end hardware).
+// Add ?texture=8192 (or any width) to the page URL to cap it, e.g. to save memory on a laptop.
+function chooseTexture(textures) {
+  const gpuMax = renderer.capabilities.maxTextureSize;
+  const cap = Math.min(gpuMax, +new URLSearchParams(location.search).get("texture") || Infinity);
+  const sizes = [...(textures || [])].sort((a, b) => a.width - b.width);
+  const fits = sizes.filter(t => t.width <= cap);
+  const pick = fits.length ? fits[fits.length - 1] : sizes[0];
+  return { url: pick ? pick.url : "/earth.jpg", width: pick ? pick.width : null, gpuMax };
+}
+function loadGlobeTexture(textures) {
+  const { url, width, gpuMax } = chooseTexture(textures);
+  new THREE.TextureLoader().load(url, tex => {
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    globe.material.map = tex;
+    globe.material.color.set(0xffffff);
+    globe.material.needsUpdate = true;
+    document.getElementById("loading")?.remove();
+  });
+  document.getElementById("texInfo").textContent =
+    `Globe image ${width ? `${width.toLocaleString()} px wide` : "default"} (graphics card limit ${gpuMax.toLocaleString()} px)`;
+}
+
+// Atmosphere glow (fresnel rim on a slightly larger back-facing sphere)
+scene.add(new THREE.Mesh(
+  new THREE.SphereGeometry(1.06, 96, 48),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    vertexShader: `varying vec3 vN; varying vec3 vP;
+      void main(){ vN = normalize(normalMatrix * normal); vec4 p = modelViewMatrix * vec4(position,1.0); vP = p.xyz; gl_Position = projectionMatrix * p; }`,
+    fragmentShader: `varying vec3 vN; varying vec3 vP;
+      void main(){ float i = pow(clamp(0.72 + dot(normalize(vP), vN), 0.0, 1.0), 3.0);
+        gl_FragColor = vec4(0.35, 0.62, 1.0, 1.0) * i * 1.1; }`,
+  })
+));
+
+// Tile grid (one line per tile edge), faded in as the camera approaches. Built once TILE is known.
+const gridMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false });
+let gridLines = null;
+function buildGrid() {
+  const R = 1.0008, cols = Math.round(360 / TILE), rows = Math.round(180 / TILE);
+  const pos = new Float32Array((cols * rows + (rows - 1) * cols) * 6);
+  let k = 0;
+  const put = (lat, lon) => { const v = latLonToVec(lat, lon, R); pos[k++] = v.x; pos[k++] = v.y; pos[k++] = v.z; };
+  for (let c = 0; c < cols; c++)          // meridian pieces
+    for (let r = 0; r < rows; r++) { const lon = c * TILE - 180, lat = r * TILE - 90; put(lat, lon); put(lat + TILE, lon); }
+  for (let r = 1; r < rows; r++)          // parallel pieces (not at the poles)
+    for (let c = 0; c < cols; c++) { const lat = r * TILE - 90, lon = c * TILE - 180; put(lat, lon); put(lat, lon + TILE); }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  gridLines = new THREE.LineSegments(g, gridMat);
+  gridLines.renderOrder = 3;
+  scene.add(gridLines);
+}
+
+// Hover highlight: translucent fill + outline
+const hlFillMat = new THREE.MeshBasicMaterial({ color: 0xffd34d, transparent: true, opacity: 0.28, depthWrite: false, side: THREE.DoubleSide });
+const hlLineMat = new THREE.LineBasicMaterial({ color: 0xffd34d });
+const highlight = new THREE.Group();
+highlight.renderOrder = 5;
+scene.add(highlight);
+function tileOutline(lat, lon, R) {
+  const pts = [], N = 12, s = TILE / N;
+  for (let i = 0; i <= N; i++) pts.push(latLonToVec(lat, lon + i * s, R));
+  for (let i = 1; i <= N; i++) pts.push(latLonToVec(lat + i * s, lon + TILE, R));
+  for (let i = 1; i <= N; i++) pts.push(latLonToVec(lat + TILE, lon + TILE - i * s, R));
+  for (let i = 1; i < N; i++) pts.push(latLonToVec(lat + TILE - i * s, lon, R));
+  return new THREE.BufferGeometry().setFromPoints(pts);
+}
+function setHighlight(tid, pinned) {
+  highlight.children.forEach(c => c.geometry.dispose());
+  highlight.clear();
+  if (!tid) return;
+  const { lat, lon } = parseTileId(tid);
+  const D = Math.PI / 180;
+  const fill = new THREE.SphereGeometry(1.0012, 6, 6, (lon + 180) * D, TILE * D, (90 - lat - TILE) * D, TILE * D);
+  highlight.add(new THREE.Mesh(fill, hlFillMat));
+  highlight.add(new THREE.LineLoop(tileOutline(lat, lon, 1.0014), hlLineMat));
+  hlLineMat.color.set(pinned ? 0xff8a3d : 0xffd34d);
+  hlFillMat.color.set(pinned ? 0xff8a3d : 0xffd34d);
+}
+
+// ---------- data ----------
+let META = null;                  // { map, rivers }
+const tileCache = new Map();      // "tid@populationVersion" -> Promise<tile JSON>
+const riverLines = new Map();     // river name -> THREE.Line
+const riverGroup = new THREE.Group();
+riverGroup.renderOrder = 4;
+scene.add(riverGroup);
+let terrainOverlay = null, coverOverlay = null, heatOverlay = null;
+function setHeatVisible(on) {
+  if (heatOverlay) heatOverlay.visible = on;
+  document.getElementById("legend").style.visibility = on ? "visible" : "hidden";
+  document.getElementById("legendLevels").innerHTML = heatLevelsHtml(0);
+}
+
+function fetchTile(tid) {
+  const key = `${tid}@${popVersion}`;
+  if (!tileCache.has(key)) {
+    tileCache.set(key, fetch(`/api/tile/${tid}`).then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    }).catch(e => { tileCache.delete(key); throw e; }));
+  }
+  return tileCache.get(key);
+}
+
+async function loadData() {
+  META = await (await fetch("/api/meta")).json();
+  loadGlobeTexture(META.textures);
+  TILE = META.map.tile_size_degrees;
+  HEAT_LEVELS = HEAT_LEVELS_PER_DEG2.map(x => x * TILE * TILE);
+  document.querySelector("#legend .title").textContent =
+    `People per ${TILE}° tile (none below ${fmtMillions(HEAT_LEVELS[0])})`;
+  buildGrid();
+
+  // Rivers: each river's segments (ordered tile chains) through tile centres, as one LineSegments object.
+  const h = TILE / 2;
+  for (const [name, r] of Object.entries(META.rivers)) {
+    const pts = [];
+    for (const seg of r.segments || [r.tiles]) {
+      const v = seg.map(t => { const { lat, lon } = parseTileId(t); return latLonToVec(lat + h, lon + h, 1.0016); });
+      for (let i = 1; i < v.length; i++) pts.push(v[i - 1], v[i]);
+    }
+    const line = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts),
+      new THREE.LineBasicMaterial({ color: 0x4fc3ff, transparent: true, opacity: 0.85 }));
+    line.userData.name = name;
+    riverLines.set(name, line);
+    riverGroup.add(line);
+  }
+
+  // Terrain and cover overlays: the dominant type per tile painted into a width x height canvas
+  // texture, one pixel per tile. Open-sea tiles have no cover (255) and stay transparent.
+  terrainOverlay = await dominantOverlay("/api/terrain", META.map.terrain_types, TERRAIN_COLORS, 1.0005, "optTerrain");
+  coverOverlay = await dominantOverlay("/api/cover", META.map.cover_types, COVER_COLORS, 1.0006, "optCover");
+
+  // Population heatmap: people per tile painted into a width x height canvas, one pixel per tile.
+  // Nearest filtering with no mipmaps keeps each tile a flat, uniform tint with no blending between tiles.
+  heatCanvas.width = META.map.width; heatCanvas.height = META.map.height;
+  heatTex = new THREE.CanvasTexture(heatCanvas);
+  heatTex.colorSpace = THREE.SRGBColorSpace;
+  heatTex.magFilter = THREE.NearestFilter;
+  heatTex.minFilter = THREE.NearestFilter;
+  heatTex.generateMipmaps = false;
+  heatOverlay = new THREE.Mesh(new THREE.SphereGeometry(1.0007, 192, 96),
+    new THREE.MeshBasicMaterial({ map: heatTex, transparent: true, depthWrite: false }));
+  heatOverlay.renderOrder = 2;
+  scene.add(heatOverlay);
+  await loadPopulationGrid();
+  setHeatVisible(document.getElementById("optHeat").checked);
+}
+
+// ---------- live population updates ----------
+// The server rereads world_population.json every second and bumps a version number when it changes.
+// The page polls that version every second and, on a change, repaints the heatmap and the side panel.
+const heatCanvas = document.createElement("canvas");
+let heatTex = null, popVersion = 0, popRefreshing = false;
+
+async function loadPopulationGrid() {
+  const [r, countries] = await Promise.all([fetch("/api/population"), fetch("/api/population/countries").then(x => x.json())]);
+  const pop = new Uint32Array(await r.arrayBuffer());
+  const ctx = heatCanvas.getContext("2d");
+  heatImg = ctx.createImageData(heatCanvas.width, heatCanvas.height);
+  for (let i = 0; i < pop.length; i++) {
+    heatImg.data.set(HEAT_RGB, i * 4);
+    heatImg.data[i * 4 + 3] = Math.round(255 * heatAlpha(heatLevel(pop[i])));
+  }
+  setCountryIndex(countries);
+  paintTints();  // keep the current countries' tints
+  ctx.putImageData(heatImg, 0, 0);
+  heatTex.needsUpdate = true;
+  popVersion = +r.headers.get("X-Population-Version") || popVersion;
+  const el = document.getElementById("popUpdated");
+  el.textContent = `Data version ${popVersion} · loaded ${new Date().toLocaleTimeString()}`;
+}
+
+// ---------- same-country tint ----------
+// The heatmap tiles of the pinned tile's country turn cyan, and those of the hovered tile's country
+// bright yellow; every other heatmap tile keeps its normal colour. If both are
+// the same country, cyan wins. Only colours change, never opacity, so untinted tiles stay invisible.
+// This is a second pass over the heatmap's pixels: it rewrites just the affected countries' tiles,
+// and only when one of the two countries changes.
+const PINNED_TINT_RGB = [0, 229, 255];
+const HOVER_TINT_RGB = [255, 255, 0];      // pure yellow: brighter than the off-white heatmap
+let heatImg = null;                 // the heatmap's pixels (ImageData), kept for repainting
+let countryCodes = [];              // country number k (1-based) -> ISO code
+let tilesByCountry = new Map();     // country number -> Int32Array of tile indices
+let tileCountry = null;             // tile index -> country number (0 = none)
+let tintPinned = 0, tintHover = 0;  // countries currently painted cyan / yellow
+
+function setCountryIndex({ codes, index }) {
+  countryCodes = codes;
+  tileCountry = Uint16Array.from(index);
+  const lists = new Map();
+  for (let i = 0; i < tileCountry.length; i++) {
+    const k = tileCountry[i];
+    if (k) (lists.get(k) || lists.set(k, []).get(k)).push(i);
+  }
+  tilesByCountry = new Map([...lists].map(([k, v]) => [k, Int32Array.from(v)]));
+}
+function paintCountry(k, rgb) {
+  for (const i of tilesByCountry.get(k) || []) heatImg.data.set(rgb, i * 4);
+}
+function tileIndex(tid) {
+  const { lat, lon } = parseTileId(tid);
+  return Math.round((90 - TILE - lat) / TILE) * Math.round(360 / TILE) + Math.round((lon + 180) / TILE);
+}
+function paintTints() {
+  if (tintHover) paintCountry(tintHover, HOVER_TINT_RGB);
+  if (tintPinned) paintCountry(tintPinned, PINNED_TINT_RGB);
+}
+// Call whenever hoverTid or pinnedTid may have changed; does nothing if neither country did.
+function updateCountryTints() {
+  if (!heatImg || !tileCountry) return;
+  const kp = pinnedTid ? tileCountry[tileIndex(pinnedTid)] : 0;
+  let kh = hoverTid ? tileCountry[tileIndex(hoverTid)] : 0;
+  if (kh === kp) kh = 0;
+  if (kp === tintPinned && kh === tintHover) return;
+  if (tintHover) paintCountry(tintHover, HEAT_RGB);
+  if (tintPinned) paintCountry(tintPinned, HEAT_RGB);
+  tintPinned = kp; tintHover = kh;
+  paintTints();
+  heatCanvas.getContext("2d").putImageData(heatImg, 0, 0);
+  heatTex.needsUpdate = true;
+  const parts = [];
+  if (kp) parts.push(`<span style="color:#00e5ff">Cyan: pinned tile's country (${countryCodes[kp - 1]})</span>`);
+  if (kh) parts.push(`<span style="color:#ffff00">Yellow: hovered tile's country (${countryCodes[kh - 1]})</span>`);
+  document.getElementById("countryTint").innerHTML = parts.join("<br>");
+}
+
+async function pollPopulation() {
+  if (!heatTex || popRefreshing) return;
+  try {
+    const { version } = await (await fetch("/api/population/version")).json();
+    if (version === popVersion) return;
+    popRefreshing = true;
+    const meta = await (await fetch("/api/meta")).json();
+    META.population_map = meta.population_map;
+    META.populated_tiles = meta.populated_tiles;
+    await loadPopulationGrid();
+    for (const key of tileCache.keys()) if (!key.endsWith(`@${popVersion}`)) tileCache.delete(key);
+    // Re-render the tile in the side panel with the new numbers.
+    const tid = pinnedTid || hoverTid;
+    shownTid = null;
+    showTile(tid);
+    const el = document.getElementById("popUpdated");
+    el.classList.add("flash");
+    setTimeout(() => el.classList.remove("flash"), 800);
+  } catch (e) {
+    // Server restarting or file mid-write; try again next second.
+  } finally {
+    popRefreshing = false;
+  }
+}
+setInterval(pollPopulation, 1000);
+
+// ---------- side panel ----------
+const info = document.getElementById("info");
+let shownTid = null, pinnedTid = null, hoverTid = null, cursorLL = null;
+
+function renderPopulation(t) {
+  const p = t.population;
+  if (!p) return '<div class="none">No population record for this tile.</div>';
+  const cov = META.population_map?.population_coverage;
+  const outside = cov && (t.lat < cov.south_lat || t.lat >= cov.north_lat);
+  const total = META.population_map?.total_population;
+  const level = heatLevel(p.population);
+  return `
+    <div class="country">${p.country
+      ? `${esc(p.country_name || p.country)}<code>${esc(p.country)}</code>`
+      : '<span class="none">No country (open water or unclaimed land)</span>'}</div>
+    <div class="bignum">${fmtInt(p.population)} <small>people</small></div>
+    ${heatLevelsHtml(level)}
+    <dl class="kv">
+      <dt>Density</dt><dd>${fmtDensity(p.density_per_km2)} people/km²</dd>
+      <dt>Tile area</dt><dd>${fmtInt(p.area_km2)} km²</dd>
+      ${total && p.population ? `<dt>World share</dt><dd>${(p.population / total * 100).toPrecision(2)}%</dd>` : ""}
+      ${p.rank ? `<dt>Rank</dt><dd>#${fmtInt(p.rank)} of ${fmtInt(META.populated_tiles)} populated tiles</dd>` : ""}
+    </dl>
+    ${outside ? `<div class="note">Outside the source's coverage (${fmtLat(cov.south_lat, 0)}–${fmtLat(cov.north_lat, 0)}), so population is 0.</div>` : ""}`;
+}
+
+async function dominantOverlay(url, types, colors, radius, checkbox) {
+  const buf = new Uint8Array(await (await fetch(url)).arrayBuffer());
+  const cols = types.map(t => new THREE.Color(colors[t] || "#ff00ff"));
+  const cv = document.createElement("canvas");
+  cv.width = META.map.width; cv.height = META.map.height;
+  const ctx = cv.getContext("2d");
+  const img = ctx.createImageData(cv.width, cv.height);
+  for (let i = 0; i < buf.length; i++) {
+    const c = cols[buf[i]];
+    if (!c) continue;  // no data for this tile: leave it transparent
+    img.data[i * 4] = c.r * 255; img.data[i * 4 + 1] = c.g * 255; img.data[i * 4 + 2] = c.b * 255; img.data[i * 4 + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(radius, 192, 96),
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.6, depthWrite: false }));
+  mesh.visible = document.getElementById(checkbox).checked;
+  mesh.renderOrder = 1;
+  scene.add(mesh);
+  return mesh;
+}
+
+// One percentage group (terrain or cover) as a stacked bar plus a row per non-zero type.
+function percentBlock(types, values, colors, emptyText) {
+  const rows = types.map(k => [k, values[k]]);
+  const shown = rows.filter(([, v]) => v > 0);
+  if (!shown.length) return `<div class="none">${emptyText}</div>`;
+  const sorted = [...shown].sort((a, b) => b[1] - a[1]);
+  return `<div class="stack">${shown.map(([k, v]) =>
+      `<div title="${k} ${v}%" style="width:${v}%;background:${colors[k]}"></div>`).join("")}</div>
+    ${sorted.map(([k, v]) => `<div class="bar-row">
+      <span><span class="sw" style="background:${colors[k]}"></span>${k}</span>
+      <div class="track"><div class="fill" style="width:${v}%;background:${colors[k]}"></div></div>
+      <span class="pct">${v}%</span></div>`).join("")}`;
+}
+
+function renderTile(t, pinned) {
+  const dirs = [["nw", "n", "ne"], ["w", null, "e"], ["sw", "s", "se"]];
+
+  info.innerHTML = `
+    <div class="tid">${t.id}${pinned ? '<span class="pin">PINNED</span>' : ""}</div>
+    <div class="sub">${fmtLat(t.lat, 1)}–${fmtLat(t.lat + TILE, 1)}, ${fmtLon(t.lon, 1)}–${fmtLon(t.lon + TILE, 1)}
+      · cursor <span id="cursorLL">${cursorLL && !pinned ? `${fmtLat(cursorLL.lat, 2)}, ${fmtLon(cursorLL.lon, 2)}` : "—"}</span></div>
+
+    <h2>Population</h2>
+    ${renderPopulation(t)}
+
+    <h2>Terrain <small>(landform, whole tile)</small></h2>
+    ${percentBlock(META.map.terrain_types, t.terrain, TERRAIN_COLORS, "No data")}
+
+    <h2>Cover <small>(on its land and frozen water)</small></h2>
+    ${percentBlock(META.map.cover_types, t.cover, COVER_COLORS, "Open water only")}
+
+    <h2>River</h2>
+    ${t.river
+      ? `<div class="river-line">Yes · ${t.rivers.map(n => `<span class="river-name">${esc(n)}</span>`).join(", ")}</div>`
+      : '<div class="none">No</div>'}
+
+    <h2>Neighbours</h2>
+    <div class="nbrs">${dirs.flat().map(d => {
+      if (!d) return `<button class="self" disabled style="opacity:1"><span class="dir">tile</span>${t.id}</button>`;
+      const n = t.neighbors[d];
+      return `<button ${n ? `data-tid="${n}"` : "disabled"}><span class="dir">${d}</span>${n || "—"}</button>`;
+    }).join("")}</div>`;
+}
+
+async function showTile(tid) {
+  if (!META) return;
+  const pinned = !!pinnedTid;
+  updateCountryTints();
+  if (shownTid === tid && info.dataset.pinned === String(pinned)) return;
+  shownTid = tid;
+  setHighlight(tid, pinned);
+  updateRiverHighlight(null);
+  if (!tid) {
+    info.innerHTML = '<div class="empty">Hover over the globe to inspect a tile.</div>';
+    info.dataset.pinned = "false";
+    return;
+  }
+  try {
+    const t = await fetchTile(tid);
+    if (shownTid !== tid) return;  // a newer hover won the race
+    renderTile(t, pinned);
+    info.dataset.pinned = String(pinned);
+    updateRiverHighlight(t.rivers || []);
+  } catch (e) {
+    if (shownTid === tid) info.innerHTML = `<div class="empty">Couldn't load ${tid}: ${esc(e.message)}</div>`;
+  }
+}
+
+function updateRiverHighlight(names) {
+  for (const [name, line] of riverLines) {
+    const on = names && names.includes(name);
+    line.material.color.set(on ? 0xffffff : 0x4fc3ff);
+    line.material.opacity = names && names.length && !on ? 0.5 : 0.85;
+  }
+}
+
+info.addEventListener("click", e => {
+  const b = e.target.closest("button[data-tid]");
+  if (!b) return;
+  const tid = b.dataset.tid;
+  pinnedTid = tid;
+  showTile(tid);
+  const { lat, lon } = parseTileId(tid);
+  flyTo(lat + TILE / 2, lon + TILE / 2);
+});
+
+// ---------- interaction ----------
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+let pointerInside = false, needsPick = false, downPos = null, isDragging = false;
+const statusEl = document.getElementById("status");
+
+function pick() {
+  if (!pointerInside) return null;
+  raycaster.setFromCamera(pointer, camera);
+  const hit = raycaster.intersectObject(globe, false)[0];
+  return hit ? vecToLatLon(hit.point) : null;
+}
+
+renderer.domElement.addEventListener("pointermove", e => {
+  const r = renderer.domElement.getBoundingClientRect();
+  pointer.set((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1);
+  pointerInside = true;
+  needsPick = true;
+  if (downPos && Math.hypot(e.clientX - downPos[0], e.clientY - downPos[1]) > 4) {
+    isDragging = true;
+    renderer.domElement.classList.add("dragging");
+  }
+});
+renderer.domElement.addEventListener("pointerleave", () => { pointerInside = false; needsPick = true; });
+renderer.domElement.addEventListener("pointerdown", e => { downPos = [e.clientX, e.clientY]; isDragging = false; });
+renderer.domElement.addEventListener("pointerup", () => {
+  const wasDrag = isDragging;
+  downPos = null; isDragging = false;
+  renderer.domElement.classList.remove("dragging");
+  if (wasDrag) return;
+  const ll = pick();
+  if (!ll) return;
+  const tid = tileAt(ll.lat, ll.lon);
+  pinnedTid = pinnedTid === tid ? null : tid;  // click again to unpin
+  showTile(pinnedTid || tid);
+});
+renderer.domElement.addEventListener("dblclick", () => {
+  const ll = pick();
+  if (ll) flyTo(ll.lat, ll.lon, Math.max(controls.minDistance + 0.02, 1 + (camera.position.length() - 1) * 0.45));
+});
+window.addEventListener("keydown", e => {
+  if (e.key === "Escape" && pinnedTid) { pinnedTid = null; showTile(hoverTid); }
+});
+controls.addEventListener("change", () => { needsPick = true; });
+
+// Fly-to animation: slerp direction, ease altitude.
+let flight = null;
+function flyTo(lat, lon, dist) {
+  const from = camera.position.clone();
+  const fromDist = from.length();
+  const toDist = dist ?? Math.min(fromDist, 1.6);
+  flight = { q0: new THREE.Quaternion(), q1: new THREE.Quaternion().setFromUnitVectors(from.clone().normalize(), latLonToVec(lat, lon)),
+             dir: from.clone().normalize(), d0: fromDist, d1: toDist, t0: performance.now(), dur: 1200 };
+}
+function stepFlight(now) {
+  if (!flight) return;
+  let t = Math.min(1, (now - flight.t0) / flight.dur);
+  const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  const q = flight.q0.clone().slerp(flight.q1, e);
+  const lift = Math.sin(Math.PI * e) * Math.min(0.6, flight.q1.angleTo(flight.q0) * 0.5);
+  const d = flight.d0 + (flight.d1 - flight.d0) * e + lift;
+  camera.position.copy(flight.dir.clone().applyQuaternion(q).multiplyScalar(d));
+  camera.lookAt(0, 0, 0);
+  needsPick = true;
+  if (t >= 1) flight = null;
+}
+controls.addEventListener("start", () => { flight = null; });
+
+// Go-to box: tile id or "lat, lon"
+document.getElementById("goto").addEventListener("keydown", e => {
+  if (e.key !== "Enter") return;
+  const v = e.target.value.trim().toUpperCase();
+  let lat, lon;
+  if (TILE_ID_RE.test(v)) {
+    ({ lat, lon } = parseTileId(v)); lat += TILE / 2; lon += TILE / 2;
+  } else {
+    const m = v.match(/^(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)$/);
+    if (!m) { e.target.style.borderColor = "#ff6b6b"; return; }
+    lat = +m[1]; lon = +m[2];
+  }
+  if (Math.abs(lat) > 90) { e.target.style.borderColor = "#ff6b6b"; return; }
+  e.target.style.borderColor = "";
+  const tid = tileAt(lat, lon);
+  pinnedTid = tid;
+  showTile(tid);
+  flyTo(lat, lon, 1.35);
+  e.target.blur();
+});
+
+// Toolbar toggles
+document.getElementById("optRivers").addEventListener("change", e => { riverGroup.visible = e.target.checked; });
+document.getElementById("optTerrain").addEventListener("change", e => { if (terrainOverlay) terrainOverlay.visible = e.target.checked; });
+document.getElementById("optCover").addEventListener("change", e => { if (coverOverlay) coverOverlay.visible = e.target.checked; });
+document.getElementById("optHeat").addEventListener("change", e => setHeatVisible(e.target.checked));
+const optGrid = document.getElementById("optGrid");
+
+// ---------- render loop ----------
+function resize() {
+  const w = view.clientWidth, h = view.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(view);
+resize();
+
+function frame(now) {
+  stepFlight(now);
+  const alt = camera.position.length() - 1;
+  // Slow the controls down near the surface, like Google Earth.
+  controls.rotateSpeed = THREE.MathUtils.clamp(alt * 0.45, 0.01, 1);
+  controls.zoomSpeed = THREE.MathUtils.clamp(alt * 0.8 + 0.3, 0.3, 1.2);
+  if (!flight) controls.update();
+
+  sun.position.copy(camera.position).add(camera.up.clone().multiplyScalar(0.6)).normalize().multiplyScalar(10);
+  // Fade the grid in as the camera nears the surface; the smaller the tiles, the closer it must be.
+  gridMat.opacity = optGrid.checked ? THREE.MathUtils.clamp((0.9 * TILE - alt) / (0.6 * TILE), 0, 1) * 0.28 : 0;
+  if (gridLines) gridLines.visible = gridMat.opacity > 0.001;
+
+  if (needsPick) {
+    needsPick = false;
+    const ll = isDragging ? cursorLL : pick();
+    cursorLL = ll;
+    const tid = ll ? tileAt(ll.lat, ll.lon) : null;
+    if (tid !== hoverTid) {
+      hoverTid = tid;
+      if (!pinnedTid) showTile(tid);
+      updateCountryTints();  // the hovered country's yellow tint also shows while a tile is pinned
+    }
+    const c = document.getElementById("cursorLL");
+    if (c && !pinnedTid) c.textContent = ll ? `${fmtLat(ll.lat, 2)}, ${fmtLon(ll.lon, 2)}` : "—";
+    statusEl.textContent = `${ll ? `${fmtLat(ll.lat)}, ${fmtLon(ll.lon)} · ${tileAt(ll.lat, ll.lon)} · ` : ""}eye alt ${Math.round(alt * EARTH_KM).toLocaleString()} km`;
+  }
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+loadData().then(() => { needsPick = true; }).catch(err => {
+  info.innerHTML = `<div class="empty">Failed to load map data: ${esc(err.message)}</div>`;
+});
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

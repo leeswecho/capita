@@ -58,6 +58,7 @@
   .none { color: var(--muted); }
   .bignum { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .bignum small { font-size: 13px; font-weight: 400; color: var(--muted); }
+  .summary { margin-top: 14px; }
   .country { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
   .country code { color: var(--muted); font-size: 12px; font-weight: 400; margin-left: 6px; }
   .country .cap { color: var(--muted); font-size: 12px; font-weight: 400; margin-left: 6px; }
@@ -611,8 +612,7 @@ function renderTile(t, pinned) {
     <div class="sub">${fmtLat(t.lat, 1)}–${fmtLat(t.lat + TILE, 1)}, ${fmtLon(t.lon, 1)}–${fmtLon(t.lon + TILE, 1)}
       · cursor <span id="cursorLL">${cursorLL && !pinned ? `${fmtLat(cursorLL.lat, 2)}, ${fmtLon(cursorLL.lon, 2)}` : "—"}</span></div>
 
-    <h2>Population</h2>
-    ${renderPopulation(t)}
+    <div class="summary">${renderPopulation(t)}</div>
 
     <h2>Cohorts <small>(by year of age${stateTurn != null ? `, turn ${stateTurn}` : ""})</small></h2>
     <div id="cohorts">${cohortsPlaceholder(pinned)}</div>

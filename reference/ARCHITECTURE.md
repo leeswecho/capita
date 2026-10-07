@@ -367,8 +367,8 @@ Details:
 - **Pinning.** A click (not a drag) pins the tile, so the panel stops following the mouse. Click it
   again or press Esc to unpin. The "Go to" box also pins the tile it flies to.
 
-The side panel shows, top to bottom: tile id and bounds with cursor position; **Population**: the
-tile's owner (the nation that owns it, marked "capital" on its capital tile; "unclaimed" if nobody
+The side panel shows, top to bottom: tile id and bounds with cursor position; a summary with no
+heading: the tile's owner (the nation that owns it, marked "capital" on its capital tile; "unclaimed" if nobody
 does), people, **Inhabitants** (only when the people living there belong to a different nation than
 the owner), while viewing as a nation how that nation sees the tile (active, passive or unknown), tile
 area, and a note for tiles outside the population data's coverage. The heat-level legend is shown only

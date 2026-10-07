@@ -194,7 +194,7 @@ just keeps serving the last good data and tries again a second later.
 | `/api/cover` | 259,200 bytes, dominant cover index per tile (into `map.cover_types`), 255 = open sea (no cover) | cover overlay |
 | `/api/population` | 259,200 `uint32` people counts; header `X-Population-Version` | heatmap |
 | `/api/population/version` | `{"version": n, "turn": t}`: the population file's version and the cohort state's current turn | the page's once-a-second poll |
-| `/api/population/countries` | `{"version": n, "codes": [...], "index": [...]}`: each tile's country as 0 (none) or k → `codes[k − 1]`, in grid order (≈650 KB) | same-country heatmap tint |
+| `/api/owners` | 259,200 little-endian `uint16`: the nation that owns each tile at the current turn, in grid order, 0 = unowned (518 KB); header `X-Turn` | ownership tint |
 | `/api/tile/<id>` | JSON: the tile record merged with its population fields and country name, plus `nation` (the nation whose people live there at the current turn) and `owner` (the nation that owns the tile), each with `is_capital` and `null` if none | side panel, on hover |
 | `/api/tile/<id>/cohorts` | JSON: the tile's `people` (101 values) and `hours` (101 × activities) at the current turn, plus `turn`, `activities`, `hours_unit`; `people`/`hours` are `null` if nobody lives there | the Cohorts section, only after "Show age cohorts" |
 | `/api/nations` | JSON: the current turn's nations (`id`, `code`, `name`, `capital` tile id, `alive`, `founded_turn`, `people`, `owned_tiles`, `visible_tiles`, `explored_tiles`); built once per turn | the "View as" list |
@@ -322,21 +322,18 @@ Each tile's people count maps to one of six levels. The steps are defined per 1�
 The colour is always off-white (`HEAT_RGB = [232, 228, 220]`, meant to suggest concrete). Only the
 opacity changes, capped at 50% so the terrain always shows through. To retune it, edit
 `HEAT_LEVELS_PER_DEG2`, `HEAT_MAX_ALPHA` or `HEAT_RGB` near the top of the script. The same constants drive
-the legend and the level swatches in the side panel.
+the legend.
 
-**Same-country tint.** The heatmap tiles of the **pinned** tile's country turn **cyan**
-(`PINNED_TINT_RGB`), and those of the **hovered** tile's country turn **bright yellow** (`HOVER_TINT_RGB`,
-pure yellow 255, 255, 0). Every other heatmap tile keeps its colour.
-- **Both at once:** while a tile is pinned, hovering another country shows that country in yellow
-  alongside the cyan one. If they're the same country, cyan wins.
-- **How it's drawn:** a second pass over the heatmap's kept pixels (`heatImg`). Only the colours of the
-  affected countries' tiles are rewritten, never the opacity, so tiles too sparsely populated for a
-  tint stay invisible. `updateCountryTints()` runs whenever the hovered or pinned tile changes, and
-  repaints only if either country changed.
-- **Where the data comes from:** each tile's country arrives with the population data
-  (`/api/population/countries`) and is turned into a tile list per country (`setCountryIndex()`).
-- **After a population reload,** the tint is reapplied.
-- **Legend:** names the tinted countries, in their tint colours.
+**Ownership tint.** Every tile owned by the **pinned** tile's owner turns **cyan** (`PINNED_TINT_RGB`), and
+every tile owned by the **hovered** tile's owner turns **yellow** (`HOVER_TINT_RGB`).
+- **Both at once:** while a tile is pinned, hovering a tile of another nation shows that nation in
+  yellow alongside the cyan one. If they're the same nation, cyan wins.
+- **How it's drawn:** a layer of its own (one pixel per tile, 55% opacity) between the heatmap and the
+  fog, so owned tiles show however few people live on them. `updateOwnerTints()` runs whenever the
+  hovered or pinned tile changes, and repaints only if either owner changed.
+- **Where the data comes from:** the engine's current turn (`/api/owners`, from `owner.npy`), turned into
+  a tile list per nation (`loadOwners()`). It reloads whenever the turn changes.
+- **Legend:** names the tinted nations, in their tint colours.
 
 ### 5.5 Hovering: from mouse to side panel
 
@@ -370,11 +367,12 @@ Details:
 - **Pinning.** A click (not a drag) pins the tile, so the panel stops following the mouse. Click it
   again or press Esc to unpin. The "Go to" box also pins the tile it flies to.
 
-The side panel shows, top to bottom: tile id and bounds with cursor position; **Population** (country,
-people, heat level, tile area, and a note for tiles outside the data's 89.1°S–89.1°N coverage);
-**Owner** (the nation that owns the tile, marked "capital" on its capital tile; "nobody" if unowned),
-**Inhabitants** (only when the people living there belong to a different nation than the owner) and,
-while viewing as a nation, how that nation sees the tile (active, passive or unknown);
+The side panel shows, top to bottom: tile id and bounds with cursor position; **Population**: the
+tile's owner (the nation that owns it, marked "capital" on its capital tile; "unclaimed" if nobody
+does), people, **Inhabitants** (only when the people living there belong to a different nation than
+the owner), while viewing as a nation how that nation sees the tile (active, passive or unknown), tile
+area, and a note for tiles outside the population data's coverage. The heat-level legend is shown only
+on the map, not in the panel;
 **Cohorts** (see below); **Terrain** (the landform) and **Cover** (what is on the land and frozen water; "Open water only" when
 there is none), each as a stacked bar plus a bar per non-zero type (`percentBlock()`); **River**
 (yes/no and names).

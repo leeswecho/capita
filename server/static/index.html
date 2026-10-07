@@ -60,6 +60,8 @@
   .bignum small { font-size: 13px; font-weight: 400; color: var(--muted); }
   .country { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
   .country code { color: var(--muted); font-size: 12px; font-weight: 400; margin-left: 6px; }
+  .country .cap { color: var(--muted); font-size: 12px; font-weight: 400; margin-left: 6px; }
+  .country .cap::before { content: "· "; }
   .levels { display: grid; grid-template-columns: repeat(5, 1fr); gap: 3px; margin: 8px 0 8px; }
   .levels .lv { text-align: center; font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .levels .lv::before { content: ""; display: block; height: 10px; border-radius: 3px; margin-bottom: 2px;
@@ -123,7 +125,7 @@
     <div id="legend">
       <div class="title">People per tile (none below 1M)</div>
       <div id="legendLevels"></div>
-      <div class="updated" id="countryTint"></div>
+      <div class="updated" id="ownerTint"></div>
       <div class="updated" id="popUpdated"></div>
     </div>
   </div>
@@ -413,6 +415,18 @@ async function loadData() {
   scene.add(fogOverlay);
   scene.add(capitalMarker);
   await loadNations();
+
+  // Ownership tint: one pixel per tile, between the heatmap and the fog.
+  tintCanvas.width = META.map.width; tintCanvas.height = META.map.height;
+  tintImg = tintCanvas.getContext("2d").createImageData(tintCanvas.width, tintCanvas.height);
+  tintTex = new THREE.CanvasTexture(tintCanvas);
+  tintTex.colorSpace = THREE.SRGBColorSpace;
+  tintTex.magFilter = THREE.NearestFilter; tintTex.minFilter = THREE.NearestFilter; tintTex.generateMipmaps = false;
+  const tintOverlay = new THREE.Mesh(new THREE.SphereGeometry(1.0008, 192, 96),
+    new THREE.MeshBasicMaterial({ map: tintTex, transparent: true, depthWrite: false }));
+  tintOverlay.renderOrder = 2.5;
+  scene.add(tintOverlay);
+  await loadOwners();
 }
 
 // ---------- live population updates ----------
@@ -422,7 +436,7 @@ const heatCanvas = document.createElement("canvas");
 let heatTex = null, popVersion = 0, popRefreshing = false;
 
 async function loadPopulationGrid() {
-  const [r, countries] = await Promise.all([fetch("/api/population"), fetch("/api/population/countries").then(x => x.json())]);
+  const r = await fetch("/api/population");
   const pop = new Uint32Array(await r.arrayBuffer());
   const ctx = heatCanvas.getContext("2d");
   heatImg = ctx.createImageData(heatCanvas.width, heatCanvas.height);
@@ -430,8 +444,6 @@ async function loadPopulationGrid() {
     heatImg.data.set(HEAT_RGB, i * 4);
     heatImg.data[i * 4 + 3] = Math.round(255 * heatAlpha(heatLevel(pop[i])));
   }
-  setCountryIndex(countries);
-  paintTints();  // keep the current countries' tints
   ctx.putImageData(heatImg, 0, 0);
   heatTex.needsUpdate = true;
   popVersion = +r.headers.get("X-Population-Version") || popVersion;
@@ -439,58 +451,63 @@ async function loadPopulationGrid() {
   el.textContent = `Data version ${popVersion} · loaded ${new Date().toLocaleTimeString()}`;
 }
 
-// ---------- same-country tint ----------
-// The heatmap tiles of the pinned tile's country turn cyan, and those of the hovered tile's country
-// bright yellow; every other heatmap tile keeps its normal colour. If both are
-// the same country, cyan wins. Only colours change, never opacity, so untinted tiles stay invisible.
-// This is a second pass over the heatmap's pixels: it rewrites just the affected countries' tiles,
-// and only when one of the two countries changes.
-const PINNED_TINT_RGB = [0, 229, 255];
-const HOVER_TINT_RGB = [255, 255, 0];      // pure yellow: brighter than the off-white heatmap
-let heatImg = null;                 // the heatmap's pixels (ImageData), kept for repainting
-let countryCodes = [];              // country number k (1-based) -> ISO code
-let tilesByCountry = new Map();     // country number -> Int32Array of tile indices
-let tileCountry = null;             // tile index -> country number (0 = none)
-let tintPinned = 0, tintHover = 0;  // countries currently painted cyan / yellow
+let heatImg = null;                 // the heatmap's pixels (ImageData)
 
-function setCountryIndex({ codes, index }) {
-  countryCodes = codes;
-  tileCountry = Uint16Array.from(index);
+// ---------- ownership tint ----------
+// Every tile owned by the pinned tile's owner is tinted cyan, and every tile owned by the hovered
+// tile's owner yellow; if both are the same nation, cyan wins. Ownership comes from the engine's
+// current turn (/api/owners: one little-endian uint16 nation id per tile, 0 = unowned) and reloads
+// each turn. The tint is its own layer above the heatmap, so it shows however few people live there.
+const PINNED_TINT_RGB = [0, 229, 255];
+const HOVER_TINT_RGB = [255, 255, 0];
+const TINT_ALPHA = Math.round(255 * 0.55);
+const tintCanvas = document.createElement("canvas");
+let tintTex = null, tintImg = null;
+let tileOwner = null;               // tile index -> owning nation id (0 = unowned)
+let tilesByOwner = new Map();       // nation id -> Int32Array of the tiles it owns
+let tintPinned = 0, tintHover = 0;  // nations currently painted cyan / yellow
+
+async function loadOwners() {
+  tileOwner = null;
+  try {
+    const r = await fetch("/api/owners");
+    if (r.ok) tileOwner = new Uint16Array(await r.arrayBuffer());
+  } catch (e) { /* server restarting; the next turn change retries */ }
   const lists = new Map();
-  for (let i = 0; i < tileCountry.length; i++) {
-    const k = tileCountry[i];
+  if (tileOwner) for (let i = 0; i < tileOwner.length; i++) {
+    const k = tileOwner[i];
     if (k) (lists.get(k) || lists.set(k, []).get(k)).push(i);
   }
-  tilesByCountry = new Map([...lists].map(([k, v]) => [k, Int32Array.from(v)]));
+  tilesByOwner = new Map([...lists].map(([k, v]) => [k, Int32Array.from(v)]));
+  updateOwnerTints(true);
 }
-function paintCountry(k, rgb) {
-  for (const i of tilesByCountry.get(k) || []) heatImg.data.set(rgb, i * 4);
+function paintOwner(k, rgb, alpha) {
+  for (const i of tilesByOwner.get(k) || []) { tintImg.data.set(rgb, i * 4); tintImg.data[i * 4 + 3] = alpha; }
 }
 function tileIndex(tid) {
   const { lat, lon } = parseTileId(tid);
   return Math.round((90 - TILE - lat) / TILE) * Math.round(360 / TILE) + Math.round((lon + 180) / TILE);
 }
-function paintTints() {
-  if (tintHover) paintCountry(tintHover, HOVER_TINT_RGB);
-  if (tintPinned) paintCountry(tintPinned, PINNED_TINT_RGB);
-}
-// Call whenever hoverTid or pinnedTid may have changed; does nothing if neither country did.
-function updateCountryTints() {
-  if (!heatImg || !tileCountry) return;
-  const kp = pinnedTid ? tileCountry[tileIndex(pinnedTid)] : 0;
-  let kh = hoverTid ? tileCountry[tileIndex(hoverTid)] : 0;
+// Call whenever hoverTid or pinnedTid may have changed; does nothing if neither owner did, unless
+// `reload` (ownership itself changed, so the whole layer is repainted).
+function updateOwnerTints(reload = false) {
+  if (!tintImg) return;
+  const kp = pinnedTid && tileOwner ? tileOwner[tileIndex(pinnedTid)] : 0;
+  let kh = hoverTid && tileOwner ? tileOwner[tileIndex(hoverTid)] : 0;
   if (kh === kp) kh = 0;
-  if (kp === tintPinned && kh === tintHover) return;
-  if (tintHover) paintCountry(tintHover, HEAT_RGB);
-  if (tintPinned) paintCountry(tintPinned, HEAT_RGB);
+  if (!reload && kp === tintPinned && kh === tintHover) return;
+  if (reload) tintImg.data.fill(0);
+  else { paintOwner(tintHover, [0, 0, 0], 0); paintOwner(tintPinned, [0, 0, 0], 0); }
   tintPinned = kp; tintHover = kh;
-  paintTints();
-  heatCanvas.getContext("2d").putImageData(heatImg, 0, 0);
-  heatTex.needsUpdate = true;
+  paintOwner(kh, HOVER_TINT_RGB, TINT_ALPHA);
+  paintOwner(kp, PINNED_TINT_RGB, TINT_ALPHA);
+  tintCanvas.getContext("2d").putImageData(tintImg, 0, 0);
+  tintTex.needsUpdate = true;
+  const name = k => esc(nationsById.get(k)?.name || `nation ${k}`);
   const parts = [];
-  if (kp) parts.push(`<span style="color:#00e5ff">Cyan: pinned tile's country (${countryCodes[kp - 1]})</span>`);
-  if (kh) parts.push(`<span style="color:#ffff00">Yellow: hovered tile's country (${countryCodes[kh - 1]})</span>`);
-  document.getElementById("countryTint").innerHTML = parts.join("<br>");
+  if (kp) parts.push(`<span style="color:#00e5ff">Cyan: tiles owned by ${name(kp)} (pinned tile's owner)</span>`);
+  if (kh) parts.push(`<span style="color:#ffff00">Yellow: tiles owned by ${name(kh)} (hovered tile's owner)</span>`);
+  document.getElementById("ownerTint").innerHTML = parts.join("<br>");
 }
 
 async function pollPopulation() {
@@ -534,15 +551,13 @@ function renderPopulation(t) {
   if (!p) return '<div class="none">No population record for this tile.</div>';
   const cov = META.population_map?.population_coverage;
   const outside = cov && (t.lat < cov.south_lat || t.lat >= cov.north_lat);
-  const level = heatLevel(p.population);
+  const o = t.owner;
   return `
-    <div class="country">${p.country
-      ? `${esc(p.country_name || p.country)}<code>${esc(p.country)}</code>`
-      : '<span class="none">No country (open water or unclaimed land)</span>'}</div>
+    <div class="country">${o
+      ? `${esc(o.name)}<code>${esc(o.code)}</code>${o.is_capital ? '<span class="cap">capital</span>' : ""}`
+      : '<span class="none">unclaimed</span>'}</div>
     <div class="bignum">${fmtInt(p.population)} <small>people</small></div>
-    ${heatLevelsHtml(level)}
     <dl class="kv">
-      <dt>Owner</dt><dd>${nationText(t.owner, "nobody")}</dd>
       ${t.nation && t.nation.id !== t.owner?.id ? `<dt>Inhabitants</dt><dd>${nationText(t.nation)}</dd>` : ""}
       ${viewNation && nationsById.has(viewNation) ? `<dt>Seen by ${esc(nationsById.get(viewNation).code)}</dt><dd>${{
         active: "Active (can see it now)", passive: "Passive (explored, not seen now)", unknown: "Unknown (never seen)"
@@ -617,7 +632,7 @@ function renderTile(t, pinned) {
 async function showTile(tid) {
   if (!META) return;
   const pinned = !!pinnedTid;
-  updateCountryTints();
+  updateOwnerTints();
   if (shownTid === tid && info.dataset.pinned === String(pinned)) return;
   shownTid = tid;
   setHighlight(tid, pinned);
@@ -693,6 +708,7 @@ async function onTurnChange(turn) {
   cohortCache.clear();
   tileCache.clear();
   await loadNations();
+  await loadOwners();
   const tid = pinnedTid || hoverTid;
   if (tid) { shownTid = null; showTile(tid); }
 }
@@ -970,7 +986,7 @@ function frame(now) {
     if (tid !== hoverTid) {
       hoverTid = tid;
       if (!pinnedTid) showTile(tid);
-      updateCountryTints();  // the hovered country's yellow tint also shows while a tile is pinned
+      updateOwnerTints();  // the hovered owner's yellow tint also shows while a tile is pinned
     }
     const c = document.getElementById("cursorLL");
     if (c && !pinnedTid) c.textContent = ll ? `${fmtLat(ll.lat, 2)}, ${fmtLon(ll.lon, 2)}` : "—";

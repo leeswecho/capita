@@ -18,8 +18,8 @@ Endpoints:
     /api/population        people per tile, 259,200 little-endian uint32 in the same order
     /api/population/version {"version": n, "turn": t}; n goes up each time the population file
                            changes; t is the cohort state's current turn (null if there is none)
-    /api/population/countries {"version": n, "codes": [...], "index": [...]}: each tile's country,
-                           as 0 (none) or k = codes[k - 1], in grid order (for the same-country tint)
+    /api/owners            the owner of every tile at the current turn: 259,200 little-endian uint16
+                           nation ids in grid order, 0 = unowned; header X-Turn (for the ownership tint)
 
 The population file (--population; default world_population_start.json, the game's starting
 scenario) is reread once per second, so edits to it show up in open pages
@@ -140,14 +140,6 @@ class Population:
         populated = sorted((i for i, v in enumerate(people) if v > 0), key=lambda i: -people[i])
         self.rank = {i: r + 1 for r, i in enumerate(populated)}
         self.populated_tiles = len(populated)
-
-        # Country of every tile for the page's "same country" tint: codes listed once, then one small
-        # number per tile (0 = no country, k = codes[k - 1]).
-        codes = sorted({c for c in self.country if c})
-        pos = {c: k + 1 for k, c in enumerate(codes)}
-        self.country_json = json.dumps({"version": version, "codes": codes,
-                                        "index": [pos.get(c, 0) for c in self.country]},
-                                       separators=(",", ":")).encode()
 
 
 def read_population(path: str, version: int) -> Population:
@@ -415,8 +407,18 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/population/version":
             turn = w.turn.turn if w.turn else None
             return self.send_json(json.dumps({"version": w.pop.version, "turn": turn}).encode())
-        if path == "/api/population/countries":
-            return self.send_json(w.pop.country_json)
+        if path == "/api/owners":
+            st = w.turn
+            if st is None:
+                return self.send_json(b'{"error": "no game state; run: python engine/engine.py init"}', 404)
+            body = np.ascontiguousarray(st.owner, dtype="<u2").tobytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Turn", str(st.turn))
+            self.end_headers()
+            return self.wfile.write(body)
         m = re.fullmatch(r"/api/tile/([^/]+)/cohorts", path)
         if m:
             tid = m.group(1).upper()

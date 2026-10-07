@@ -7,10 +7,11 @@
 (paths shown from the repository root; the script works from any directory). By default it uses the
 top-level state/ directory, which server.py also reads, and the population file in server/.
 
-`init` writes turn 0: every populated tile of the population file gets its people spread evenly over
-the 101 ages, and each age gets rough placeholder activity hours shaped by age (starting_hours()).
-`step` advances one year per turn. For now the only rule is ageing: each cohort moves up one year and the 99-year-olds
-join the open-ended 100-and-over group (no births or deaths yet). Activity hours move with the people;
+`init` writes turn 0: every populated tile of the population file gets its people split across the
+101 ages in a rough hunter-gatherer age structure (starting_age_shares()), and each age gets rough
+placeholder activity hours shaped by age (starting_hours()). `step` advances one year per turn. For
+now the only rule is ageing: each cohort moves up one year and the 99-year-olds join the open-ended
+100-and-over group (no births or deaths yet). Activity hours move with the people;
 in the 100+ group the hours of the two merged groups are averaged, weighted by people.
 
 Each step reads the current turn, computes the next one in memory and writes it as a new turn directory
@@ -39,6 +40,25 @@ KEEP_TURNS = 3
 ACTIVITIES = ["sleep", "subsistence", "childcare", "other"]
 
 
+def starting_age_shares():
+    """Share of a tile's people at each age at turn 0, as float64 [AGES] summing to 1.
+
+    A rough hunter-gatherer age structure: the steady state of a Siler mortality curve with parameters
+    close to Gurven & Kaplan's (2007) forager composite. About 23% of babies die in their first year
+    and 57% reach 15, life expectancy at birth is about 34, and adults who reach 15 live to about 58
+    on average. That gives roughly 30% under 15, 41% aged 15-44 and 13% aged 65 or over.
+    """
+    a1, b1, a2, a3, b3 = 0.422, 1.131, 0.013, 0.000047, 0.086   # infant, constant and ageing terms
+
+    def survival(x):   # share of newborns still alive at age x (closed-form integral of the hazard)
+        return np.exp(-(a1 / b1) * (1 - np.exp(-b1 * x)) - a2 * x - (a3 / b3) * (np.exp(b3 * x) - 1))
+
+    edges = survival(np.arange(0, 131, dtype=np.float64))
+    lived = (edges[:-1] + edges[1:]) / 2                     # people-years lived in [a, a + 1)
+    shares = np.concatenate([lived[:AGES - 1], [lived[AGES - 1:].sum()]])   # last age is 100 and over
+    return shares / shares.sum()
+
+
 def starting_hours():
     """Hours per person per day for each age at turn 0, as float32 [AGES, len(ACTIVITIES)].
 
@@ -65,7 +85,7 @@ def init(args):
         pop = json.load(f)
     counts = np.asarray(pop["population"], dtype=np.float64)
     tiles = np.flatnonzero(counts > 0).astype(cs.DTYPES["tiles"])
-    people = np.repeat(counts[tiles, None] / AGES, AGES, axis=1)
+    people = counts[tiles, None] * starting_age_shares()[None, :]
     hours = np.broadcast_to(starting_hours(), (len(tiles), AGES, len(ACTIVITIES))).copy()
     m = cs.write_turn(args.state, 0, tiles, people, hours, ACTIVITIES,
                       extra={"initial_population_source": os.path.basename(args.population)})

@@ -669,8 +669,9 @@ function onTurnChange(turn) {
   if (tid) { shownTid = null; showTile(tid); }
 }
 
-// People are fractional in the state and rounded only here: whole people, with a decimal for tiny cohorts.
-const fmtPeople = n => n >= 10 ? fmtInt(n) : n === 0 ? "0" : n.toFixed(1);
+// People are fractional in the state; the panel always shows them rounded to whole people.
+const fmtPeople = n => fmtInt(n);
+const peopleText = n => `${fmtPeople(n)} ${Math.round(n) === 1 ? "person" : "people"}`;
 const ageLabel = (a, ages) => a === ages - 1 ? `${a}+` : String(a);
 
 function renderCohorts(c) {
@@ -693,7 +694,7 @@ function renderCohorts(c) {
     `<text x="${Math.min(W - 10, a * bw + bw / 2).toFixed(1)}" y="${H - 4}" text-anchor="middle">${ageLabel(a, ages)}</text>`).join("");
 
   return `
-    <div class="cohort-head"><span><b>${fmtPeople(total)}</b> people · up to ${fmtPeople(max)} per year of age</span>
+    <div class="cohort-head"><span><b>${fmtPeople(total)}</b> ${Math.round(total) === 1 ? "person" : "people"} · up to ${fmtPeople(max)} per year of age</span>
       <button class="act" data-cohorts="hide">Hide</button></div>
     <svg class="cohort-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="People by year of age, 0 to ${ageLabel(ages - 1, ages)}">
       <line class="axis" x1="0" x2="${W}" y1="${base + 0.5}" y2="${base + 0.5}"></line>
@@ -721,7 +722,7 @@ function showCohortHours(age) {
   out.classList.toggle("age", age != null);
   out.innerHTML = age == null
     ? `Hours per person per day, <b>average of all ages</b> · hover over an age for its own`
-    : `Hours per person per day, <b>age ${ageLabel(age, c.ages)}</b> · ${fmtPeople(c.people[age])} people`;
+    : `Hours per person per day, <b>age ${ageLabel(age, c.ages)}</b> · ${peopleText(c.people[age])}`;
   box.innerHTML = rows.map(([name, h]) => `<div class="bar-row hours-row">
       <span>${esc(name)}</span>
       <div class="track"><div class="fill" style="width:${(h / 24 * 100).toFixed(1)}%"></div></div>

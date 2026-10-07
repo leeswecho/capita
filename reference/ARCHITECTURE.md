@@ -404,7 +404,7 @@ python server.py            # then open http://localhost:8000/
 **Run the turn engine (cohorts)**
 
 ```
-python ../engine/engine.py init      # turn 0 from world_population.json, a flat age distribution
+python ../engine/engine.py init      # turn 0 from world_population.json, hunter-gatherer age structure
 python ../engine/engine.py step      # advance one year (--turns N for more)
 python ../engine/engine.py verify    # recheck the current turn's checksum
 ```

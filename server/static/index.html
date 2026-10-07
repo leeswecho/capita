@@ -82,15 +82,11 @@
   .cohort-chart .hit { fill: transparent; cursor: crosshair; }
   .cohort-chart .axis { stroke: rgba(255,255,255,0.18); stroke-width: 1; }
   .cohort-chart text { fill: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
-  .cohort-readout { font-size: 12px; color: var(--muted); min-height: 2.9em; margin: 4px 0 2px; font-variant-numeric: tabular-nums; }
+  .cohort-readout { font-size: 12px; color: var(--muted); margin: 6px 0 4px; font-variant-numeric: tabular-nums; }
   .cohort-readout b { color: var(--text); }
-  .cohort-sub { font-size: 12px; color: var(--muted); margin: 8px 0 2px; }
-  .hours-row { grid-template-columns: 96px 1fr 44px; }
-  .hours-row .fill { background: #9fb3d9; }
-  .cohort-table { width: 100%; border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; margin-top: 6px; }
-  .cohort-table th, .cohort-table td { text-align: right; padding: 1px 4px; border-bottom: 1px solid rgba(255,255,255,0.05); }
-  .cohort-table th { color: var(--muted); font-weight: 600; }
-  details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .cohort-readout.age b { color: var(--accent); }
+  .hours-row { grid-template-columns: 96px 1fr 50px; }
+  .hours-row .fill { background: #9fb3d9; transition: width 0.12s; }
   .hint { color: var(--muted); font-size: 12px; margin-top: 22px; line-height: 1.6; }
   kbd { background: rgba(255,255,255,0.08); border-radius: 3px; padding: 0 4px; font-size: 11px; }
 
@@ -655,7 +651,11 @@ async function showCohorts(tid) {
   try {
     const c = await fetchCohorts(tid);
     const box = document.getElementById("cohorts");
-    if (box && shownTid === tid && cohortsOpen) box.innerHTML = renderCohorts(c);
+    if (box && shownTid === tid && cohortsOpen) {
+      box.innerHTML = renderCohorts(c);
+      shownCohorts = c;
+      showCohortHours(null);
+    }
   } catch (e) {
     const box = document.getElementById("cohorts");
     if (box && shownTid === tid) box.innerHTML = `<div class="none">Couldn't load cohorts: ${esc(e.message)}</div>`;
@@ -677,7 +677,7 @@ function renderCohorts(c) {
   if (c.error) return `<div class="none">${esc(c.error)}</div>`;
   if (!c.people) return `<div class="cohort-head"><span>Nobody lives here at turn ${c.turn}.</span>
     <button class="act" data-cohorts="hide">Hide</button></div>`;
-  const ages = c.ages, people = c.people, acts = c.activities;
+  const ages = c.ages, people = c.people;
   const total = people.reduce((a, b) => a + b, 0);
   const max = Math.max(...people) || 1;
 
@@ -692,14 +692,6 @@ function renderCohorts(c) {
   const ticks = [0, 20, 40, 60, 80, 100].map(a =>
     `<text x="${Math.min(W - 10, a * bw + bw / 2).toFixed(1)}" y="${H - 4}" text-anchor="middle">${ageLabel(a, ages)}</text>`).join("");
 
-  // Hours per day, averaged over everyone in the tile (weighted by people).
-  const mean = acts.map((_, k) => total ? people.reduce((s, p, a) => s + p * c.hours[a][k], 0) / total : 0);
-  const unassigned = Math.max(0, 24 - mean.reduce((a, b) => a + b, 0));
-  const hourRows = acts.map((name, k) => [name, mean[k]]).concat(unassigned >= 0.05 ? [["(unassigned)", unassigned]] : []);
-
-  const rows = people.map((p, a) => `<tr><td>${ageLabel(a, ages)}</td><td>${fmtPeople(p)}</td>${
-    c.hours[a].map(h => `<td>${h.toFixed(2)}</td>`).join("")}</tr>`).join("");
-
   return `
     <div class="cohort-head"><span><b>${fmtPeople(total)}</b> people · up to ${fmtPeople(max)} per year of age</span>
       <button class="act" data-cohorts="hide">Hide</button></div>
@@ -707,28 +699,42 @@ function renderCohorts(c) {
       <line class="axis" x1="0" x2="${W}" y1="${base + 0.5}" y2="${base + 0.5}"></line>
       ${bars}${ticks}
     </svg>
-    <div class="cohort-readout" id="cohortReadout">Hover over a bar to see that age's people and hours.</div>
-    <div class="cohort-sub">Hours per person per day (tile average)</div>
-    ${hourRows.map(([name, h]) => `<div class="bar-row hours-row">
-      <span>${esc(name)}</span>
-      <div class="track"><div class="fill" style="width:${(h / 24 * 100).toFixed(1)}%"></div></div>
-      <span class="pct">${h.toFixed(1)} h</span></div>`).join("")}
-    <details><summary>Table of all ${ages} ages</summary>
-      <table class="cohort-table"><thead><tr><th>Age</th><th>People</th>${acts.map(n => `<th>${esc(n)} h</th>`).join("")}</tr></thead>
-      <tbody>${rows}</tbody></table>
-    </details>`;
+    <div class="cohort-readout" id="cohortReadout"></div>
+    <div id="cohortHours"></div>`;
 }
 
-info.addEventListener("mouseover", async e => {
-  const hit = e.target.closest(".cohort-chart .hit");
-  const out = document.getElementById("cohortReadout");
-  const pending = pinnedTid && cohortCache.get(`${pinnedTid}@${stateTurn}`);
-  if (!hit || !out || !pending) return;
-  const c = await pending, a = +hit.dataset.age;
+// The hours bars under the chart show one age while its bar is hovered, and otherwise the average over
+// everyone in the tile (weighted by people). `age` is null for the average.
+let shownCohorts = null;   // the cohorts response currently drawn in the panel
+function showCohortHours(age) {
+  const c = shownCohorts, out = document.getElementById("cohortReadout"), box = document.getElementById("cohortHours");
+  if (!c || !c.people || !out || !box) return;
+  const total = c.people.reduce((a, b) => a + b, 0);
+  const hours = age == null
+    ? c.activities.map((_, k) => total ? c.people.reduce((s, p, a) => s + p * c.hours[a][k], 0) / total : 0)
+    : c.hours[age];
+  const unassigned = Math.max(0, 24 - hours.reduce((a, b) => a + b, 0));
+  const rows = c.activities.map((name, k) => [name, hours[k]])
+    .concat(unassigned >= 0.005 ? [["(unassigned)", unassigned]] : []);
   info.querySelectorAll(".cohort-chart .bar.on").forEach(b => b.classList.remove("on"));
-  info.querySelector(`.cohort-chart .bar[data-age="${a}"]`)?.classList.add("on");
-  out.innerHTML = `<b>Age ${ageLabel(a, c.ages)}</b>: ${fmtPeople(c.people[a])} people<br>` +
-    c.activities.map((n, k) => `${esc(n)} ${c.hours[a][k].toFixed(2)} h`).join(" · ");
+  if (age != null) info.querySelector(`.cohort-chart .bar[data-age="${age}"]`)?.classList.add("on");
+  out.classList.toggle("age", age != null);
+  out.innerHTML = age == null
+    ? `Hours per person per day, <b>average of all ages</b> · hover over an age for its own`
+    : `Hours per person per day, <b>age ${ageLabel(age, c.ages)}</b> · ${fmtPeople(c.people[age])} people`;
+  box.innerHTML = rows.map(([name, h]) => `<div class="bar-row hours-row">
+      <span>${esc(name)}</span>
+      <div class="track"><div class="fill" style="width:${(h / 24 * 100).toFixed(1)}%"></div></div>
+      <span class="pct">${h.toFixed(2)} h</span></div>`).join("");
+}
+
+info.addEventListener("mouseover", e => {
+  const hit = e.target.closest(".cohort-chart .hit");
+  if (hit) showCohortHours(+hit.dataset.age);
+});
+info.addEventListener("mouseout", e => {
+  const chart = e.target.closest(".cohort-chart");
+  if (chart && !chart.contains(e.relatedTarget)) showCohortHours(null);
 });
 
 info.addEventListener("click", e => {

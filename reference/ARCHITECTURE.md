@@ -360,9 +360,9 @@ there is none), each as a stacked bar plus a bar per non-zero type (`percentBloc
 (yes/no and names).
 
 **Cohorts** are loaded only on request. On a pinned tile the section shows a "Show age cohorts" button;
-clicking it fetches `/api/tile/<id>/cohorts` and draws people by year of age (hover a bar for that
-age's people and hours), the tile's average hours per person per day for each activity, and a
-collapsible table of all 101 ages. The section then stays open for every tile you pin until you click
+clicking it fetches `/api/tile/<id>/cohorts` and draws people by year of age, with a bar per
+activity for hours per person per day below it. The hours bars show the average of all ages
+(weighted by people), and switch to a single age while its bar on the chart is hovered. The section then stays open for every tile you pin until you click
 "Hide". Responses are cached per tile and turn. People counts are fractions in the state and are
 rounded only for display.
 

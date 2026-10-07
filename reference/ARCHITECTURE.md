@@ -231,7 +231,8 @@ server.py ◄── memory-maps people.npy / hours.npy of the turn current.json 
   on a later step.
 - **One turn = one year.** `engine/engine.py step` currently applies only ageing: every cohort moves up a
   year, the 99-year-olds join the open-ended 100+ group (their hours are averaged, weighted by people),
-  and age 0 is left empty (no births or deaths yet). The activity list is a placeholder in `engine/engine.py`.
+  and age 0 is left empty (no births or deaths yet). The activity list and the starting hours
+  for each age (rough curves in `starting_hours()`) are placeholders in `engine/engine.py`.
 - **Determinism.** Each manifest carries a SHA-256 checksum of the arrays; `engine/engine.py verify` rechecks
   it. The yearly step uses only elementwise arithmetic, so it doesn't depend on how NumPy orders sums.
 - **The heatmap still comes from `world_population.json`,** not from the cohort state. Initialise the

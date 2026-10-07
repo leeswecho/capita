@@ -101,4 +101,6 @@ transpose before writing, or write `fortran_order: True` with the reversed memor
 One turn is one year. Each turn every cohort moves up one year of age. The 99-year-olds join the
 100+ group, whose hours become the average of the two groups weighted by people. Age 0 is left empty,
 because there are no births or deaths yet. Activity hours move with the people. The activity list and
-its starting hours (8 sleep, 6 subsistence, 2 childcare, 8 other) are placeholders in `engine/engine.py`.
+its starting hours are placeholders in `engine/engine.py` (`starting_hours()`): rough smooth curves by
+age, so that babies sleep more, subsistence work starts around age 10 and peaks in adulthood, and
+childcare peaks around age 30.

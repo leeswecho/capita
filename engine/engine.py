@@ -8,8 +8,8 @@
 top-level state/ directory, which server.py also reads, and the population file in server/.
 
 `init` writes turn 0: every populated tile of the population file gets its people spread evenly over
-the 101 ages, and every cohort gets the same placeholder activity hours (ACTIVITIES). `step` advances
-one year per turn. For now the only rule is ageing: each cohort moves up one year and the 99-year-olds
+the 101 ages, and each age gets rough placeholder activity hours shaped by age (starting_hours()).
+`step` advances one year per turn. For now the only rule is ageing: each cohort moves up one year and the 99-year-olds
 join the open-ended 100-and-over group (no births or deaths yet). Activity hours move with the people;
 in the 100+ group the hours of the two merged groups are averaged, weighted by people.
 
@@ -35,9 +35,27 @@ from cohort_state import AGES  # noqa: E402
 
 KEEP_TURNS = 3
 
-# Placeholder activities and the hours per day every cohort starts with (they sum to 24).
-# Replace with the real activity list; the state files carry the names, so readers adapt.
-ACTIVITIES = {"sleep": 8.0, "subsistence": 6.0, "childcare": 2.0, "other": 8.0}
+# Placeholder activities. Replace with the real list; the state files carry the names, so readers adapt.
+ACTIVITIES = ["sleep", "subsistence", "childcare", "other"]
+
+
+def starting_hours():
+    """Hours per person per day for each age at turn 0, as float32 [AGES, len(ACTIVITIES)].
+
+    Rough, smooth shapes (not data): babies sleep about 14 h, falling to about 7.4 h by 20 and rising
+    slowly to 8.5 h at 100; subsistence work starts around age 10, reaches 8.5 h in the 20s and eases
+    to about 5.5 h by 100; childcare peaks around 30 (parents) with a smaller bump around 60
+    (grandparents); "other" is whatever is left of the 24 hours. Every age gets slightly different values.
+    """
+    a = np.arange(AGES, dtype=np.float64)
+    rise = lambda x: 1 / (1 + np.exp(-x))   # smooth 0 -> 1 step
+    sleep = 7.0 + 7.0 * np.exp(-a / 5) + 0.015 * a
+    subsistence = 8.5 * rise((a - 14) / 3) * (1 - 0.35 * np.clip((a - 50) / 50, 0, 1) ** 2)
+    childcare = rise((a - 11) / 1.5) * (3.0 * np.exp(-((a - 30) / 11) ** 2) + 0.8 * np.exp(-((a - 62) / 14) ** 2))
+    other = 24 - sleep - subsistence - childcare
+    hours = np.stack([sleep, subsistence, childcare, other], axis=1)
+    assert hours.shape == (AGES, len(ACTIVITIES)) and (hours >= 0).all()
+    return hours.astype(np.float32)
 
 
 def init(args):
@@ -48,9 +66,8 @@ def init(args):
     counts = np.asarray(pop["population"], dtype=np.float64)
     tiles = np.flatnonzero(counts > 0).astype(cs.DTYPES["tiles"])
     people = np.repeat(counts[tiles, None] / AGES, AGES, axis=1)
-    hours = np.broadcast_to(np.array(list(ACTIVITIES.values()), dtype=np.float32),
-                            (len(tiles), AGES, len(ACTIVITIES))).copy()
-    m = cs.write_turn(args.state, 0, tiles, people, hours, list(ACTIVITIES),
+    hours = np.broadcast_to(starting_hours(), (len(tiles), AGES, len(ACTIVITIES))).copy()
+    m = cs.write_turn(args.state, 0, tiles, people, hours, ACTIVITIES,
                       extra={"initial_population_source": os.path.basename(args.population)})
     print(f"turn 0: {m['populated_tiles']} tiles, {m['total_people']:,.1f} people -> "
           f"{os.path.join(args.state, cs.turn_dir_name(0))}")

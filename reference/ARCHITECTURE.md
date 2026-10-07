@@ -55,7 +55,7 @@ The server does no rendering. It hands the browser compact data, and the browser
 | `../engine/engine.py` | The turn engine, in its own directory and run as its own process: `init` writes turn 0 of the cohort state, `step` advances it a year at a time, `verify` checks the current turn's checksum (§4.6). It imports `cohort_state.py` and `grid.py` from `server/`, and by default uses the top-level `state/` folder and `server/world_population.json`. |
 | `cohort_state.py` | Reads and writes the cohort state (`../state/`): the format id, atomic turn writing, memory-mapped reading, checksums and pruning. Shared by `engine/engine.py` and the server. |
 | `../state/` | The cohort state written by `engine/engine.py`, in its own top-level folder next to `server/` and `engine/`: `current.json` plus one `turn_NNNNN/` directory per recent turn (see `cohort_state_schema.md`). Generated; not committed. |
-| `gen_oecd_capitals.py` | Writes the scenario `world_population_oecd_capitals.yaml`/`.json`: 200 people in each OECD member's capital tile, 0 elsewhere. |
+| `gen_oecd_capitals.py` | Writes the scenario `world_population_oecd_capitals.yaml`/`.json`: 200 people in each OECD member's capital tile, 0 elsewhere. Also writes `world_population_oecd_capitals.nations.json`, the nation seed (one nation per member, with its capital tile) that `engine.py init` picks up automatically for that population file. |
 | `demo_delhi.py` | Demo: rewrites `world_population.json` every second with a random population for the Delhi tile, to show live updating. Restores the original value on Ctrl+C. |
 | `grid.py` | The tile grid (0.5° tiles, ids, lookups, flat index, neighbours), shared by every script and the server. `static/index.html` has a JavaScript copy. |
 | `world_map.yaml` | Landform (`terrain`), cover including ice (`cover`), rivers and neighbour links for 259,200 tiles (see `world_map_schema.md`). Source for the JSON; the server doesn't read it. |
@@ -190,8 +190,10 @@ just keeps serving the last good data and tries again a second later.
 | `/api/population` | 259,200 `uint32` people counts; header `X-Population-Version` | heatmap |
 | `/api/population/version` | `{"version": n, "turn": t}`: the population file's version and the cohort state's current turn | the page's once-a-second poll |
 | `/api/population/countries` | `{"version": n, "codes": [...], "index": [...]}`: each tile's country as 0 (none) or k → `codes[k − 1]`, in grid order (≈650 KB) | same-country heatmap tint |
-| `/api/tile/<id>` | JSON: the tile record merged with its population fields and country name | side panel, on hover |
+| `/api/tile/<id>` | JSON: the tile record merged with its population fields and country name, plus `nation` (the nation whose people live there at the current turn, with `is_capital`; `null` if none) | side panel, on hover |
 | `/api/tile/<id>/cohorts` | JSON: the tile's `people` (101 values) and `hours` (101 × activities) at the current turn, plus `turn`, `activities`, `hours_unit`; `people`/`hours` are `null` if nobody lives there | the Cohorts section, only after "Show age cohorts" |
+| `/api/nations` | JSON: the current turn's nations (`id`, `code`, `name`, `capital` tile id, `alive`, `founded_turn`, `people`, `visible_tiles`, `explored_tiles`); built once per turn | the "View as" list |
+| `/api/nation/<id>/visibility` | 64,800 bytes: the nation's active-visibility bits, then its explored bits (tile i = bit i % 8 of byte i // 8); header `X-Turn` | the fog of war for "View as" |
 | `/api/tile_at?lat=&lon=` | same as above, for the tile containing a point | convenience for scripts; the page doesn't use it |
 
 Everything except the texture is sent with `Cache-Control: no-cache`, so the browser always asks for
@@ -211,7 +213,7 @@ A `/api/tile/N285E0770` response looks like:
 
 ---
 
-### 4.6 The cohort state and the engine
+### 4.6 The game state and the engine
 
 The game state below the tile totals is kept by a separate process, `engine/engine.py`, which writes it to
 the top-level `state/` folder as NumPy `.npy` arrays plus a `manifest.json` per turn (format: `cohort_state_schema.md`):
@@ -219,7 +221,7 @@ the top-level `state/` folder as NumPy `.npy` arrays plus a `manifest.json` per 
 ```
 engine.py step ──► state/.tmp_turn_00008/ ──rename──► state/turn_00008/ ──► state/current.json (atomic replace)
                                                                                 │ checked every 1 s
-server.py ◄── memory-maps people.npy / hours.npy of the turn current.json names ◄┘
+server.py ◄── memory-maps the arrays of the turn current.json names ◄──────────────┘
 ```
 
 - **The server reads almost nothing.** Switching turns reads only `current.json`, the manifest and
@@ -233,6 +235,13 @@ server.py ◄── memory-maps people.npy / hours.npy of the turn current.json 
   year, the 99-year-olds join the open-ended 100+ group (their hours are averaged, weighted by people),
   and age 0 is left empty (no births or deaths yet). The activity list and the starting hours
   for each age (rough curves in `starting_hours()`) are placeholders in `engine/engine.py`.
+- **Nations.** Each turn holds a record per nation (`nations.json`: id, code, capital tile, founded
+  turn, alive), the nation of each populated tile (`nation.npy`) and two bit grids per nation:
+  `visible.npy` (active visibility) and `explored.npy` (every tile ever seen; explored but not visible
+  = passive visibility). Ids are never reused. At turn 0 there is one nation per country code, with
+  its most populous tile as capital, unless a seed file lists the nations and capitals. Each turn the
+  engine recomputes active visibility: tiles where the nation has people, plus the 8 around each. A
+  full world (224 nations) adds 14 MB per turn.
 - **Determinism.** Each manifest carries a SHA-256 checksum of the arrays; `engine/engine.py verify` rechecks
   it. The yearly step uses only elementwise arithmetic, so it doesn't depend on how NumPy orders sums.
 - **The heatmap still comes from `world_population.json`,** not from the cohort state. Initialise the
@@ -355,6 +364,8 @@ Details:
 
 The side panel shows, top to bottom: tile id and bounds with cursor position; **Population** (country,
 people, heat level, tile area, and a note for tiles outside the data's 89.1°S–89.1°N coverage);
+**Nation** (the nation living on the tile, marked "capital" on its capital tile) and, while viewing as
+a nation, how that nation sees the tile (active, passive or unknown);
 **Cohorts** (see below); **Terrain** (the landform) and **Cover** (what is on the land and frozen water; "Open water only" when
 there is none), each as a stacked bar plus a bar per non-zero type (`percentBlock()`); **River**
 (yes/no and names).
@@ -365,6 +376,12 @@ activity for hours per person per day below it. The hours bars show the average 
 (weighted by people), and switch to a single age while its bar on the chart is hovered. The section then stays open for every tile you pin until you click
 "Hide". Responses are cached per tile and turn. People counts are fractions in the state and are
 rounded only for display.
+
+**View as** (toolbar) lists the current turn's nations. Choosing one fetches its visibility bits and
+paints a fog layer over the globe: unknown tiles dark, passive tiles dimmed, actively visible tiles
+clear, with the nation's capital outlined. "Everyone" removes the fog. The fog is only a view: the
+server still sends every tile's data, so it is not yet a real fog of war for players. Rivers are drawn
+above the fog. The list and fog reload when the engine advances a turn.
 
 ### 5.6 Live population updates
 
@@ -404,7 +421,8 @@ python server.py            # then open http://localhost:8000/
 **Run the turn engine (cohorts)**
 
 ```
-python ../engine/engine.py init      # turn 0 from world_population.json, hunter-gatherer age structure
+python ../engine/engine.py init      # turn 0 from world_population.json, hunter-gatherer age structure,
+                                     # one nation per country code (or a <population>.nations.json seed)
 python ../engine/engine.py step      # advance one year (--turns N for more)
 python ../engine/engine.py verify    # recheck the current turn's checksum
 ```

@@ -27,6 +27,11 @@ often; a new turn is memory-mapped, so switching turns reads nothing until a pag
     /api/tile/<id>         one tile record merged with its population record (JSON)
     /api/tile/<id>/cohorts the tile's people and activity hours by single year of age, from the
                            engine's current turn (JSON); read on request from memory-mapped files
+    /api/nations           the current turn's nations: id, code, name, capital tile, visible and
+                           explored tile counts (JSON)
+    /api/nation/<id>/visibility  one nation's visibility at the current turn: 32,400 bytes of
+                           active-visibility bits, then 32,400 bytes of explored bits (tile i is bit
+                           i % 8 of byte i // 8); header X-Turn
     /api/tile_at?lat=&lon= the tile containing a point (JSON)
 """
 
@@ -42,12 +47,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 import cohort_state
+import numpy as np
+
 import grid
 from convert_map import read_map
 from convert_population import FORMAT as POP_FORMAT
 from grid import HEIGHT, TILE_ID_RE, WIDTH, tile_at
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+POPCOUNT = np.array([bin(i).count("1") for i in range(256)], dtype=np.uint8)   # set bits per byte value
 POP_RELOAD_SECONDS = 1.0
 STATIC = os.path.join(ROOT, "static")
 
@@ -256,6 +264,42 @@ class World:
                     print(f"  couldn't load the cohort state, keeping the last good turn: {e}", flush=True)
                 last_error = str(e)
 
+    def nation_ref(self, st, nid: int):
+        """Short description of nation `nid` at turn `st`, or None for 0 (no nation)."""
+        if not nid:
+            return None
+        n = st.nations[nid - 1]
+        cap = n["capital"]
+        return {"id": nid, "code": n["code"], "name": self.country_names.get(n["code"]) or n["code"],
+                "capital": grid.tile_id(*grid.corner(*divmod(cap, WIDTH))) if cap is not None else None,
+                "alive": n["alive"]}
+
+    def nations_json(self):
+        """The current turn's nations, built once per turn (counting visibility bits reads both arrays)."""
+        st = self.turn
+        if st is None:
+            return json.dumps({"turn": None, "nations": []}).encode()
+        cached = getattr(st, "nations_cache", None)
+        if cached is None:
+            vis = POPCOUNT[np.asarray(st.visible)].sum(axis=1, dtype=np.int64)
+            exp = POPCOUNT[np.asarray(st.explored)].sum(axis=1, dtype=np.int64)
+            people = np.bincount(st.nation, weights=np.asarray(st.people).sum(axis=1), minlength=len(st.nations) + 1)
+            out = []
+            for n in st.nations:
+                i = n["id"]
+                out.append({**self.nation_ref(st, i), "founded_turn": n["founded_turn"],
+                            "people": round(float(people[i]), 2),
+                            "visible_tiles": int(vis[i]), "explored_tiles": int(exp[i])})
+            cached = st.nations_cache = json.dumps({"turn": st.turn, "nations": out}, separators=(",", ":")).encode()
+        return cached
+
+    def visibility_bytes(self, nid: int):
+        """(turn, 64,800 bytes) for nation `nid`, or None if there is no such nation."""
+        st = self.turn
+        if st is None or not 1 <= nid <= len(st.nations):
+            return None
+        return st.turn, bytes(st.visible[nid]) + bytes(st.explored[nid])
+
     def cohorts_json(self, tid: str):
         """The tile's cohorts at the current turn, or None if the id isn't a tile."""
         i = tile_index(tid)
@@ -298,6 +342,11 @@ class World:
             "rank": pop.rank.get(i),
             "version": pop.version,
         }
+        st = self.turn
+        r = st.row(i) if st is not None else None
+        body["nation"] = self.nation_ref(st, int(st.nation[r])) if r is not None else None
+        if body["nation"]:
+            body["nation"]["is_capital"] = st.nations[body["nation"]["id"] - 1]["capital"] == i
         return json.dumps(body).encode()
 
 
@@ -369,6 +418,21 @@ class Handler(BaseHTTPRequestHandler):
             if body is None:
                 return self.send_json(json.dumps({"error": f"no tile {tid!r}"}).encode(), 404)
             return self.send_json(body)
+        if path == "/api/nations":
+            return self.send_json(w.nations_json())
+        m = re.fullmatch(r"/api/nation/(\d+)/visibility", path)
+        if m:
+            got = w.visibility_bytes(int(m.group(1)))
+            if got is None:
+                return self.send_json(json.dumps({"error": f"no nation {m.group(1)}"}).encode(), 404)
+            turn, body = got
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Turn", str(turn))
+            self.end_headers()
+            return self.wfile.write(body)
         if path.startswith("/api/tile/"):
             tid = path[len("/api/tile/"):].upper()
             body = w.tile_json(tid) if TILE_ID_RE.match(tid) else None

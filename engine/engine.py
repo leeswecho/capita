@@ -1,6 +1,6 @@
-"""Turn engine: creates and advances the cohort state that server.py displays.
+"""Turn engine: creates and advances the game state that server.py displays.
 
-    python engine/engine.py init [--population server/world_population.json] [--state state]
+    python engine/engine.py init [--population server/world_population.json] [--nations SEED] [--state state]
     python engine/engine.py step [--turns 1] [--state state]
     python engine/engine.py verify [--state state]
 
@@ -9,10 +9,15 @@ top-level state/ directory, which server.py also reads, and the population file 
 
 `init` writes turn 0: every populated tile of the population file gets its people split across the
 101 ages in a rough hunter-gatherer age structure (starting_age_shares()), and each age gets rough
-placeholder activity hours shaped by age (starting_hours()). `step` advances one year per turn. For
-now the only rule is ageing: each cohort moves up one year and the 99-year-olds join the open-ended
-100-and-over group (no births or deaths yet). Activity hours move with the people;
-in the 100+ group the hours of the two merged groups are averaged, weighted by people.
+placeholder activity hours shaped by age (starting_hours()). It also creates the nations
+(make_nations()) and their starting visibility.
+
+`step` advances one year per turn. For now the rules are:
+- Ageing: each cohort moves up one year and the 99-year-olds join the open-ended 100-and-over group
+  (no births or deaths yet). Activity hours move with the people; in the 100+ group the hours of the
+  two merged groups are averaged, weighted by people.
+- Visibility, recomputed every turn (active_visibility()): a nation actively sees every tile where it
+  has people, plus the 8 tiles around each. Tiles it has ever seen stay explored (passive visibility).
 
 Each step reads the current turn, computes the next one in memory and writes it as a new turn directory
 (cohort_state.py), so the web server can keep reading the old turn until the new one is complete. The
@@ -32,6 +37,7 @@ STATE = os.path.join(REPO, "state")
 sys.path.insert(0, SERVER)   # cohort_state.py and grid.py live with the server, which uses them too
 
 import cohort_state as cs  # noqa: E402
+import grid  # noqa: E402
 from cohort_state import AGES  # noqa: E402
 
 KEEP_TURNS = 3
@@ -78,18 +84,83 @@ def starting_hours():
     return hours.astype(np.float32)
 
 
+def make_nations(counts, country, seed=None):
+    """Turn-0 nations and the nation id of every tile, from the population file.
+
+    counts: people per tile [grid.COUNT]; country: ISO code per tile (or None).
+    Without a seed, each country code on a populated tile becomes a nation (ids in code order) whose
+    capital is its most populous tile. A seed ({"nations": [{"code": "DNK", "capital": "N555E0125"}, ...]})
+    lists the nations instead, in id order, with their capitals: a seed capital's tile belongs to that
+    nation, other tiles go by country code, and codes not in the seed get no nation.
+    Returns (nation records, nation id per tile as uint16 [grid.COUNT]).
+    """
+    populated = counts > 0
+    owner = np.zeros(grid.COUNT, dtype=np.uint16)
+    if seed is None:
+        codes = sorted({c for c, p in zip(country, populated) if p and c})
+        capitals = {}
+    else:
+        codes = [n["code"] for n in seed]
+        capitals = {n["code"]: grid.index(*grid.parse_tile_id(n["capital"])) for n in seed}
+        if len(set(codes)) != len(codes):
+            sys.exit("nation seed lists a code twice")
+    ids = {c: i for i, c in enumerate(codes, 1)}
+    for t, c in enumerate(country):
+        if c in ids:
+            owner[t] = ids[c]
+    for c, t in capitals.items():
+        owner[t] = ids[c]
+    owner[~populated] = 0
+    nations = []
+    for c, i in ids.items():
+        cap = capitals.get(c)
+        if cap is None:
+            mine = np.flatnonzero(owner == i)
+            cap = int(mine[np.argmax(counts[mine])]) if len(mine) else None   # ties: the first tile
+        nations.append({"id": i, "code": c, "capital": cap, "founded_turn": 0, "alive": True})
+    return nations, owner
+
+
+def active_visibility(tiles, nation, people, n_rows):
+    """Packed bits [n_rows, BITS_BYTES]: each nation sees the tiles where it has people and the 8 tiles
+    around each (east-west wraps; nothing past the poles)."""
+    flags = np.zeros((n_rows, grid.HEIGHT, grid.WIDTH), dtype=bool)
+    live = (nation > 0) & (people > 0).any(axis=1)
+    r, c = np.divmod(tiles[live].astype(np.int64), grid.WIDTH)
+    k = nation[live].astype(np.int64)
+    for dr in (-1, 0, 1):
+        rr = r + dr
+        ok = (rr >= 0) & (rr < grid.HEIGHT)
+        for dc in (-1, 0, 1):
+            flags[k[ok], rr[ok], (c[ok] + dc) % grid.WIDTH] = True
+    return cs.pack_tiles(flags.reshape(n_rows, grid.COUNT))
+
+
 def init(args):
     if cs.read_current(args.state):
         sys.exit(f"{args.state} already has a state; delete it first to start over")
     with open(args.population, encoding="utf-8") as f:
         pop = json.load(f)
     counts = np.asarray(pop["population"], dtype=np.float64)
+    seed_path = args.nations or os.path.splitext(args.population)[0] + ".nations.json"
+    seed = None
+    if args.nations or os.path.exists(seed_path):
+        with open(seed_path, encoding="utf-8") as f:
+            seed = json.load(f)["nations"]
+        print(f"nations from {os.path.basename(seed_path)}")
+    nations, owner = make_nations(counts, pop["country"], seed)
+
     tiles = np.flatnonzero(counts > 0).astype(cs.DTYPES["tiles"])
     people = counts[tiles, None] * starting_age_shares()[None, :]
     hours = np.broadcast_to(starting_hours(), (len(tiles), AGES, len(ACTIVITIES))).copy()
-    m = cs.write_turn(args.state, 0, tiles, people, hours, ACTIVITIES,
-                      extra={"initial_population_source": os.path.basename(args.population)})
-    print(f"turn 0: {m['populated_tiles']} tiles, {m['total_people']:,.1f} people -> "
+    nation = owner[tiles]
+    visible = active_visibility(tiles, nation, people, len(nations) + 1)
+    state = cs.State(tiles, people, hours, ACTIVITIES, nation, nations, visible, visible.copy())
+    extra = {"initial_population_source": os.path.basename(args.population)}
+    if seed is not None:
+        extra["initial_nations_source"] = os.path.basename(seed_path)
+    m = cs.write_turn(args.state, 0, state, extra=extra)
+    print(f"turn 0: {m['populated_tiles']} tiles, {m['total_people']:,.1f} people, {m['nations']} nations -> "
           f"{os.path.join(args.state, cs.turn_dir_name(0))}")
 
 
@@ -115,8 +186,11 @@ def step(args):
         if cur is None:
             sys.exit(f"no state in {args.state}; run: python engine/engine.py init")
         people, hours = age_one_year(cur.people, cur.hours)
-        m = cs.write_turn(args.state, cur.turn + 1, cur.tiles, people, hours, cur.activities,
-                          extra={k: v for k, v in cur.manifest.items() if k == "initial_population_source"})
+        visible = active_visibility(cur.tiles, cur.nation, people, len(cur.nations) + 1)
+        state = cs.State(cur.tiles, people, hours, cur.activities, cur.nation, cur.nations,
+                         visible, cur.explored | visible)
+        m = cs.write_turn(args.state, cur.turn + 1, state,
+                          extra={k: v for k, v in cur.manifest.items() if k.startswith("initial_")})
         del cur
         print(f"turn {m['turn']}: {m['total_people']:,.1f} people, checksum {m['checksum']['value'][:12]}")
     gone = cs.prune(args.state, keep=KEEP_TURNS)
@@ -140,6 +214,8 @@ def main():
     p = sub.add_parser("init", help="write turn 0")
     p.add_argument("--population", default=os.path.join(SERVER, "world_population.json"),
                    help="population file to seed turn 0 from; use the one server.py shows")
+    p.add_argument("--nations", help="nation seed file (default: <population>.nations.json if it exists, "
+                                     "otherwise one nation per country code)")
     p = sub.add_parser("step", help="advance the current turn")
     p.add_argument("--turns", type=int, default=1)
     sub.add_parser("verify", help="check the current turn's checksum")

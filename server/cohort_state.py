@@ -1,4 +1,4 @@
-"""Per-turn cohort state: the files the game engine writes and the web server reads.
+"""Per-turn game state: the files the game engine writes and the web server reads.
 
 Layout (see reference/cohort_state_schema.md for the full, language-neutral spec):
 
@@ -6,13 +6,19 @@ Layout (see reference/cohort_state_schema.md for the full, language-neutral spec
       current.json            {"format": ..., "turn": 7, "dir": "turn_00007"}; replaced atomically
       turn_00007/
         manifest.json         turn number, activity names, units, array shapes/dtypes, checksum
+        nations.json          one record per nation: id, code, capital tile, founded turn, alive
         tiles.npy             <u4 [N]          flat grid index (grid.py) of each row, strictly increasing
         people.npy            <f8 [N, 101]     people by single year of age; column 100 is "100 and over"
         hours.npy             <f4 [N, 101, A]  mean hours per person per day spent on each activity
+        nation.npy            <u2 [N]          nation id the row's people belong to (0 = none)
+        visible.npy           <u1 [M, 32400]   active visibility: row k = nation id k, one bit per tile
+        explored.npy          <u1 [M, 32400]   tiles each nation has ever seen (visible is a subset)
 
-Only tiles with people get a row. A turn directory is complete before current.json names it and is
-never changed afterwards, so readers can memory-map it safely. Windows won't delete a file another
-process has mapped, so old turns are pruned on a best-effort basis (see prune()).
+Only tiles with people get a row. Nation ids are 1..M-1 and are never reused; row 0 of the visibility
+arrays belongs to "no nation" and is all zeros. Bits are packed little-endian: tile i is bit i % 8 of
+byte i // 8. A turn directory is complete before current.json names it and is never changed afterwards,
+so readers can memory-map it safely. Windows won't delete a file another process has mapped, so old
+turns are pruned on a best-effort basis (see prune()).
 """
 import hashlib
 import json
@@ -23,10 +29,13 @@ import numpy as np
 
 import grid
 
-FORMAT = "capita/cohort-state-1"
+FORMAT = "capita/cohort-state-2"
 AGES = 101                      # ages 0..99, then 100 = "100 and over"
 HOURS_UNIT = "mean hours per person per day, averaged over the year"
-DTYPES = {"tiles": "<u4", "people": "<f8", "hours": "<f4"}
+BITS_BYTES = (grid.COUNT + 7) // 8          # one visibility row: 259,200 tiles -> 32,400 bytes
+DTYPES = {"tiles": "<u4", "people": "<f8", "hours": "<f4", "nation": "<u2", "visible": "<u1", "explored": "<u1"}
+ARRAYS = tuple(DTYPES)                      # file order, which is also checksum order
+NATION_KEYS = ("id", "code", "capital", "founded_turn", "alive")
 CURRENT = "current.json"
 
 
@@ -34,40 +43,78 @@ def turn_dir_name(turn: int) -> str:
     return f"turn_{turn:05d}"
 
 
-def checksum(tiles, people, hours) -> str:
-    """SHA-256 of the three arrays' raw little-endian bytes, in that order (C order)."""
-    h = hashlib.sha256()
-    for a, dt in ((tiles, DTYPES["tiles"]), (people, DTYPES["people"]), (hours, DTYPES["hours"])):
-        h.update(np.ascontiguousarray(a, dtype=dt).tobytes())
-    return h.hexdigest()
+def pack_tiles(flags):
+    """bool [..., grid.COUNT] -> uint8 [..., BITS_BYTES], little-endian bit order."""
+    return np.packbits(flags, axis=-1, bitorder="little")
 
 
-def validate(tiles, people, hours, activities):
-    n = len(tiles)
-    if tiles.dtype != np.dtype(DTYPES["tiles"]) or tiles.ndim != 1:
-        raise ValueError(f"tiles must be {DTYPES['tiles']} [N]")
-    if n and (np.any(np.diff(tiles.astype(np.int64)) <= 0) or tiles[-1] >= grid.COUNT):
-        raise ValueError("tiles must be strictly increasing grid indices")
-    if people.dtype != np.dtype(DTYPES["people"]) or people.shape != (n, AGES):
-        raise ValueError(f"people must be {DTYPES['people']} [{n}, {AGES}], got {people.dtype} {people.shape}")
-    if hours.dtype != np.dtype(DTYPES["hours"]) or hours.shape != (n, AGES, len(activities)):
-        raise ValueError(f"hours must be {DTYPES['hours']} [{n}, {AGES}, {len(activities)}], "
-                         f"got {hours.dtype} {hours.shape}")
-    if len(set(activities)) != len(activities):
-        raise ValueError("activity names must be unique")
+def unpack_tiles(bits):
+    """uint8 [..., BITS_BYTES] -> bool [..., grid.COUNT]."""
+    return np.unpackbits(bits, axis=-1, count=grid.COUNT, bitorder="little").astype(bool)
 
 
-def _write_json_atomic(path: str, obj):
+def nations_bytes(nations) -> bytes:
+    """Canonical JSON of the nation records (sorted keys, no spaces, UTF-8), as hashed by checksum()."""
+    return json.dumps(nations, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+class State:
+    """Everything in one turn. The engine builds one, write_turn() saves it, Turn reads it back."""
+
+    def __init__(self, tiles, people, hours, activities, nation, nations, visible, explored):
+        self.tiles, self.people, self.hours, self.nation = tiles, people, hours, nation
+        self.visible, self.explored = visible, explored
+        self.activities, self.nations = list(activities), nations
+
+    def arrays(self):
+        return {k: getattr(self, k) for k in ARRAYS}
+
+    def checksum(self) -> str:
+        """SHA-256 of every array's raw little-endian bytes in ARRAYS order (C order), then nations_bytes()."""
+        h = hashlib.sha256()
+        for k, a in self.arrays().items():
+            h.update(np.ascontiguousarray(a, dtype=DTYPES[k]).tobytes())
+        h.update(nations_bytes(self.nations))
+        return h.hexdigest()
+
+    def validate(self):
+        n, m = len(self.tiles), len(self.nations) + 1
+        for k, a in self.arrays().items():
+            if a.dtype != np.dtype(DTYPES[k]):
+                raise ValueError(f"{k} must be {DTYPES[k]}, got {a.dtype}")
+        shapes = {"tiles": (n,), "people": (n, AGES), "hours": (n, AGES, len(self.activities)), "nation": (n,),
+                  "visible": (m, BITS_BYTES), "explored": (m, BITS_BYTES)}
+        for k, shape in shapes.items():
+            if getattr(self, k).shape != shape:
+                raise ValueError(f"{k} must have shape {list(shape)}, got {list(getattr(self, k).shape)}")
+        if n and (np.any(np.diff(self.tiles.astype(np.int64)) <= 0) or self.tiles[-1] >= grid.COUNT):
+            raise ValueError("tiles must be strictly increasing grid indices")
+        if len(set(self.activities)) != len(self.activities):
+            raise ValueError("activity names must be unique")
+        for i, rec in enumerate(self.nations, 1):
+            if tuple(sorted(rec)) != tuple(sorted(NATION_KEYS)) or rec["id"] != i:
+                raise ValueError(f"nation record {i} must have keys {NATION_KEYS} and id {i}: {rec}")
+            if rec["capital"] is not None and not 0 <= rec["capital"] < grid.COUNT:
+                raise ValueError(f"nation {i}: capital {rec['capital']} is not a tile index")
+        if n and self.nation.max(initial=0) >= m:
+            raise ValueError("nation.npy refers to a nation id with no record")
+        if np.any(self.visible[0]) or np.any(self.explored[0]):
+            raise ValueError("visibility row 0 (no nation) must be all zeros")
+        if np.any(self.visible & ~self.explored):
+            raise ValueError("every visible tile must also be explored")
+
+
+def _write_json_atomic(path: str, obj, indent=2):
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8", newline="\n") as f:
-        json.dump(obj, f, indent=2)
+        json.dump(obj, f, indent=indent, ensure_ascii=False)
         f.write("\n")
     os.replace(tmp, path)
 
 
-def write_turn(state_dir: str, turn: int, tiles, people, hours, activities, extra: dict = None) -> dict:
+def write_turn(state_dir: str, turn: int, s: State, extra: dict = None) -> dict:
     """Write one complete turn, then point current.json at it. Returns the manifest."""
-    validate(tiles, people, hours, activities)
+    s.validate()
     os.makedirs(state_dir, exist_ok=True)
     name = turn_dir_name(turn)
     final = os.path.join(state_dir, name)
@@ -77,22 +124,25 @@ def write_turn(state_dir: str, turn: int, tiles, people, hours, activities, extr
     shutil.rmtree(tmp, ignore_errors=True)
     os.makedirs(tmp)
 
-    arrays = {"tiles": tiles, "people": people, "hours": hours}
-    for k, a in arrays.items():
+    for k, a in s.arrays().items():
         np.save(os.path.join(tmp, f"{k}.npy"), np.ascontiguousarray(a, dtype=DTYPES[k]), allow_pickle=False)
+    _write_json_atomic(os.path.join(tmp, "nations.json"), {"nations": s.nations}, indent=1)
     manifest = {
         "format": FORMAT,
         "turn": turn,
         "grid": {"tile_size_degrees": grid.TILE, "width": grid.WIDTH, "height": grid.HEIGHT},
         "ages": {"count": AGES, "last_is_open_ended": True},
-        "activities": list(activities),
+        "activities": s.activities,
         "hours_unit": HOURS_UNIT,
-        "arrays": {k: {"file": f"{k}.npy", "dtype": DTYPES[k], "shape": list(a.shape)}
-                   for k, a in arrays.items()},
-        "populated_tiles": len(tiles),
-        "total_people": float(people.sum(dtype=np.float64)),
-        "checksum": {"algorithm": "sha256", "of": "tiles, people, hours raw bytes in that order",
-                     "value": checksum(tiles, people, hours)},
+        "visibility_bits": "row k = nation id k; tile i is bit i % 8 of byte i // 8",
+        "arrays": {k: {"file": f"{k}.npy", "dtype": DTYPES[k], "shape": list(a.shape)} for k, a in s.arrays().items()},
+        "populated_tiles": len(s.tiles),
+        "nations": len(s.nations),
+        "total_people": float(s.people.sum(dtype=np.float64)),
+        "checksum": {"algorithm": "sha256",
+                     "of": f"raw bytes of {', '.join(ARRAYS)} in that order, then nations.json's records "
+                           "as canonical JSON (sorted keys, no whitespace, UTF-8)",
+                     "value": s.checksum()},
         **(extra or {}),
     }
     _write_json_atomic(os.path.join(tmp, "manifest.json"), manifest)
@@ -109,14 +159,15 @@ def read_current(state_dir: str):
     except FileNotFoundError:
         return None
     if cur.get("format") != FORMAT:
-        raise ValueError(f"{CURRENT}: expected format {FORMAT!r}, got {cur.get('format')!r}")
+        raise ValueError(f"{CURRENT}: expected format {FORMAT!r}, got {cur.get('format')!r}; "
+                         "delete the state folder and run engine.py init again")
     return cur
 
 
-class Turn:
-    """One turn's arrays. mmap=True maps people/hours without reading them, so opening is instant
-    and a lookup reads only that tile's rows (what the web server wants); mmap=False loads
-    writable copies (what the engine wants)."""
+class Turn(State):
+    """One saved turn. mmap=True maps the big arrays without reading them, so opening is instant and
+    a lookup reads only what it needs (what the web server wants); mmap=False loads writable copies
+    (what the engine wants)."""
 
     def __init__(self, state_dir: str, dir_name: str, mmap: bool = True):
         self.path = os.path.join(state_dir, dir_name)
@@ -128,12 +179,15 @@ class Turn:
         if (g["tile_size_degrees"], g["width"], g["height"]) != (grid.TILE, grid.WIDTH, grid.HEIGHT):
             raise ValueError(f"{dir_name} is for a different grid: {g}")
         self.turn = m["turn"]
-        self.activities = m["activities"]
-        mode = "r" if mmap else None
-        self.tiles = np.load(os.path.join(self.path, "tiles.npy"))   # small: always read in full
-        self.people = np.load(os.path.join(self.path, "people.npy"), mmap_mode=mode)
-        self.hours = np.load(os.path.join(self.path, "hours.npy"), mmap_mode=mode)
-        validate(self.tiles, self.people, self.hours, self.activities)
+        with open(os.path.join(self.path, "nations.json"), encoding="utf-8") as f:
+            nations = json.load(f)["nations"]
+        small = ("tiles", "nation")   # always read in full; the rest are mapped when mmap=True
+        a = {k: np.load(os.path.join(self.path, f"{k}.npy"), mmap_mode=None if mmap is False or k in small else "r")
+             for k in ARRAYS}
+        super().__init__(a["tiles"], a["people"], a["hours"], m["activities"], a["nation"], nations,
+                         a["visible"], a["explored"])
+        if len(self.tiles) != len(self.people) or len(self.visible) != len(nations) + 1:
+            raise ValueError(f"{dir_name}: array sizes don't match the manifest")
 
     def row(self, index: int):
         """Row of a flat grid index, or None if that tile has no people."""
@@ -141,7 +195,7 @@ class Turn:
         return r if r < len(self.tiles) and self.tiles[r] == index else None
 
     def verify(self) -> bool:
-        return checksum(self.tiles, self.people, self.hours) == self.manifest["checksum"]["value"]
+        return self.checksum() == self.manifest["checksum"]["value"]
 
 
 def open_current(state_dir: str, mmap: bool = True):

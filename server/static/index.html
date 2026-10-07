@@ -26,6 +26,8 @@
   .chip { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 18px; padding: 6px 12px; color: var(--text); font: inherit; font-size: 13px; cursor: pointer; user-select: none; display: inline-flex; align-items: center; gap: 6px; }
   .chip input[type=checkbox] { margin: 0; accent-color: var(--accent); }
   #goto { width: 200px; cursor: text; outline: none; }
+  select.chip { appearance: auto; max-width: 230px; }
+  select.chip option { background: #12161f; color: var(--text); }
   #goto::placeholder { color: var(--muted); }
 
   #status { position: absolute; left: 12px; bottom: 10px; font-size: 12px; color: var(--muted); background: rgba(0,0,0,0.45); padding: 4px 10px; border-radius: 6px; font-variant-numeric: tabular-nums; pointer-events: none; }
@@ -114,6 +116,7 @@
       <label class="chip"><input type="checkbox" id="optTerrain"> Terrain overlay</label>
       <label class="chip"><input type="checkbox" id="optCover"> Cover overlay</label>
       <label class="chip"><input type="checkbox" id="optGrid" checked> Tile grid</label>
+      <select class="chip" id="viewAs" title="Show the world as one nation sees it"><option value="0">View as: everyone (no fog)</option></select>
       <input class="chip" id="goto" placeholder="Go to: N275E0865 or 27.9, 86.9" spellcheck="false">
     </div>
     <div id="status"></div>
@@ -344,7 +347,7 @@ function setHeatVisible(on) {
 }
 
 function fetchTile(tid) {
-  const key = `${tid}@${popVersion}`;
+  const key = `${tid}@${popVersion}@${stateTurn}`;
   if (!tileCache.has(key)) {
     tileCache.set(key, fetch(`/api/tile/${tid}`).then(r => {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -398,6 +401,18 @@ async function loadData() {
   scene.add(heatOverlay);
   await loadPopulationGrid();
   setHeatVisible(document.getElementById("optHeat").checked);
+
+  // Fog of war for "View as": one pixel per tile, above the heatmap and below the hover highlight.
+  fogCanvas.width = META.map.width; fogCanvas.height = META.map.height;
+  fogTex = new THREE.CanvasTexture(fogCanvas);
+  fogTex.magFilter = THREE.NearestFilter; fogTex.minFilter = THREE.NearestFilter; fogTex.generateMipmaps = false;
+  fogOverlay = new THREE.Mesh(new THREE.SphereGeometry(1.0009, 192, 96),
+    new THREE.MeshBasicMaterial({ map: fogTex, transparent: true, depthWrite: false }));
+  fogOverlay.renderOrder = 3;
+  fogOverlay.visible = false;
+  scene.add(fogOverlay);
+  scene.add(capitalMarker);
+  await loadNations();
 }
 
 // ---------- live population updates ----------
@@ -488,7 +503,7 @@ async function pollPopulation() {
     const meta = await (await fetch("/api/meta")).json();
     META.population_map = meta.population_map;
     await loadPopulationGrid();
-    for (const key of tileCache.keys()) if (!key.endsWith(`@${popVersion}`)) tileCache.delete(key);
+    for (const key of tileCache.keys()) if (!key.includes(`@${popVersion}@`)) tileCache.delete(key);
     // Re-render the tile in the side panel with the new numbers.
     const tid = pinnedTid || hoverTid;
     shownTid = null;
@@ -521,6 +536,12 @@ function renderPopulation(t) {
     <div class="bignum">${fmtInt(p.population)} <small>people</small></div>
     ${heatLevelsHtml(level)}
     <dl class="kv">
+      <dt>Nation</dt><dd>${t.nation
+        ? `${esc(t.nation.name)} <span class="none">${esc(t.nation.code)}${t.nation.is_capital ? " · capital" : ""}</span>`
+        : '<span class="none">none</span>'}</dd>
+      ${viewNation && nationsById.has(viewNation) ? `<dt>Seen by ${esc(nationsById.get(viewNation).code)}</dt><dd>${{
+        active: "Active (can see it now)", passive: "Passive (explored, not seen now)", unknown: "Unknown (never seen)"
+      }[tileVisibility(t.id)] || "—"}</dd>` : ""}
       <dt>Tile area</dt><dd>${fmtInt(p.area_km2)} km²</dd>
     </dl>
     ${outside ? `<div class="note">Outside the source's coverage (${fmtLat(cov.south_lat, 0)}–${fmtLat(cov.north_lat, 0)}), so population is 0.</div>` : ""}`;
@@ -662,12 +683,81 @@ async function showCohorts(tid) {
   }
 }
 
-function onTurnChange(turn) {
+async function onTurnChange(turn) {
   stateTurn = turn;
   cohortCache.clear();
+  tileCache.clear();
+  await loadNations();
   const tid = pinnedTid || hoverTid;
   if (tid) { shownTid = null; showTile(tid); }
 }
+
+// ---------- nations and fog of war ----------
+// "View as" picks a nation; the page then fetches that nation's visibility bits for the current turn
+// (/api/nation/<id>/visibility: 32,400 bytes of active bits, then 32,400 of explored bits; tile i is
+// bit i % 8 of byte i // 8) and paints them as fog: unexplored tiles dark, explored-but-not-visible
+// tiles dimmed (passive visibility), visible tiles clear. The nation's capital gets an outline.
+// "Everyone" turns the fog off. The fog is only a view: the server still sends every tile's data.
+const fogCanvas = document.createElement("canvas");
+let fogTex = null, fogOverlay = null, viewNation = 0, fogBits = null, nationsById = new Map();
+const FOG_UNKNOWN = 0.82, FOG_PASSIVE = 0.45;
+const capitalMat = new THREE.LineBasicMaterial({ color: 0xffffff });
+const capitalMarker = new THREE.Group();
+capitalMarker.renderOrder = 6;
+const viewAs = document.getElementById("viewAs");
+
+async function loadNations() {
+  let list = [];
+  try { list = (await (await fetch("/api/nations")).json()).nations; } catch (e) { /* server restarting */ }
+  nationsById = new Map(list.map(n => [n.id, n]));
+  const keep = nationsById.has(viewNation) ? viewNation : 0;
+  viewAs.innerHTML = '<option value="0">View as: everyone (no fog)</option>' +
+    [...list].sort((a, b) => a.name.localeCompare(b.name))
+      .map(n => `<option value="${n.id}">View as: ${esc(n.name)} (${esc(n.code)})</option>`).join("");
+  viewAs.value = String(keep);
+  await setViewNation(keep);
+}
+
+function bitAt(bytes, i) { return (bytes[i >> 3] >> (i & 7)) & 1; }
+
+function tileVisibility(tid) {
+  if (!fogBits) return null;
+  const i = tileIndex(tid);
+  return bitAt(fogBits.visible, i) ? "active" : bitAt(fogBits.explored, i) ? "passive" : "unknown";
+}
+
+async function setViewNation(id) {
+  viewNation = id;
+  capitalMarker.children.forEach(c => c.geometry.dispose());
+  capitalMarker.clear();
+  fogBits = null;
+  if (!fogOverlay) return;
+  if (!id) {
+    fogOverlay.visible = false;
+  } else {
+    const buf = new Uint8Array(await (await fetch(`/api/nation/${id}/visibility`)).arrayBuffer());
+    if (viewNation !== id) return;   // the user picked another nation meanwhile
+    fogBits = { visible: buf.subarray(0, buf.length / 2), explored: buf.subarray(buf.length / 2) };
+    const ctx = fogCanvas.getContext("2d");
+    const img = ctx.createImageData(fogCanvas.width, fogCanvas.height);
+    const n = fogCanvas.width * fogCanvas.height;
+    for (let i = 0; i < n; i++) {
+      const a = bitAt(fogBits.visible, i) ? 0 : bitAt(fogBits.explored, i) ? FOG_PASSIVE : FOG_UNKNOWN;
+      img.data[i * 4 + 3] = Math.round(255 * a);   // black at that opacity
+    }
+    ctx.putImageData(img, 0, 0);
+    fogTex.needsUpdate = true;
+    fogOverlay.visible = true;
+    const cap = nationsById.get(id)?.capital;
+    if (cap) {
+      const { lat, lon } = parseTileId(cap);
+      capitalMarker.add(new THREE.LineLoop(tileOutline(lat, lon, 1.0015), capitalMat));
+    }
+  }
+  const tid = pinnedTid || hoverTid;
+  if (tid) { shownTid = null; showTile(tid); }
+}
+viewAs.addEventListener("change", () => setViewNation(+viewAs.value));
 
 // People are fractional in the state; the panel always shows them rounded to whole people.
 const fmtPeople = n => fmtInt(n);

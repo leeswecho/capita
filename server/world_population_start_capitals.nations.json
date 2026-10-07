@@ -1,0 +1,194 @@
+{
+ "nations": [
+  {
+   "code": "AUS",
+   "capital_name": "Canberra",
+   "capital": "S355E1490"
+  },
+  {
+   "code": "AUT",
+   "capital_name": "Vienna",
+   "capital": "N480E0160"
+  },
+  {
+   "code": "BEL",
+   "capital_name": "Brussels",
+   "capital": "N505E0040"
+  },
+  {
+   "code": "CAN",
+   "capital_name": "Ottawa",
+   "capital": "N450W0760"
+  },
+  {
+   "code": "CHE",
+   "capital_name": "Bern",
+   "capital": "N465E0070"
+  },
+  {
+   "code": "CHL",
+   "capital_name": "Santiago",
+   "capital": "S335W0710"
+  },
+  {
+   "code": "COL",
+   "capital_name": "Bogota",
+   "capital": "N045W0745"
+  },
+  {
+   "code": "CRI",
+   "capital_name": "San Jose",
+   "capital": "N095W0845"
+  },
+  {
+   "code": "CZE",
+   "capital_name": "Prague",
+   "capital": "N500E0140"
+  },
+  {
+   "code": "DEU",
+   "capital_name": "Berlin",
+   "capital": "N525E0130"
+  },
+  {
+   "code": "DNK",
+   "capital_name": "Copenhagen",
+   "capital": "N555E0125"
+  },
+  {
+   "code": "ESP",
+   "capital_name": "Madrid",
+   "capital": "N400W0040"
+  },
+  {
+   "code": "EST",
+   "capital_name": "Tallinn",
+   "capital": "N590E0245"
+  },
+  {
+   "code": "FIN",
+   "capital_name": "Helsinki",
+   "capital": "N600E0245"
+  },
+  {
+   "code": "FRA",
+   "capital_name": "Paris",
+   "capital": "N485E0020"
+  },
+  {
+   "code": "GBR",
+   "capital_name": "London",
+   "capital": "N515W0005"
+  },
+  {
+   "code": "GRC",
+   "capital_name": "Athens",
+   "capital": "N375E0235"
+  },
+  {
+   "code": "HUN",
+   "capital_name": "Budapest",
+   "capital": "N475E0190"
+  },
+  {
+   "code": "IRL",
+   "capital_name": "Dublin",
+   "capital": "N530W0065"
+  },
+  {
+   "code": "ISL",
+   "capital_name": "Reykjavik",
+   "capital": "N640W0220"
+  },
+  {
+   "code": "ISR",
+   "capital_name": "Jerusalem",
+   "capital": "N315E0350"
+  },
+  {
+   "code": "ITA",
+   "capital_name": "Rome",
+   "capital": "N415E0120"
+  },
+  {
+   "code": "JPN",
+   "capital_name": "Tokyo",
+   "capital": "N355E1395"
+  },
+  {
+   "code": "KOR",
+   "capital_name": "Seoul",
+   "capital": "N375E1265"
+  },
+  {
+   "code": "LTU",
+   "capital_name": "Vilnius",
+   "capital": "N545E0250"
+  },
+  {
+   "code": "LUX",
+   "capital_name": "Luxembourg",
+   "capital": "N495E0060"
+  },
+  {
+   "code": "LVA",
+   "capital_name": "Riga",
+   "capital": "N565E0240"
+  },
+  {
+   "code": "MEX",
+   "capital_name": "Mexico City",
+   "capital": "N190W0995"
+  },
+  {
+   "code": "NLD",
+   "capital_name": "Amsterdam",
+   "capital": "N520E0045"
+  },
+  {
+   "code": "NOR",
+   "capital_name": "Oslo",
+   "capital": "N595E0105"
+  },
+  {
+   "code": "NZL",
+   "capital_name": "Wellington",
+   "capital": "S415E1745"
+  },
+  {
+   "code": "POL",
+   "capital_name": "Warsaw",
+   "capital": "N520E0205"
+  },
+  {
+   "code": "PRT",
+   "capital_name": "Lisbon",
+   "capital": "N385W0095"
+  },
+  {
+   "code": "SVK",
+   "capital_name": "Bratislava",
+   "capital": "N480E0170"
+  },
+  {
+   "code": "SVN",
+   "capital_name": "Ljubljana",
+   "capital": "N460E0145"
+  },
+  {
+   "code": "SWE",
+   "capital_name": "Stockholm",
+   "capital": "N590E0180"
+  },
+  {
+   "code": "TUR",
+   "capital_name": "Ankara",
+   "capital": "N395E0325"
+  },
+  {
+   "code": "USA",
+   "capital_name": "Washington, D.C.",
+   "capital": "N385W0775"
+  }
+ ]
+}

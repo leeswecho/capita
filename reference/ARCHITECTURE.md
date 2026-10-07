@@ -387,7 +387,9 @@ rounded only for display.
 **View as** (toolbar) lists the current turn's nations. Choosing one fetches its visibility bits and
 paints a fog layer over the globe: unknown tiles dark, passive tiles dimmed, actively visible tiles
 clear, with the nation's capital outlined. "Everyone" removes the fog. The fog is only a view: the
-server still sends every tile's data, so it is not yet a real fog of war for players. Rivers are drawn
+server still sends every tile's data, so it is not yet a real fog of war for players. Every nation's capital
+has a small gold star in its tile's upper-left corner (a placeholder marker, `drawCapitalStars()`);
+while viewing as a nation, stars on tiles that nation has never seen are hidden. Rivers are drawn
 above the fog. The list and fog reload when the engine advances a turn.
 
 ### 5.6 Live population updates

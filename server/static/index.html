@@ -415,6 +415,7 @@ async function loadData() {
   fogOverlay.visible = false;
   scene.add(fogOverlay);
   scene.add(capitalMarker);
+  scene.add(capitalStars);
   await loadNations();
 
   // Ownership tint: one pixel per tile, between the heatmap and the fog.
@@ -727,6 +728,34 @@ const capitalMarker = new THREE.Group();
 capitalMarker.renderOrder = 6;
 const viewAs = document.getElementById("viewAs");
 
+// Placeholder capital marker: a small gold star in the upper-left (north-west) corner of every
+// nation's capital tile, drawn above everything else. While viewing as a nation, capitals on tiles it
+// has never seen are left out, so the fog doesn't give them away. Rebuilt whenever the nations or the
+// viewed nation change.
+const capitalStars = new THREE.Mesh(new THREE.BufferGeometry(),
+  new THREE.MeshBasicMaterial({ color: 0xffd34d, side: THREE.DoubleSide, depthWrite: false }));
+capitalStars.renderOrder = 7;
+function drawCapitalStars() {
+  const pts = [];
+  const R = 1.0019, outer = TILE * 0.16, inner = outer * 0.42;   // star size in degrees of latitude
+  for (const n of nationsById.values()) {
+    if (!n.capital || (fogBits && tileVisibility(n.capital) === "unknown")) continue;
+    const { lat, lon } = parseTileId(n.capital);
+    const cLat = lat + TILE - outer * 1.3;
+    const k = 1 / Math.max(0.05, Math.cos(cLat * Math.PI / 180));   // keep the star's shape away from the equator
+    const cLon = lon + outer * 1.3 * k;
+    const centre = latLonToVec(cLat, cLon, R);
+    const ring = [];
+    for (let j = 0; j < 10; j++) {
+      const r = j % 2 ? inner : outer, a = Math.PI / 2 + j * Math.PI / 5;
+      ring.push(latLonToVec(cLat + r * Math.sin(a), cLon + r * Math.cos(a) * k, R));
+    }
+    for (let j = 0; j < 10; j++) pts.push(centre, ring[j], ring[(j + 1) % 10]);
+  }
+  capitalStars.geometry.dispose();
+  capitalStars.geometry = new THREE.BufferGeometry().setFromPoints(pts);
+}
+
 async function loadNations() {
   let list = [];
   try { list = (await (await fetch("/api/nations")).json()).nations; } catch (e) { /* server restarting */ }
@@ -775,6 +804,7 @@ async function setViewNation(id) {
       capitalMarker.add(new THREE.LineLoop(tileOutline(lat, lon, 1.0015), capitalMat));
     }
   }
+  drawCapitalStars();
   const tid = pinnedTid || hoverTid;
   if (tid) { shownTid = null; showTile(tid); }
 }

@@ -68,8 +68,8 @@ The server does no rendering. It hands the browser compact data, and the browser
 | `ne_10m_populated_places_simple.geojson` | Natural Earth populated places, read by `gen_capitals_seed.py` (downloaded by it if missing). |
 | `world_population.yaml` | The full modern world per tile (see `world_population_schema.md`), the source of `world_population_current.json`. Kept in `reference/`; the server doesn't read it. |
 | `ne_10m_admin_0_countries.geojson` | Used only to turn country codes (`IND`) into names (`India`). Optional. |
-| `make_globe_tiles.py` | Cuts the 21,600 × 10,800 Blue Marble image (`data/world.200407.3x21600x10800.jpg`, outside the repo) into the detail-tile pyramid in `globe_tiles/` (§5.3). |
-| `globe_tiles/` | The detail-tile pyramid: `tiles.json` plus `<level>/<x>_<y>.jpg`, 682 pieces in 5 levels (25 MB). Optional: without it the page shows only the single globe image. |
+| `make_globe_tiles.py` | Builds the detail-tile pyramid in `globe_tiles/` (§5.3) from NASA's 500 m Blue Marble (eight 21,600 × 21,600 images in `data/`, outside the repo), or from the 21,600 × 10,800 image if those are missing, or from any image given with `--source`. Takes about 1.5 minutes and up to about 15 GB of memory for the 500 m source. |
+| `globe_tiles/` | The detail-tile pyramid: `tiles.json` plus `<level>/<x>_<y>.jpg`. From the 500 m source: 10,922 pieces in 7 levels (313 MB). Optional: without it the page shows only the single globe image. |
 | `bmng_200407_4096x2048.jpg`, `bmng_200407_8192x4096.jpg`, `bmng_200407_16384x8192.jpg` | The image wrapped around the globe (NASA Blue Marble, July 2004) at three sizes; the page loads the largest the graphics card supports (§5.2). The 8192 one is `map.source_image` and the default. |
 | `gen_map.py`, `etopo_blocks.py`, `glwd.py`, `validate_map.py` | Build `world_map.yaml` from the datasets in `data/` (elevation blocks and GLWD wetland shares are cached there; see `world_map_generation.md`), and check it. |
 | `gen_population.py`, `ghsl.py` | Build `world_population.yaml` from the GHSL population raster in `data/` (see `world_population_schema.md`). |
@@ -311,10 +311,12 @@ pattern and restart the server.
 
 **Detail tiles (level of detail).** A single image can't be sharper than the card's limit, so for
 zoomed-in views the page also uses a pyramid of small pieces (`globe_tiles/`, made by
-`make_globe_tiles.py` from the 21,600 px source). Level L covers the world with 2^(L+1) × 2^L square
-pieces of 675 px, each 180 / 2^L degrees across: level 0 is 1,350 px around the world and level 4 is
-the full 21,600 px. Only levels sharper than the base globe image are used: levels 3–4 over an 8,192 px
-base, only level 4 over a 16,384 px base.
+`make_globe_tiles.py` from NASA's 500 m Blue Marble). Level L covers the world with 2^(L+1) × 2^L
+square pieces of 675 px, each 180 / 2^L degrees across: level 0 is 1,350 px around the world and level
+6 is the full 86,400 px (about 0.46 km per pixel at the equator, so a 0.5° game tile gets about
+120 × 120 pixels). Only levels sharper than the base globe image are used: levels 3–6 over an 8,192 px
+base, 4–6 over a 16,384 px base. The page reads the number of levels from `tiles.json`, so a pyramid
+from a different source needs no page changes.
 - **Choosing pieces:** every frame, `updateDetail()` walks the pyramid from level 0, skipping pieces
   beyond the horizon or off screen, and goes a level finer wherever a piece would cover more screen
   pixels than it has (675). The chosen pieces are drawn as sphere patches just above the base globe.
@@ -325,9 +327,8 @@ base, only level 4 over a 16,384 px base.
   180° line), and the page samples only the inner 675 px, so blending at piece edges uses the real
   neighbouring pixels.
 - **Turning it off:** add `?detail=0` to the page URL, for example to compare.
-- **Limit:** the source is about 1.85 km per pixel at the equator, so at the closest zoom (about 190 km
-  up) the image is still magnified several times. A sharper source (NASA's 500 m Blue Marble, 4× the
-  pixels) would only need a new pyramid with more levels.
+- **Limit:** at the closest zoom (about 190 km up) even the 500 m image is magnified about 3×. A
+  sharper source would only need a new pyramid with more levels.
 
 ### 5.4 The heatmap
 

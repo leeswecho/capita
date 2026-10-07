@@ -17,8 +17,8 @@ There are two programs that talk over HTTP on your machine:
  │   (6.4 MB, terrain,  (tile records                      │                     │
  │    rivers)            built on demand)                  │   Handler           │
  │                                                         ├─► (HTTP routes) ◄───┼──── browser requests
- │  world_population.json ──► Population snapshot ─────────┤                     │
- │   (1.3 MB, columnar)        ▲                           │                     │
+ │  world_population_start.json ──► Population snapshot ───┤                     │
+ │   (or --population file)    ▲                           │                     │
  │                             │ reread every 1 s          │                     │
  │                       reload thread                     │                     │
  │                                                         │                     │
@@ -51,17 +51,22 @@ The server does no rendering. It hands the browser compact data, and the browser
 | `server.py` | The web server (≈300 lines). |
 | `static/index.html` | The globe viewer page (≈650 lines). |
 | `convert_map.py` | Converts `world_map.yaml` → `world_map.json`, and verifies the result. Also defines the JSON format id and the `MapColumns` reader the server uses. |
-| `convert_population.py` | Converts `world_population.yaml` → `world_population.json`, and verifies the result. Also defines the JSON format id the server checks. |
-| `../engine/engine.py` | The turn engine, in its own directory and run as its own process: `init` writes turn 0 of the cohort state, `step` advances it a year at a time, `verify` checks the current turn's checksum (§4.6). It imports `cohort_state.py` and `grid.py` from `server/`, and by default uses the top-level `state/` folder and `server/world_population.json`. |
+| `convert_population.py` | Converts `world_population.yaml` → `world_population_current.json` (the full modern world, prototype data), and verifies the result. Also defines the columnar format id the server checks and the loader other scripts use. |
+| `../engine/engine.py` | The turn engine, in its own directory and run as its own process: `init` writes turn 0 of the cohort state, `step` advances it a year at a time, `verify` checks the current turn's checksum (§4.6). It imports `cohort_state.py` and `grid.py` from `server/`, and by default uses the top-level `state/` folder and `server/world_population_start.json` with its nation seed. |
 | `cohort_state.py` | Reads and writes the cohort state (`../state/`): the format id, atomic turn writing, memory-mapped reading, checksums and pruning. Shared by `engine/engine.py` and the server. |
 | `../state/` | The cohort state written by `engine/engine.py`, in its own top-level folder next to `server/` and `engine/`: `current.json` plus one `turn_NNNNN/` directory per recent turn (see `cohort_state_schema.md`). Generated; not committed. |
-| `gen_oecd_capitals.py` | Writes the scenario `world_population_oecd_capitals.yaml`/`.json`: 200 people in each OECD member's capital tile, 0 elsewhere. Also writes `world_population_oecd_capitals.nations.json`, the nation seed (one nation per member, with its capital tile) that `engine.py init` picks up automatically for that population file. |
-| `demo_delhi.py` | Demo: rewrites `world_population.json` every second with a random population for the Delhi tile, to show live updating. Restores the original value on Ctrl+C. |
+| `gen_start_capitals.py` | Writes the game's starting scenario: `world_population_start.json` (200 people in each of 38 start tiles, 0 elsewhere; the start tiles are placeholder locations at present-day capitals; country and area copied from `world_population_current.json`), `../reference/world_population_capitals.yaml` (the same as YAML) and `world_population_start_capitals.nations.json`, the nation seed (one nation per start tile, with that tile as its capital) that `engine.py init` picks up automatically. |
+| `demo_delhi.py` | Prototype demo (not in the repo): rewrites the full-world population file every second with a random population for the Delhi tile, to show live updating. Restores the original value on Ctrl+C. |
 | `grid.py` | The tile grid (0.5° tiles, ids, lookups, flat index, neighbours), shared by every script and the server. `static/index.html` has a JavaScript copy. |
 | `world_map.yaml` | Landform (`terrain`), cover including ice (`cover`), rivers and neighbour links for 259,200 tiles (see `world_map_schema.md`). Source for the JSON; the server doesn't read it. |
 | `world_map.json` | Columnar copy of the map that the server reads (made by `convert_map.py`). |
-| `world_population.yaml` | Population per tile (see `world_population_schema.md`). Source for the JSON; the server no longer reads it. |
-| `world_population.json` | Columnar copy of the population data that the server reads and watches. |
+| `world_population_start.json` | **The game's starting scenario** and the server's default population file: what the server reads and watches, and what `engine.py init` seeds turn 0 from. Made by `gen_start_capitals.py`. |
+| `world_population_start_capitals.nations.json` | The starting scenario's nation seed: each nation's code and capital tile. |
+| `world_population_current.json` | The full modern world (GHSL 2020), columnar. Prototype and demonstration data only: `python server.py --population world_population_current.json` shows it. Made by `convert_population.py`. |
+| `world_population_current_capitals.nations.json` | The full world's nation seed: one nation per country code with a populated tile (224), each with its real-life capital tile. Made by `gen_capitals_seed.py`. |
+| `gen_capitals_seed.py` | Writes `<population name>_capitals.nations.json` for a population file (default `world_population_current.json`) from the capitals in Natural Earth's populated places, with hand-picked choices for countries with several capitals and coordinates for territories it doesn't mark. Where two capitals share a tile, the larger city keeps it and the other moves to its own country's nearest populated tile. |
+| `ne_10m_populated_places_simple.geojson` | Natural Earth populated places, read by `gen_capitals_seed.py` (downloaded by it if missing). |
+| `world_population.yaml` | The full modern world per tile (see `world_population_schema.md`), the source of `world_population_current.json`. Kept in `reference/`; the server doesn't read it. |
 | `ne_10m_admin_0_countries.geojson` | Used only to turn country codes (`IND`) into names (`India`). Optional. |
 | `bmng_200407_4096x2048.jpg`, `bmng_200407_8192x4096.jpg`, `bmng_200407_16384x8192.jpg` | The image wrapped around the globe (NASA Blue Marble, July 2004) at three sizes; the page loads the largest the graphics card supports (§5.2). The 8192 one is `map.source_image` and the default. |
 | `gen_map.py`, `etopo_blocks.py`, `glwd.py`, `validate_map.py` | Build `world_map.yaml` from the datasets in `data/` (elevation blocks and GLWD wetland shares are cached there; see `world_map_generation.md`), and check it. |
@@ -117,7 +122,7 @@ automatically.
 | `meta` | the map's `map` section | `world_map.json` |
 | `terrain_grid` | 259,200 bytes: index of each tile's largest landform type | computed once |
 | `cover_grid` | 259,200 bytes: index of each tile's largest cover type, 255 for open-sea tiles (no cover) | computed once |
-| `pop` | the current `Population` snapshot (§4.3) | `world_population.json` |
+| `pop` | the current `Population` snapshot (§4.3) | the population file (`--population`, default `world_population_start.json`) |
 | `country_names` | dict `ISO code → name` | the GeoJSON (optional) |
 
 **Loading the map fast.** Parsing the 87 MB `world_map.yaml` takes about 70 s even with PyYAML's C
@@ -127,14 +132,14 @@ loader, so the server reads `world_map.json` instead. That file stores the terra
 so `MapColumns.tile(i)` builds a record only when `/api/tile/<id>` asks for one. `convert_map.py`
 checks that rebuilding every record this way reproduces the YAML exactly.
 
-**Startup checks.** If `world_map.json` or `world_population.json` is missing, the server exits with a
+**Startup checks.** If `world_map.json` or the population file is missing, the server exits with a
 message telling you to run `convert_map.py` or `convert_population.py`. If a YAML file is newer than
 its JSON, it prints a warning that the JSON is stale. If either file was made for a different grid than `grid.py` (for example an old
 1° file), the server exits and asks for it to be regenerated.
 
 ### 4.3 `Population`: an immutable snapshot
 
-`world_population.json` stores each field as one array of 259,200 values in flat-index order:
+The population file (`world_population_start.json` by default) stores each field as one array of 259,200 values in flat-index order:
 
 ```json
 { "format": "world_population/columnar-2",
@@ -167,7 +172,7 @@ therefore sees either all-old or all-new data, never a mix, and no locks are nee
 
 ```
 sleep 1 s
-read world_population.json as raw bytes
+read the population file as raw bytes
 if bytes are identical to the current snapshot's bytes → nothing to do
 else → build Population(raw, version + 1) and assign it to world.pop
 on any read/parse/validation error → keep the old snapshot, log the error once
@@ -190,9 +195,9 @@ just keeps serving the last good data and tries again a second later.
 | `/api/population` | 259,200 `uint32` people counts; header `X-Population-Version` | heatmap |
 | `/api/population/version` | `{"version": n, "turn": t}`: the population file's version and the cohort state's current turn | the page's once-a-second poll |
 | `/api/population/countries` | `{"version": n, "codes": [...], "index": [...]}`: each tile's country as 0 (none) or k → `codes[k − 1]`, in grid order (≈650 KB) | same-country heatmap tint |
-| `/api/tile/<id>` | JSON: the tile record merged with its population fields and country name, plus `nation` (the nation whose people live there at the current turn, with `is_capital`; `null` if none) | side panel, on hover |
+| `/api/tile/<id>` | JSON: the tile record merged with its population fields and country name, plus `nation` (the nation whose people live there at the current turn) and `owner` (the nation that owns the tile), each with `is_capital` and `null` if none | side panel, on hover |
 | `/api/tile/<id>/cohorts` | JSON: the tile's `people` (101 values) and `hours` (101 × activities) at the current turn, plus `turn`, `activities`, `hours_unit`; `people`/`hours` are `null` if nobody lives there | the Cohorts section, only after "Show age cohorts" |
-| `/api/nations` | JSON: the current turn's nations (`id`, `code`, `name`, `capital` tile id, `alive`, `founded_turn`, `people`, `visible_tiles`, `explored_tiles`); built once per turn | the "View as" list |
+| `/api/nations` | JSON: the current turn's nations (`id`, `code`, `name`, `capital` tile id, `alive`, `founded_turn`, `people`, `owned_tiles`, `visible_tiles`, `explored_tiles`); built once per turn | the "View as" list |
 | `/api/nation/<id>/visibility` | 64,800 bytes: the nation's active-visibility bits, then its explored bits (tile i = bit i % 8 of byte i // 8); header `X-Turn` | the fog of war for "View as" |
 | `/api/tile_at?lat=&lon=` | same as above, for the tile containing a point | convenience for scripts; the page doesn't use it |
 
@@ -236,15 +241,18 @@ server.py ◄── memory-maps the arrays of the turn current.json names ◄─
   and age 0 is left empty (no births or deaths yet). The activity list and the starting hours
   for each age (rough curves in `starting_hours()`) are placeholders in `engine/engine.py`.
 - **Nations.** Each turn holds a record per nation (`nations.json`: id, code, capital tile, founded
-  turn, alive), the nation of each populated tile (`nation.npy`) and two bit grids per nation:
+  turn, alive), the nation of each populated tile (`nation.npy`), the owner of every tile
+  (`owner.npy`) and two bit grids per nation:
   `visible.npy` (active visibility) and `explored.npy` (every tile ever seen; explored but not visible
-  = passive visibility). Ids are never reused. At turn 0 there is one nation per country code, with
-  its most populous tile as capital, unless a seed file lists the nations and capitals. Each turn the
-  engine recomputes active visibility: tiles where the nation has people, plus the 8 around each. A
+  = passive visibility). Ids are never reused. The turn-0 nations and their capitals come from the
+  population file's nation seed, which `init` requires. Each turn the
+  engine recomputes ownership (first come, first served: the first nation to live on a tile owns it
+  until its last inhabitants there are gone) and active visibility (tiles where the nation has people,
+  plus the 8 around each). A
   full world (224 nations) adds 14 MB per turn.
 - **Determinism.** Each manifest carries a SHA-256 checksum of the arrays; `engine/engine.py verify` rechecks
   it. The yearly step uses only elementwise arithmetic, so it doesn't depend on how NumPy orders sums.
-- **The heatmap still comes from `world_population.json`,** not from the cohort state. Initialise the
+- **The heatmap still comes from the population file (`world_population_start.json`),** not from the game state. Initialise the
   state from the same population file the server shows (`engine/engine.py init --population ...`) to keep the
   two consistent.
 
@@ -364,8 +372,9 @@ Details:
 
 The side panel shows, top to bottom: tile id and bounds with cursor position; **Population** (country,
 people, heat level, tile area, and a note for tiles outside the data's 89.1°S–89.1°N coverage);
-**Nation** (the nation living on the tile, marked "capital" on its capital tile) and, while viewing as
-a nation, how that nation sees the tile (active, passive or unknown);
+**Owner** (the nation that owns the tile, marked "capital" on its capital tile; "nobody" if unowned),
+**Inhabitants** (only when the people living there belong to a different nation than the owner) and,
+while viewing as a nation, how that nation sees the tile (active, passive or unknown);
 **Cohorts** (see below); **Terrain** (the landform) and **Cover** (what is on the land and frozen water; "Open water only" when
 there is none), each as a stacked bar plus a bar per non-zero type (`percentBlock()`); **River**
 (yes/no and names).
@@ -421,8 +430,8 @@ python server.py            # then open http://localhost:8000/
 **Run the turn engine (cohorts)**
 
 ```
-python ../engine/engine.py init      # turn 0 from world_population.json, hunter-gatherer age structure,
-                                     # one nation per country code (or a <population>.nations.json seed)
+python ../engine/engine.py init      # turn 0 from world_population_start.json and its nation seed,
+                                     # with a hunter-gatherer age structure
 python ../engine/engine.py step      # advance one year (--turns N for more)
 python ../engine/engine.py verify    # recheck the current turn's checksum
 ```
@@ -430,14 +439,21 @@ python ../engine/engine.py verify    # recheck the current turn's checksum
 The running server and any open page pick up each new turn within about two seconds. To start over,
 delete the top-level `state/` folder and run `init` again.
 
-**After regenerating the population data**
+**After changing the starting scenario**
+
+```
+python gen_start_capitals.py    # writes world_population_start.json, its nation seed and the YAML copy
+```
+
+The running server picks up the new JSON within a second; no restart needed. Start a new game state
+(delete `state/`, run `init`) to use it in the engine.
+
+**After regenerating the full-world prototype data**
 
 ```
 python gen_population.py        # writes world_population.yaml
-python convert_population.py    # writes and verifies world_population.json
+python convert_population.py    # writes and verifies world_population_current.json
 ```
-
-The running server picks up the new JSON within a second; no restart needed.
 
 **After regenerating the map**
 
@@ -456,7 +472,7 @@ python demo_delhi.py        # Ctrl+C to stop; restores Delhi's real value
 
 **When do I need to restart the server?** Only after changing `server.py`, `cohort_state.py`,
 `world_map.json` or the GeoJSON. Changes to `static/index.html` need only a browser refresh; changes to
-`world_population.json` need nothing.
+the population file need nothing.
 
 ---
 
@@ -464,13 +480,13 @@ python demo_delhi.py        # Ctrl+C to stop; restores Delhi's real value
 
 - **Local only.** The server listens on `127.0.0.1` and has no authentication. Pass `--host 0.0.0.0`
   only on a network you trust.
-- **Population JSON goes stale silently.** The server watches only `world_population.json`. Edits to
-  `world_population.yaml` do nothing until you rerun `convert_population.py`. You get a warning only
-  at server startup.
+- **Population JSON goes stale silently.** The server watches only its population file. Edits to
+  `world_population.yaml` do nothing until you rerun `convert_population.py`, and changes to
+  `gen_start_capitals.py` do nothing until you rerun it.
 - **Map JSON goes stale silently too.** Edits to `world_map.yaml` do nothing until you rerun
   `convert_map.py` and restart the server. You get a warning only at server startup.
 - **`world_map.json` is not live.** It is loaded once; terrain/river changes need a restart.
-- **Write the JSON atomically.** Anything that rewrites `world_population.json` should write a
+- **Write the JSON atomically.** Anything that rewrites the population file should write a
   temporary file and rename it over the original (as `demo_delhi.py` does). The server tolerates
   half-written files, but atomic writes avoid the logged errors.
 - **`demo_delhi.py` restores only on Ctrl+C.** If it is killed another way (closing the window,

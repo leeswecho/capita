@@ -1,0 +1,1127 @@
+{
+ "nations": [
+  {
+   "code": "ABW",
+   "capital_name": "Oranjestad",
+   "capital": "N125W0705"
+  },
+  {
+   "code": "AFG",
+   "capital_name": "Kabul",
+   "capital": "N345E0690"
+  },
+  {
+   "code": "AGO",
+   "capital_name": "Luanda",
+   "capital": "S090E0130"
+  },
+  {
+   "code": "AIA",
+   "capital_name": "The Valley",
+   "capital": "N180W0635"
+  },
+  {
+   "code": "ALA",
+   "capital_name": "Mariehamn",
+   "capital": "N600E0195"
+  },
+  {
+   "code": "ALB",
+   "capital_name": "Tirana",
+   "capital": "N410E0195"
+  },
+  {
+   "code": "ARE",
+   "capital_name": "Abu Dhabi",
+   "capital": "N240E0540"
+  },
+  {
+   "code": "ARG",
+   "capital_name": "Buenos Aires",
+   "capital": "S350W0585"
+  },
+  {
+   "code": "ARM",
+   "capital_name": "Yerevan",
+   "capital": "N400E0445"
+  },
+  {
+   "code": "ASM",
+   "capital_name": "Pago Pago",
+   "capital": "S145W1710"
+  },
+  {
+   "code": "ATG",
+   "capital_name": "Saint John's",
+   "capital": "N170W0620"
+  },
+  {
+   "code": "AUS",
+   "capital_name": "Canberra",
+   "capital": "S355E1490"
+  },
+  {
+   "code": "AUT",
+   "capital_name": "Vienna",
+   "capital": "N480E0160"
+  },
+  {
+   "code": "AZE",
+   "capital_name": "Baku",
+   "capital": "N400E0495"
+  },
+  {
+   "code": "BDI",
+   "capital_name": "Bujumbura",
+   "capital": "S035E0290"
+  },
+  {
+   "code": "BEL",
+   "capital_name": "Brussels",
+   "capital": "N505E0040"
+  },
+  {
+   "code": "BEN",
+   "capital_name": "Cotonou",
+   "capital": "N060E0025"
+  },
+  {
+   "code": "BFA",
+   "capital_name": "Ouagadougou",
+   "capital": "N120W0020"
+  },
+  {
+   "code": "BGD",
+   "capital_name": "Dhaka",
+   "capital": "N235E0900"
+  },
+  {
+   "code": "BGR",
+   "capital_name": "Sofia",
+   "capital": "N425E0230"
+  },
+  {
+   "code": "BHR",
+   "capital_name": "Manama",
+   "capital": "N260E0505"
+  },
+  {
+   "code": "BHS",
+   "capital_name": "Nassau",
+   "capital": "N250W0775"
+  },
+  {
+   "code": "BIH",
+   "capital_name": "Sarajevo",
+   "capital": "N435E0180"
+  },
+  {
+   "code": "BLM",
+   "capital_name": "Gustavia",
+   "capital": "N175W0630"
+  },
+  {
+   "code": "BLR",
+   "capital_name": "Minsk",
+   "capital": "N535E0275"
+  },
+  {
+   "code": "BLZ",
+   "capital_name": "Belmopan",
+   "capital": "N170W0890"
+  },
+  {
+   "code": "BMU",
+   "capital_name": "Hamilton",
+   "capital": "N320W0650"
+  },
+  {
+   "code": "BOL",
+   "capital_name": "Sucre",
+   "capital": "S195W0655"
+  },
+  {
+   "code": "BRA",
+   "capital_name": "Brasilia",
+   "capital": "S160W0480"
+  },
+  {
+   "code": "BRB",
+   "capital_name": "Bridgetown",
+   "capital": "N130W0600"
+  },
+  {
+   "code": "BRN",
+   "capital_name": "Bandar Seri Begawan",
+   "capital": "N045E1145"
+  },
+  {
+   "code": "BTN",
+   "capital_name": "Thimphu",
+   "capital": "N270E0895"
+  },
+  {
+   "code": "BWA",
+   "capital_name": "Gaborone",
+   "capital": "S250E0255"
+  },
+  {
+   "code": "CAF",
+   "capital_name": "Bangui",
+   "capital": "N040E0185"
+  },
+  {
+   "code": "CAN",
+   "capital_name": "Ottawa",
+   "capital": "N450W0760"
+  },
+  {
+   "code": "CHE",
+   "capital_name": "Bern",
+   "capital": "N465E0070"
+  },
+  {
+   "code": "CHL",
+   "capital_name": "Santiago",
+   "capital": "S335W0710"
+  },
+  {
+   "code": "CHN",
+   "capital_name": "Beijing",
+   "capital": "N395E1160"
+  },
+  {
+   "code": "CIV",
+   "capital_name": "Yamoussoukro",
+   "capital": "N065W0055"
+  },
+  {
+   "code": "CMR",
+   "capital_name": "Yaounde",
+   "capital": "N035E0115"
+  },
+  {
+   "code": "COD",
+   "capital_name": "Kinshasa",
+   "capital": "S045E0150"
+  },
+  {
+   "code": "COG",
+   "capital_name": "Brazzaville",
+   "capital": "S040E0150",
+   "note": "Brazzaville shares tile S045E0150 with Kinshasa (COD); moved to its nearest populated COG tile"
+  },
+  {
+   "code": "COK",
+   "capital_name": "Avarua",
+   "capital": "S215W1600"
+  },
+  {
+   "code": "COL",
+   "capital_name": "Bogota",
+   "capital": "N045W0745"
+  },
+  {
+   "code": "COM",
+   "capital_name": "Moroni",
+   "capital": "S120E0430"
+  },
+  {
+   "code": "CPV",
+   "capital_name": "Praia",
+   "capital": "N145W0240"
+  },
+  {
+   "code": "CRI",
+   "capital_name": "San Jose",
+   "capital": "N095W0845"
+  },
+  {
+   "code": "CUB",
+   "capital_name": "Havana",
+   "capital": "N230W0825"
+  },
+  {
+   "code": "CUW",
+   "capital_name": "Willemstad",
+   "capital": "N120W0695"
+  },
+  {
+   "code": "CYM",
+   "capital_name": "George Town",
+   "capital": "N190W0815"
+  },
+  {
+   "code": "CYP",
+   "capital_name": "Nicosia",
+   "capital": "N350E0330"
+  },
+  {
+   "code": "CZE",
+   "capital_name": "Prague",
+   "capital": "N500E0140"
+  },
+  {
+   "code": "DEU",
+   "capital_name": "Berlin",
+   "capital": "N525E0130"
+  },
+  {
+   "code": "DJI",
+   "capital_name": "Djibouti",
+   "capital": "N115E0430"
+  },
+  {
+   "code": "DMA",
+   "capital_name": "Roseau",
+   "capital": "N150W0615"
+  },
+  {
+   "code": "DNK",
+   "capital_name": "Kobenhavn",
+   "capital": "N555E0125"
+  },
+  {
+   "code": "DOM",
+   "capital_name": "Santo Domingo",
+   "capital": "N180W0700"
+  },
+  {
+   "code": "DZA",
+   "capital_name": "Algiers",
+   "capital": "N365E0030"
+  },
+  {
+   "code": "ECU",
+   "capital_name": "Quito",
+   "capital": "S005W0790"
+  },
+  {
+   "code": "EGY",
+   "capital_name": "Cairo",
+   "capital": "N300E0310"
+  },
+  {
+   "code": "ERI",
+   "capital_name": "Asmara",
+   "capital": "N150E0385"
+  },
+  {
+   "code": "ESH",
+   "capital_name": "Bir Lehlou",
+   "capital": "N260W0100"
+  },
+  {
+   "code": "ESP",
+   "capital_name": "Madrid",
+   "capital": "N400W0040"
+  },
+  {
+   "code": "EST",
+   "capital_name": "Tallinn",
+   "capital": "N590E0245"
+  },
+  {
+   "code": "ETH",
+   "capital_name": "Addis Ababa",
+   "capital": "N090E0385"
+  },
+  {
+   "code": "FIN",
+   "capital_name": "Helsinki",
+   "capital": "N600E0245"
+  },
+  {
+   "code": "FJI",
+   "capital_name": "Suva",
+   "capital": "S185E1780"
+  },
+  {
+   "code": "FLK",
+   "capital_name": "Stanley",
+   "capital": "S520W0580"
+  },
+  {
+   "code": "FRA",
+   "capital_name": "Paris",
+   "capital": "N485E0020"
+  },
+  {
+   "code": "FRO",
+   "capital_name": "Torshavn",
+   "capital": "N620W0070"
+  },
+  {
+   "code": "FSM",
+   "capital_name": "Palikir",
+   "capital": "N065E1580"
+  },
+  {
+   "code": "GAB",
+   "capital_name": "Libreville",
+   "capital": "N000E0090"
+  },
+  {
+   "code": "GBR",
+   "capital_name": "London",
+   "capital": "N515W0005"
+  },
+  {
+   "code": "GEO",
+   "capital_name": "Tbilisi",
+   "capital": "N415E0445"
+  },
+  {
+   "code": "GGY",
+   "capital_name": "St. Peter Port",
+   "capital": "N490W0030"
+  },
+  {
+   "code": "GHA",
+   "capital_name": "Accra",
+   "capital": "N055W0005"
+  },
+  {
+   "code": "GIN",
+   "capital_name": "Conakry",
+   "capital": "N095W0140"
+  },
+  {
+   "code": "GMB",
+   "capital_name": "Banjul",
+   "capital": "N130W0170"
+  },
+  {
+   "code": "GNB",
+   "capital_name": "Bissau",
+   "capital": "N115W0160"
+  },
+  {
+   "code": "GNQ",
+   "capital_name": "Malabo",
+   "capital": "N035E0085"
+  },
+  {
+   "code": "GRC",
+   "capital_name": "Athens",
+   "capital": "N375E0235"
+  },
+  {
+   "code": "GRD",
+   "capital_name": "Saint George's",
+   "capital": "N120W0620"
+  },
+  {
+   "code": "GRL",
+   "capital_name": "Nuuk",
+   "capital": "N640W0520"
+  },
+  {
+   "code": "GTM",
+   "capital_name": "Guatemala",
+   "capital": "N145W0910"
+  },
+  {
+   "code": "GUM",
+   "capital_name": "Agana",
+   "capital": "N130E1445"
+  },
+  {
+   "code": "GUY",
+   "capital_name": "Georgetown",
+   "capital": "N065W0585"
+  },
+  {
+   "code": "HKG",
+   "capital_name": "Hong Kong",
+   "capital": "N220E1140"
+  },
+  {
+   "code": "HND",
+   "capital_name": "Tegucigalpa",
+   "capital": "N140W0875"
+  },
+  {
+   "code": "HRV",
+   "capital_name": "Zagreb",
+   "capital": "N455E0155"
+  },
+  {
+   "code": "HTI",
+   "capital_name": "Port-au-Prince",
+   "capital": "N185W0725"
+  },
+  {
+   "code": "HUN",
+   "capital_name": "Budapest",
+   "capital": "N475E0190"
+  },
+  {
+   "code": "IDN",
+   "capital_name": "Jakarta",
+   "capital": "S065E1065"
+  },
+  {
+   "code": "IMN",
+   "capital_name": "Douglas",
+   "capital": "N540W0045"
+  },
+  {
+   "code": "IND",
+   "capital_name": "New Delhi",
+   "capital": "N285E0770"
+  },
+  {
+   "code": "IRL",
+   "capital_name": "Dublin",
+   "capital": "N530W0065"
+  },
+  {
+   "code": "IRN",
+   "capital_name": "Tehran",
+   "capital": "N355E0510"
+  },
+  {
+   "code": "IRQ",
+   "capital_name": "Baghdad",
+   "capital": "N330E0440"
+  },
+  {
+   "code": "ISL",
+   "capital_name": "Reykjavik",
+   "capital": "N640W0220"
+  },
+  {
+   "code": "ISR",
+   "capital_name": "Jerusalem",
+   "capital": "N315E0350"
+  },
+  {
+   "code": "ITA",
+   "capital_name": "Rome",
+   "capital": "N415E0120"
+  },
+  {
+   "code": "JAM",
+   "capital_name": "Kingston",
+   "capital": "N175W0770"
+  },
+  {
+   "code": "JEY",
+   "capital_name": "St. Helier",
+   "capital": "N490W0025"
+  },
+  {
+   "code": "JOR",
+   "capital_name": "Amman",
+   "capital": "N315E0355"
+  },
+  {
+   "code": "JPN",
+   "capital_name": "Tokyo",
+   "capital": "N355E1395"
+  },
+  {
+   "code": "KAZ",
+   "capital_name": "Astana",
+   "capital": "N510E0710"
+  },
+  {
+   "code": "KEN",
+   "capital_name": "Nairobi",
+   "capital": "S015E0365"
+  },
+  {
+   "code": "KGZ",
+   "capital_name": "Bishkek",
+   "capital": "N425E0745"
+  },
+  {
+   "code": "KHM",
+   "capital_name": "Phnom Penh",
+   "capital": "N115E1045"
+  },
+  {
+   "code": "KIR",
+   "capital_name": "Tarawa",
+   "capital": "N010E1730"
+  },
+  {
+   "code": "KNA",
+   "capital_name": "Basseterre",
+   "capital": "N170W0630"
+  },
+  {
+   "code": "KOR",
+   "capital_name": "Seoul",
+   "capital": "N375E1265"
+  },
+  {
+   "code": "KWT",
+   "capital_name": "Kuwait City",
+   "capital": "N290E0475"
+  },
+  {
+   "code": "LAO",
+   "capital_name": "Vientiane",
+   "capital": "N175E1025"
+  },
+  {
+   "code": "LBN",
+   "capital_name": "Beirut",
+   "capital": "N335E0355"
+  },
+  {
+   "code": "LBR",
+   "capital_name": "Monrovia",
+   "capital": "N060W0110"
+  },
+  {
+   "code": "LBY",
+   "capital_name": "Tripoli",
+   "capital": "N325E0130"
+  },
+  {
+   "code": "LCA",
+   "capital_name": "Castries",
+   "capital": "N140W0615"
+  },
+  {
+   "code": "LKA",
+   "capital_name": "Colombo",
+   "capital": "N065E0795"
+  },
+  {
+   "code": "LSO",
+   "capital_name": "Maseru",
+   "capital": "S295E0270"
+  },
+  {
+   "code": "LTU",
+   "capital_name": "Vilnius",
+   "capital": "N545E0250"
+  },
+  {
+   "code": "LUX",
+   "capital_name": "Luxembourg",
+   "capital": "N495E0060"
+  },
+  {
+   "code": "LVA",
+   "capital_name": "Riga",
+   "capital": "N565E0240"
+  },
+  {
+   "code": "MAR",
+   "capital_name": "Rabat",
+   "capital": "N340W0070"
+  },
+  {
+   "code": "MDA",
+   "capital_name": "Chisinau",
+   "capital": "N470E0285"
+  },
+  {
+   "code": "MDG",
+   "capital_name": "Antananarivo",
+   "capital": "S190E0475"
+  },
+  {
+   "code": "MDV",
+   "capital_name": "Male",
+   "capital": "N040E0730"
+  },
+  {
+   "code": "MEX",
+   "capital_name": "Mexico City",
+   "capital": "N190W0995"
+  },
+  {
+   "code": "MHL",
+   "capital_name": "Majuro",
+   "capital": "N070E1710"
+  },
+  {
+   "code": "MKD",
+   "capital_name": "Skopje",
+   "capital": "N420E0210"
+  },
+  {
+   "code": "MLI",
+   "capital_name": "Bamako",
+   "capital": "N125W0085"
+  },
+  {
+   "code": "MLT",
+   "capital_name": "Valletta",
+   "capital": "N355E0145"
+  },
+  {
+   "code": "MMR",
+   "capital_name": "Naypyidaw",
+   "capital": "N195E0960"
+  },
+  {
+   "code": "MNE",
+   "capital_name": "Podgorica",
+   "capital": "N420E0190"
+  },
+  {
+   "code": "MNG",
+   "capital_name": "Ulaanbaatar",
+   "capital": "N475E1065"
+  },
+  {
+   "code": "MNP",
+   "capital_name": "Capitol Hill",
+   "capital": "N150E1455"
+  },
+  {
+   "code": "MOZ",
+   "capital_name": "Maputo",
+   "capital": "S260E0325"
+  },
+  {
+   "code": "MRT",
+   "capital_name": "Nouakchott",
+   "capital": "N180W0160"
+  },
+  {
+   "code": "MSR",
+   "capital_name": "Brades",
+   "capital": "N165W0625"
+  },
+  {
+   "code": "MUS",
+   "capital_name": "Port Louis",
+   "capital": "S205E0570"
+  },
+  {
+   "code": "MWI",
+   "capital_name": "Lilongwe",
+   "capital": "S140E0335"
+  },
+  {
+   "code": "MYS",
+   "capital_name": "Kuala Lumpur",
+   "capital": "N030E1015"
+  },
+  {
+   "code": "NAM",
+   "capital_name": "Windhoek",
+   "capital": "S230E0170"
+  },
+  {
+   "code": "NCL",
+   "capital_name": "Noumea",
+   "capital": "S225E1660"
+  },
+  {
+   "code": "NER",
+   "capital_name": "Niamey",
+   "capital": "N135E0020"
+  },
+  {
+   "code": "NFK",
+   "capital_name": "Kingston",
+   "capital": "S295E1675"
+  },
+  {
+   "code": "NGA",
+   "capital_name": "Abuja",
+   "capital": "N090E0075"
+  },
+  {
+   "code": "NIC",
+   "capital_name": "Managua",
+   "capital": "N120W0865"
+  },
+  {
+   "code": "NIU",
+   "capital_name": "Alofi",
+   "capital": "S195W1700"
+  },
+  {
+   "code": "NLD",
+   "capital_name": "Amsterdam",
+   "capital": "N520E0045"
+  },
+  {
+   "code": "NOR",
+   "capital_name": "Oslo",
+   "capital": "N595E0105"
+  },
+  {
+   "code": "NPL",
+   "capital_name": "Kathmandu",
+   "capital": "N275E0850"
+  },
+  {
+   "code": "NRU",
+   "capital_name": "Yaren",
+   "capital": "S010E1665"
+  },
+  {
+   "code": "NZL",
+   "capital_name": "Wellington",
+   "capital": "S415E1745"
+  },
+  {
+   "code": "OMN",
+   "capital_name": "Muscat",
+   "capital": "N235E0585"
+  },
+  {
+   "code": "PAK",
+   "capital_name": "Islamabad",
+   "capital": "N335E0730"
+  },
+  {
+   "code": "PAN",
+   "capital_name": "Panama City",
+   "capital": "N085W0800"
+  },
+  {
+   "code": "PCN",
+   "capital_name": "Adamstown",
+   "capital": "S255W1305"
+  },
+  {
+   "code": "PER",
+   "capital_name": "Lima",
+   "capital": "S125W0775"
+  },
+  {
+   "code": "PHL",
+   "capital_name": "Manila",
+   "capital": "N145E1205"
+  },
+  {
+   "code": "PLW",
+   "capital_name": "Melekeok",
+   "capital": "N070E1345"
+  },
+  {
+   "code": "PNG",
+   "capital_name": "Port Moresby",
+   "capital": "S095E1470"
+  },
+  {
+   "code": "POL",
+   "capital_name": "Warsaw",
+   "capital": "N520E0205"
+  },
+  {
+   "code": "PRI",
+   "capital_name": "San Juan",
+   "capital": "N180W0665"
+  },
+  {
+   "code": "PRK",
+   "capital_name": "Pyongyang",
+   "capital": "N390E1255"
+  },
+  {
+   "code": "PRT",
+   "capital_name": "Lisbon",
+   "capital": "N385W0095"
+  },
+  {
+   "code": "PRY",
+   "capital_name": "Asuncion",
+   "capital": "S255W0580"
+  },
+  {
+   "code": "PSE",
+   "capital_name": "Ramallah",
+   "capital": "N320E0350",
+   "note": "Ramallah shares tile N315E0350 with Jerusalem (ISR); moved to its nearest populated PSE tile"
+  },
+  {
+   "code": "PYF",
+   "capital_name": "Papeete",
+   "capital": "S180W1500"
+  },
+  {
+   "code": "QAT",
+   "capital_name": "Doha",
+   "capital": "N250E0515"
+  },
+  {
+   "code": "ROU",
+   "capital_name": "Bucharest",
+   "capital": "N440E0260"
+  },
+  {
+   "code": "RUS",
+   "capital_name": "Moscow",
+   "capital": "N555E0375"
+  },
+  {
+   "code": "RWA",
+   "capital_name": "Kigali",
+   "capital": "S020E0300"
+  },
+  {
+   "code": "SAU",
+   "capital_name": "Riyadh",
+   "capital": "N245E0465"
+  },
+  {
+   "code": "SDN",
+   "capital_name": "Khartoum",
+   "capital": "N155E0325"
+  },
+  {
+   "code": "SEN",
+   "capital_name": "Dakar",
+   "capital": "N145W0175"
+  },
+  {
+   "code": "SGP",
+   "capital_name": "Singapore",
+   "capital": "N010E1035"
+  },
+  {
+   "code": "SHN",
+   "capital_name": "Jamestown",
+   "capital": "S160W0060"
+  },
+  {
+   "code": "SLB",
+   "capital_name": "Honiara",
+   "capital": "S095E1595"
+  },
+  {
+   "code": "SLE",
+   "capital_name": "Freetown",
+   "capital": "N080W0135"
+  },
+  {
+   "code": "SLV",
+   "capital_name": "San Salvador",
+   "capital": "N135W0895"
+  },
+  {
+   "code": "SOM",
+   "capital_name": "Mogadishu",
+   "capital": "N020E0450"
+  },
+  {
+   "code": "SPM",
+   "capital_name": "Saint-Pierre",
+   "capital": "N465W0565"
+  },
+  {
+   "code": "SRB",
+   "capital_name": "Belgrade",
+   "capital": "N445E0200"
+  },
+  {
+   "code": "SSD",
+   "capital_name": "Juba",
+   "capital": "N045E0315"
+  },
+  {
+   "code": "STP",
+   "capital_name": "Sao Tome",
+   "capital": "N000E0065"
+  },
+  {
+   "code": "SUR",
+   "capital_name": "Paramaribo",
+   "capital": "N055W0555"
+  },
+  {
+   "code": "SVK",
+   "capital_name": "Bratislava",
+   "capital": "N480E0170"
+  },
+  {
+   "code": "SVN",
+   "capital_name": "Ljubljana",
+   "capital": "N460E0145"
+  },
+  {
+   "code": "SWE",
+   "capital_name": "Stockholm",
+   "capital": "N590E0180"
+  },
+  {
+   "code": "SWZ",
+   "capital_name": "Mbabane",
+   "capital": "S265E0310"
+  },
+  {
+   "code": "SYC",
+   "capital_name": "Victoria",
+   "capital": "S050E0550"
+  },
+  {
+   "code": "SYR",
+   "capital_name": "Damascus",
+   "capital": "N335E0360"
+  },
+  {
+   "code": "TCA",
+   "capital_name": "Grand Turk",
+   "capital": "N210W0715"
+  },
+  {
+   "code": "TCD",
+   "capital_name": "Ndjamena",
+   "capital": "N120E0150"
+  },
+  {
+   "code": "TGO",
+   "capital_name": "Lome",
+   "capital": "N060E0010"
+  },
+  {
+   "code": "THA",
+   "capital_name": "Bangkok",
+   "capital": "N135E1005"
+  },
+  {
+   "code": "TJK",
+   "capital_name": "Dushanbe",
+   "capital": "N385E0685"
+  },
+  {
+   "code": "TKM",
+   "capital_name": "Ashgabat",
+   "capital": "N375E0580"
+  },
+  {
+   "code": "TLS",
+   "capital_name": "Dili",
+   "capital": "S090E1255"
+  },
+  {
+   "code": "TON",
+   "capital_name": "Nukualofa",
+   "capital": "S215W1755"
+  },
+  {
+   "code": "TTO",
+   "capital_name": "Port-of-Spain",
+   "capital": "N105W0620"
+  },
+  {
+   "code": "TUN",
+   "capital_name": "Tunis",
+   "capital": "N365E0100"
+  },
+  {
+   "code": "TUR",
+   "capital_name": "Ankara",
+   "capital": "N395E0325"
+  },
+  {
+   "code": "TUV",
+   "capital_name": "Funafuti",
+   "capital": "S090E1790"
+  },
+  {
+   "code": "TWN",
+   "capital_name": "Taipei",
+   "capital": "N250E1215"
+  },
+  {
+   "code": "TZA",
+   "capital_name": "Dar es Salaam",
+   "capital": "S070E0390"
+  },
+  {
+   "code": "UGA",
+   "capital_name": "Kampala",
+   "capital": "N000E0325"
+  },
+  {
+   "code": "UKR",
+   "capital_name": "Kiev",
+   "capital": "N500E0305"
+  },
+  {
+   "code": "URY",
+   "capital_name": "Montevideo",
+   "capital": "S350W0565"
+  },
+  {
+   "code": "USA",
+   "capital_name": "Washington, D.C.",
+   "capital": "N385W0775"
+  },
+  {
+   "code": "UZB",
+   "capital_name": "Tashkent",
+   "capital": "N410E0690"
+  },
+  {
+   "code": "VCT",
+   "capital_name": "Kingstown",
+   "capital": "N130W0615"
+  },
+  {
+   "code": "VEN",
+   "capital_name": "Caracas",
+   "capital": "N105W0670"
+  },
+  {
+   "code": "VGB",
+   "capital_name": "Road Town",
+   "capital": "N180W0645",
+   "note": "Road Town shares tile N180W0650 with Charlotte Amalie (VIR); moved to its nearest populated VGB tile"
+  },
+  {
+   "code": "VIR",
+   "capital_name": "Charlotte Amalie",
+   "capital": "N180W0650"
+  },
+  {
+   "code": "VNM",
+   "capital_name": "Hanoi",
+   "capital": "N210E1055"
+  },
+  {
+   "code": "VUT",
+   "capital_name": "Port Vila",
+   "capital": "S180E1680"
+  },
+  {
+   "code": "WLF",
+   "capital_name": "Mata-Utu",
+   "capital": "S135W1765"
+  },
+  {
+   "code": "WSM",
+   "capital_name": "Apia",
+   "capital": "S140W1720"
+  },
+  {
+   "code": "XKX",
+   "capital_name": "Pristina",
+   "capital": "N425E0210"
+  },
+  {
+   "code": "YEM",
+   "capital_name": "Sanaa",
+   "capital": "N150E0440"
+  },
+  {
+   "code": "ZAF",
+   "capital_name": "Pretoria",
+   "capital": "S260E0280"
+  },
+  {
+   "code": "ZMB",
+   "capital_name": "Lusaka",
+   "capital": "S155E0280"
+  },
+  {
+   "code": "ZWE",
+   "capital_name": "Harare",
+   "capital": "S180E0310"
+  }
+ ]
+}

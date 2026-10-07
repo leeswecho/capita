@@ -1,9 +1,9 @@
-"""Local web server that renders world_map.json and world_population.json on an interactive 3D globe.
+"""Local web server that renders world_map.json and a population file on an interactive 3D globe.
 
     python convert_map.py          # once, and again whenever world_map.yaml changes
-    python convert_population.py   # once, and again whenever world_population.yaml changes
+    python convert_population.py   # prototype data only: world_population.yaml -> world_population_current.json
     python ../engine/engine.py init   # optional: cohort state for /api/tile/<id>/cohorts
-    python server.py [--port 8000] [--host 127.0.0.1] [--state ../state]
+    python server.py [--port 8000] [--host 127.0.0.1] [--population world_population_start.json] [--state ../state]
 
 Then open http://localhost:8000/ in a browser.
 
@@ -16,19 +16,20 @@ Endpoints:
                            row 0 = lat 89.5, col 0 = lon -180, 0.5-degree tiles); index into map.terrain_types
     /api/cover             dominant land cover per tile, same layout; index into map.cover_types, 255 = no land
     /api/population        people per tile, 259,200 little-endian uint32 in the same order
-    /api/population/version {"version": n, "turn": t}; n goes up each time world_population.json
+    /api/population/version {"version": n, "turn": t}; n goes up each time the population file
                            changes; t is the cohort state's current turn (null if there is none)
     /api/population/countries {"version": n, "codes": [...], "index": [...]}: each tile's country,
                            as 0 (none) or k = codes[k - 1], in grid order (for the same-country tint)
 
-world_population.json is reread once per second, so edits to it show up in open pages
+The population file (--population; default world_population_start.json, the game's starting
+scenario) is reread once per second, so edits to it show up in open pages
 without restarting the server. The cohort state's current.json (cohort_state.py) is checked just as
 often; a new turn is memory-mapped, so switching turns reads nothing until a page asks for a tile.
     /api/tile/<id>         one tile record merged with its population record (JSON)
     /api/tile/<id>/cohorts the tile's people and activity hours by single year of age, from the
                            engine's current turn (JSON); read on request from memory-mapped files
-    /api/nations           the current turn's nations: id, code, name, capital tile, visible and
-                           explored tile counts (JSON)
+    /api/nations           the current turn's nations: id, code, name, capital tile, people, and
+                           owned, visible and explored tile counts (JSON)
     /api/nation/<id>/visibility  one nation's visibility at the current turn: 32,400 bytes of
                            active-visibility bits, then 32,400 bytes of explored bits (tile i is bit
                            i % 8 of byte i // 8); header X-Turn
@@ -113,7 +114,7 @@ def tile_index(tid: str):
 
 
 class Population:
-    """One snapshot of world_population.json (made by convert_population.py) plus what the server
+    """One snapshot of the population file (columnar format, see convert_population.py) plus what the server
     derives from it. Snapshots are never modified, so request threads can use one while the
     reload thread builds the next."""
 
@@ -284,11 +285,12 @@ class World:
             vis = POPCOUNT[np.asarray(st.visible)].sum(axis=1, dtype=np.int64)
             exp = POPCOUNT[np.asarray(st.explored)].sum(axis=1, dtype=np.int64)
             people = np.bincount(st.nation, weights=np.asarray(st.people).sum(axis=1), minlength=len(st.nations) + 1)
+            owned = np.bincount(st.owner, minlength=len(st.nations) + 1)
             out = []
             for n in st.nations:
                 i = n["id"]
                 out.append({**self.nation_ref(st, i), "founded_turn": n["founded_turn"],
-                            "people": round(float(people[i]), 2),
+                            "people": round(float(people[i]), 2), "owned_tiles": int(owned[i]),
                             "visible_tiles": int(vis[i]), "explored_tiles": int(exp[i])})
             cached = st.nations_cache = json.dumps({"turn": st.turn, "nations": out}, separators=(",", ":")).encode()
         return cached
@@ -342,11 +344,15 @@ class World:
             "rank": pop.rank.get(i),
             "version": pop.version,
         }
+        # The nation whose people live here, and the nation that owns the tile (they can differ once
+        # ownership rules go beyond first come, first served).
         st = self.turn
         r = st.row(i) if st is not None else None
         body["nation"] = self.nation_ref(st, int(st.nation[r])) if r is not None else None
-        if body["nation"]:
-            body["nation"]["is_capital"] = st.nations[body["nation"]["id"] - 1]["capital"] == i
+        body["owner"] = self.nation_ref(st, int(st.owner[i])) if st is not None else None
+        for ref in (body["nation"], body["owner"]):
+            if ref:
+                ref["is_capital"] = st.nations[ref["id"] - 1]["capital"] == i
         return json.dumps(body).encode()
 
 
@@ -454,7 +460,9 @@ def main():
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--map", default=os.path.join(ROOT, "world_map.json"))
-    ap.add_argument("--population", default=os.path.join(ROOT, "world_population.json"))
+    ap.add_argument("--population", default=os.path.join(ROOT, "world_population_start.json"),
+                    help="population file (default: world_population_start.json, the game's starting scenario; "
+                         "world_population_current.json is the full modern world, for prototyping)")
     ap.add_argument("--countries", default=os.path.join(ROOT, "ne_10m_admin_0_countries.geojson"))
     ap.add_argument("--state", default=os.path.join(os.path.dirname(ROOT), "state"),
                     help="cohort state written by engine/engine.py (default: the top-level state/ folder)")

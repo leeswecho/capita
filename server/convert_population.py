@@ -1,4 +1,4 @@
-"""Convert world_population.yaml into world_population.json, a columnar file that loads in a fraction
+"""Convert world_population.yaml into world_population_current.json, a columnar file that loads in a fraction
 of the time.
 
     python convert_population.py
@@ -6,7 +6,8 @@ of the time.
 Rerun it whenever world_population.yaml is regenerated. The script reloads the JSON and checks that it
 reproduces every tile of the YAML exactly before finishing.
 
-world_population.json layout:
+The full modern-world population is prototype and demonstration data; the game itself starts from
+world_population_start.json (made by gen_start_capitals.py), which uses the same layout:
 
     {
       "format": "world_population/columnar-2",
@@ -49,7 +50,7 @@ def grid_order():
 
 
 def load_population(path: str) -> dict:
-    """Load world_population.json into the same structure yaml.load gives for world_population.yaml."""
+    """Load a columnar population file into the same structure yaml.load gives for world_population.yaml."""
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
     if data.get("format") != FORMAT:
@@ -68,7 +69,7 @@ def load_population(path: str) -> dict:
 
 def main():
     src = os.path.join(HERE, "world_population.yaml")
-    dst = os.path.join(HERE, "world_population.json")
+    dst = os.path.join(HERE, "world_population_current.json")
 
     t0 = time.perf_counter()
     loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)

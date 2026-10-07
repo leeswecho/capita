@@ -1,13 +1,14 @@
-# Game state format (`capita/cohort-state-2`)
+# Game state format (`capita/cohort-state-3`)
 
 The game state holds, for every populated tile, the people of each single year of age, how many hours
 a day they spend on each activity, and which nation they belong to. It also holds a record for each
-nation and what each nation can see. The turn engine (`engine/engine.py`) writes it, and the web server
+nation, which nation owns each tile, and what each nation can see. The turn engine (`engine/engine.py`) writes it, and the web server
 (`server/server.py`) reads it. This document is the contract between the two, written so that an engine
 in any language can produce it. `server/cohort_state.py` is the Python implementation.
 
-Version 2 added nations (`nations.json`, `nation.npy`) and visibility (`visible.npy`, `explored.npy`).
-Version 1 states can't be read; delete the state folder and run `engine.py init` again.
+Version 2 added nations (`nations.json`, `nation.npy`) and visibility (`visible.npy`, `explored.npy`);
+version 3 added tile ownership (`owner.npy`). Older states can't be read; delete the state folder and
+run `engine.py init` again.
 
 ## Directory layout
 
@@ -21,6 +22,7 @@ state/
     people.npy
     hours.npy
     nation.npy
+    owner.npy
     visible.npy
     explored.npy
   turn_00008/
@@ -32,7 +34,7 @@ Turn directories are named `turn_` + the turn number as 5 digits, zero-padded.
 ## `current.json`
 
 ```json
-{ "format": "capita/cohort-state-2", "turn": 7, "dir": "turn_00007" }
+{ "format": "capita/cohort-state-3", "turn": 7, "dir": "turn_00007" }
 ```
 
 Readers open the directory named by `dir`. Writers replace this file atomically: write
@@ -50,6 +52,7 @@ tiles and `M` is the number of nations + 1.
 | `people.npy` | `<f8` (float64) | `[N, 101]` | People in the tile by single year of age. Column `a` holds age `a` for `a` = 0..99; **column 100 is "100 and over"**. Fractions are allowed and are rounded only for display. |
 | `hours.npy` | `<f4` (float32) | `[N, 101, A]` | For each tile, age and activity: the mean hours per person per day spent on that activity, averaged over the year. Activities are in `manifest.activities` order. They needn't sum to 24; any remainder is unassigned time. |
 | `nation.npy` | `<u2` (uint16) | `[N]` | The id of the nation the row's people belong to; 0 = no nation. |
+| `owner.npy` | `<u2` (uint16) | `[259200]` | The id of the nation that **owns** each tile of the whole grid (flat index), 0 = nobody. Unlike the other per-tile arrays it covers every tile, because future rules may let nations own tiles nobody lives on. |
 | `visible.npy` | `<u1` (uint8) | `[M, 32400]` | **Active visibility**: tiles the nation can see this turn. Row `k` is nation id `k`, one bit per tile (below). |
 | `explored.npy` | `<u1` (uint8) | `[M, 32400]` | **Explored** tiles: every tile the nation has ever actively seen, including this turn. A tile that is explored but not visible is **passively** visible: its geography is known, nothing else. |
 
@@ -111,7 +114,7 @@ indexed by nation id instead.
 
 ```json
 {
-  "format": "capita/cohort-state-2",
+  "format": "capita/cohort-state-3",
   "turn": 7,
   "grid": { "tile_size_degrees": 0.5, "width": 720, "height": 360 },
   "ages": { "count": 101, "last_is_open_ended": true },
@@ -123,6 +126,7 @@ indexed by nation id instead.
     "people":   { "file": "people.npy",   "dtype": "<f8", "shape": [49910, 101] },
     "hours":    { "file": "hours.npy",    "dtype": "<f4", "shape": [49910, 101, 4] },
     "nation":   { "file": "nation.npy",   "dtype": "<u2", "shape": [49910] },
+    "owner":    { "file": "owner.npy",    "dtype": "<u2", "shape": [259200] },
     "visible":  { "file": "visible.npy",  "dtype": "<u1", "shape": [225, 32400] },
     "explored": { "file": "explored.npy", "dtype": "<u1", "shape": [225, 32400] }
   },
@@ -130,12 +134,13 @@ indexed by nation id instead.
   "nations": 224,
   "total_people": 7840952769.0,
   "checksum": { "algorithm": "sha256", "of": "...", "value": "845b2053..." },
-  "initial_population_source": "world_population.json"
+  "initial_population_source": "world_population_start.json",
+  "initial_nations_source": "world_population_start_capitals.nations.json"
 }
 ```
 
 - `checksum.value` is the SHA-256 of the raw data bytes (not the `.npy` headers) of `tiles`, `people`,
-  `hours`, `nation`, `visible` and `explored`, in that order, followed by the `nations` list as
+  `hours`, `nation`, `owner`, `visible` and `explored`, in that order, followed by the `nations` list as
   canonical JSON: sorted keys, no whitespace (`","` and `":"` separators), UTF-8. It shows whether a
   deterministic replay reproduced a turn exactly. `total_people` is informational only and isn't part
   of the checksum.
@@ -159,11 +164,20 @@ its starting hours are placeholders in `engine/engine.py` (`starting_hours()`): 
 age, so that babies sleep more, subsistence work starts around age 10 and peaks in adulthood, and
 childcare peaks around age 30.
 
-**Nations at turn 0** (`make_nations()`): by default, one nation per country code on a populated tile
-of the population file, in code order, with its most populous tile as capital. If a seed file exists
-(`--nations`, or `<population file>.nations.json` next to the population file), it lists the nations
-and their capital tiles instead: `{"nations": [{"code": "DNK", "capital": "N555E0125"}, ...]}`. A
-capital's tile belongs to its nation; other tiles go by country code.
+**Nations at turn 0** (`make_nations()`) come from a **nation seed**, which `init` requires: `--nations`,
+or the `<population name>.nations.json` / `<population name>_*.nations.json` next to the population file
+(`world_population_start_capitals.nations.json`, `world_population_current_capitals.nations.json`). It
+lists the nations in id order with their capital tiles:
+`{"nations": [{"code": "DNK", "capital": "N555E0125"}, ...]}`; other keys (`capital_name`, `note`) are
+ignored. A capital's tile belongs to its nation; every other populated tile goes to the nation whose
+code is the tile's country code, and codes not in the seed get no nation.
+
+**Ownership, recomputed every turn** (`update_ownership()`): first come, first served. A nation owns a
+tile from the turn it is the first to have people living there, and keeps it while any of its people
+live there. When the owner's last inhabitants are gone (for example, they all died), the tile passes to
+a nation that has people there now, or to nobody. At turn 0 every populated tile belongs to the nation
+living on it. The rule is expected to change (treaties, contested areas...); readers only use
+`owner.npy`.
 
 **Visibility, recomputed every turn** (`active_visibility()`): a nation actively sees every tile where
 it has people, plus the 8 tiles around each one (east–west wraps around; nothing past the poles). Then

@@ -416,7 +416,7 @@ async function loadData() {
 }
 
 // ---------- live population updates ----------
-// The server rereads world_population.json every second and bumps a version number when it changes.
+// The server rereads the population file every second and bumps a version number when it changes.
 // The page polls that version every second and, on a change, repaints the heatmap and the side panel.
 const heatCanvas = document.createElement("canvas");
 let heatTex = null, popVersion = 0, popRefreshing = false;
@@ -523,6 +523,12 @@ setInterval(pollPopulation, 1000);
 const info = document.getElementById("info");
 let shownTid = null, pinnedTid = null, hoverTid = null, cursorLL = null;
 
+// A nation reference from /api/tile as "Name CODE · capital".
+function nationText(n, none = "none") {
+  return n ? `${esc(n.name)} <span class="none">${esc(n.code)}${n.is_capital ? " · capital" : ""}</span>`
+           : `<span class="none">${none}</span>`;
+}
+
 function renderPopulation(t) {
   const p = t.population;
   if (!p) return '<div class="none">No population record for this tile.</div>';
@@ -536,9 +542,8 @@ function renderPopulation(t) {
     <div class="bignum">${fmtInt(p.population)} <small>people</small></div>
     ${heatLevelsHtml(level)}
     <dl class="kv">
-      <dt>Nation</dt><dd>${t.nation
-        ? `${esc(t.nation.name)} <span class="none">${esc(t.nation.code)}${t.nation.is_capital ? " · capital" : ""}</span>`
-        : '<span class="none">none</span>'}</dd>
+      <dt>Owner</dt><dd>${nationText(t.owner, "nobody")}</dd>
+      ${t.nation && t.nation.id !== t.owner?.id ? `<dt>Inhabitants</dt><dd>${nationText(t.nation)}</dd>` : ""}
       ${viewNation && nationsById.has(viewNation) ? `<dt>Seen by ${esc(nationsById.get(viewNation).code)}</dt><dd>${{
         active: "Active (can see it now)", passive: "Passive (explored, not seen now)", unknown: "Unknown (never seen)"
       }[tileVisibility(t.id)] || "—"}</dd>` : ""}

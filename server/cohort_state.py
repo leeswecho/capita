@@ -11,6 +11,7 @@ Layout (see reference/cohort_state_schema.md for the full, language-neutral spec
         people.npy            <f8 [N, 101]     people by single year of age; column 100 is "100 and over"
         hours.npy             <f4 [N, 101, A]  mean hours per person per day spent on each activity
         nation.npy            <u2 [N]          nation id the row's people belong to (0 = none)
+        owner.npy             <u2 [259200]     nation id that owns each tile of the whole grid (0 = nobody)
         visible.npy           <u1 [M, 32400]   active visibility: row k = nation id k, one bit per tile
         explored.npy          <u1 [M, 32400]   tiles each nation has ever seen (visible is a subset)
 
@@ -29,11 +30,12 @@ import numpy as np
 
 import grid
 
-FORMAT = "capita/cohort-state-2"
+FORMAT = "capita/cohort-state-3"
 AGES = 101                      # ages 0..99, then 100 = "100 and over"
 HOURS_UNIT = "mean hours per person per day, averaged over the year"
 BITS_BYTES = (grid.COUNT + 7) // 8          # one visibility row: 259,200 tiles -> 32,400 bytes
-DTYPES = {"tiles": "<u4", "people": "<f8", "hours": "<f4", "nation": "<u2", "visible": "<u1", "explored": "<u1"}
+DTYPES = {"tiles": "<u4", "people": "<f8", "hours": "<f4", "nation": "<u2", "owner": "<u2",
+          "visible": "<u1", "explored": "<u1"}
 ARRAYS = tuple(DTYPES)                      # file order, which is also checksum order
 NATION_KEYS = ("id", "code", "capital", "founded_turn", "alive")
 CURRENT = "current.json"
@@ -61,8 +63,8 @@ def nations_bytes(nations) -> bytes:
 class State:
     """Everything in one turn. The engine builds one, write_turn() saves it, Turn reads it back."""
 
-    def __init__(self, tiles, people, hours, activities, nation, nations, visible, explored):
-        self.tiles, self.people, self.hours, self.nation = tiles, people, hours, nation
+    def __init__(self, tiles, people, hours, activities, nation, owner, nations, visible, explored):
+        self.tiles, self.people, self.hours, self.nation, self.owner = tiles, people, hours, nation, owner
         self.visible, self.explored = visible, explored
         self.activities, self.nations = list(activities), nations
 
@@ -82,7 +84,7 @@ class State:
         for k, a in self.arrays().items():
             if a.dtype != np.dtype(DTYPES[k]):
                 raise ValueError(f"{k} must be {DTYPES[k]}, got {a.dtype}")
-        shapes = {"tiles": (n,), "people": (n, AGES), "hours": (n, AGES, len(self.activities)), "nation": (n,),
+        shapes = {"tiles": (n,), "people": (n, AGES), "hours": (n, AGES, len(self.activities)), "nation": (n,), "owner": (grid.COUNT,),
                   "visible": (m, BITS_BYTES), "explored": (m, BITS_BYTES)}
         for k, shape in shapes.items():
             if getattr(self, k).shape != shape:
@@ -98,6 +100,8 @@ class State:
                 raise ValueError(f"nation {i}: capital {rec['capital']} is not a tile index")
         if n and self.nation.max(initial=0) >= m:
             raise ValueError("nation.npy refers to a nation id with no record")
+        if self.owner.max(initial=0) >= m:
+            raise ValueError("owner.npy refers to a nation id with no record")
         if np.any(self.visible[0]) or np.any(self.explored[0]):
             raise ValueError("visibility row 0 (no nation) must be all zeros")
         if np.any(self.visible & ~self.explored):
@@ -181,10 +185,10 @@ class Turn(State):
         self.turn = m["turn"]
         with open(os.path.join(self.path, "nations.json"), encoding="utf-8") as f:
             nations = json.load(f)["nations"]
-        small = ("tiles", "nation")   # always read in full; the rest are mapped when mmap=True
+        small = ("tiles", "nation", "owner")   # always read in full; the rest are mapped when mmap=True
         a = {k: np.load(os.path.join(self.path, f"{k}.npy"), mmap_mode=None if mmap is False or k in small else "r")
              for k in ARRAYS}
-        super().__init__(a["tiles"], a["people"], a["hours"], m["activities"], a["nation"], nations,
+        super().__init__(a["tiles"], a["people"], a["hours"], m["activities"], a["nation"], a["owner"], nations,
                          a["visible"], a["explored"])
         if len(self.tiles) != len(self.people) or len(self.visible) != len(nations) + 1:
             raise ValueError(f"{dir_name}: array sizes don't match the manifest")

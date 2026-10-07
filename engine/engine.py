@@ -1,6 +1,6 @@
 """Turn engine: creates and advances the game state that server.py displays.
 
-    python engine/engine.py init [--population server/world_population.json] [--nations SEED] [--state state]
+    python engine/engine.py init [--population server/world_population_start.json] [--nations SEED] [--state state]
     python engine/engine.py step [--turns 1] [--state state]
     python engine/engine.py verify [--state state]
 
@@ -16,6 +16,9 @@ placeholder activity hours shaped by age (starting_hours()). It also creates the
 - Ageing: each cohort moves up one year and the 99-year-olds join the open-ended 100-and-over group
   (no births or deaths yet). Activity hours move with the people; in the 100+ group the hours of the
   two merged groups are averaged, weighted by people.
+- Ownership, recomputed every turn (update_ownership()): first come, first served. A nation owns a tile
+  from the turn it is the first to have people living there, and loses it when none of its people live
+  there any more.
 - Visibility, recomputed every turn (active_visibility()): a nation actively sees every tile where it
   has people, plus the 8 tiles around each. Tiles it has ever seen stay explored (passive visibility).
 
@@ -84,41 +87,44 @@ def starting_hours():
     return hours.astype(np.float32)
 
 
-def make_nations(counts, country, seed=None):
-    """Turn-0 nations and the nation id of every tile, from the population file.
+def make_nations(counts, country, seed):
+    """Turn-0 nations and the nation id of every tile, from a population file and its nation seed.
 
-    counts: people per tile [grid.COUNT]; country: ISO code per tile (or None).
-    Without a seed, each country code on a populated tile becomes a nation (ids in code order) whose
-    capital is its most populous tile. A seed ({"nations": [{"code": "DNK", "capital": "N555E0125"}, ...]})
-    lists the nations instead, in id order, with their capitals: a seed capital's tile belongs to that
-    nation, other tiles go by country code, and codes not in the seed get no nation.
+    counts: people per tile [grid.COUNT]; country: ISO code per tile (or None);
+    seed: [{"code": "DNK", "capital": "N555E0125"}, ...], one entry per nation in id order.
+    A capital's tile belongs to its nation; every other populated tile goes to the nation whose code
+    is the tile's country code, and codes not in the seed get no nation.
     Returns (nation records, nation id per tile as uint16 [grid.COUNT]).
     """
-    populated = counts > 0
-    owner = np.zeros(grid.COUNT, dtype=np.uint16)
-    if seed is None:
-        codes = sorted({c for c, p in zip(country, populated) if p and c})
-        capitals = {}
-    else:
-        codes = [n["code"] for n in seed]
-        capitals = {n["code"]: grid.index(*grid.parse_tile_id(n["capital"])) for n in seed}
-        if len(set(codes)) != len(codes):
-            sys.exit("nation seed lists a code twice")
+    codes = [n["code"] for n in seed]
+    if len(set(codes)) != len(codes):
+        sys.exit("nation seed lists a code twice")
+    capitals = {n["code"]: grid.index(*grid.parse_tile_id(n["capital"])) for n in seed}
     ids = {c: i for i, c in enumerate(codes, 1)}
+    tile_nation = np.zeros(grid.COUNT, dtype=np.uint16)
     for t, c in enumerate(country):
         if c in ids:
-            owner[t] = ids[c]
+            tile_nation[t] = ids[c]
     for c, t in capitals.items():
-        owner[t] = ids[c]
-    owner[~populated] = 0
-    nations = []
-    for c, i in ids.items():
-        cap = capitals.get(c)
-        if cap is None:
-            mine = np.flatnonzero(owner == i)
-            cap = int(mine[np.argmax(counts[mine])]) if len(mine) else None   # ties: the first tile
-        nations.append({"id": i, "code": c, "capital": cap, "founded_turn": 0, "alive": True})
-    return nations, owner
+        tile_nation[t] = ids[c]
+    tile_nation[counts <= 0] = 0
+    nations = [{"id": i, "code": c, "capital": capitals[c], "founded_turn": 0, "alive": True}
+               for c, i in ids.items()]
+    return nations, tile_nation
+
+
+def update_ownership(prev_owner, tiles, nation, people):
+    """Owner of every tile this turn, uint16 [grid.COUNT] (0 = nobody): first come, first served.
+
+    A tile's owner keeps it while the owner still has people living there. A tile with no owner, or
+    whose owner's people are all gone, goes to a nation that has people there now, or to nobody.
+    Each populated tile holds one nation's people for now, so a newcomer is never contested; once
+    several nations can share a tile, this is where to decide which of them claims it first.
+    """
+    present = np.zeros(grid.COUNT, dtype=np.uint16)   # the nation living on each tile, 0 = none
+    live = (people > 0).any(axis=1)
+    present[tiles[live]] = nation[live]
+    return np.where((prev_owner != 0) & (present == prev_owner), prev_owner, present).astype(np.uint16)
 
 
 def active_visibility(tiles, nation, people, n_rows):
@@ -136,29 +142,41 @@ def active_visibility(tiles, nation, people, n_rows):
     return cs.pack_tiles(flags.reshape(n_rows, grid.COUNT))
 
 
+def find_seed(population_path):
+    """The nation seed next to a population file: <name>.nations.json or <name>_<anything>.nations.json
+    (e.g. world_population_start_capitals.nations.json for world_population_start.json), or None."""
+    folder, name = os.path.split(os.path.splitext(population_path)[0])
+    found = sorted(f for f in os.listdir(folder or ".")
+                   if f.endswith(".nations.json") and (f == name + ".nations.json" or f.startswith(name + "_")))
+    if len(found) > 1:
+        sys.exit(f"more than one nation seed for {name}: {', '.join(found)}; choose one with --nations")
+    return os.path.join(folder, found[0]) if found else None
+
+
 def init(args):
     if cs.read_current(args.state):
         sys.exit(f"{args.state} already has a state; delete it first to start over")
     with open(args.population, encoding="utf-8") as f:
         pop = json.load(f)
     counts = np.asarray(pop["population"], dtype=np.float64)
-    seed_path = args.nations or os.path.splitext(args.population)[0] + ".nations.json"
-    seed = None
-    if args.nations or os.path.exists(seed_path):
-        with open(seed_path, encoding="utf-8") as f:
-            seed = json.load(f)["nations"]
-        print(f"nations from {os.path.basename(seed_path)}")
-    nations, owner = make_nations(counts, pop["country"], seed)
+    seed_path = args.nations or find_seed(args.population)
+    if not seed_path:
+        sys.exit(f"no nation seed for {os.path.basename(args.population)}; make one with "
+                 f"server/gen_capitals_seed.py --population ... or pass --nations")
+    with open(seed_path, encoding="utf-8") as f:
+        seed = json.load(f)["nations"]
+    print(f"nations from {os.path.basename(seed_path)}")
+    nations, tile_nation = make_nations(counts, pop["country"], seed)
 
     tiles = np.flatnonzero(counts > 0).astype(cs.DTYPES["tiles"])
     people = counts[tiles, None] * starting_age_shares()[None, :]
     hours = np.broadcast_to(starting_hours(), (len(tiles), AGES, len(ACTIVITIES))).copy()
-    nation = owner[tiles]
+    nation = tile_nation[tiles]
+    tile_owner = update_ownership(np.zeros(grid.COUNT, dtype=np.uint16), tiles, nation, people)
     visible = active_visibility(tiles, nation, people, len(nations) + 1)
-    state = cs.State(tiles, people, hours, ACTIVITIES, nation, nations, visible, visible.copy())
-    extra = {"initial_population_source": os.path.basename(args.population)}
-    if seed is not None:
-        extra["initial_nations_source"] = os.path.basename(seed_path)
+    state = cs.State(tiles, people, hours, ACTIVITIES, nation, tile_owner, nations, visible, visible.copy())
+    extra = {"initial_population_source": os.path.basename(args.population),
+             "initial_nations_source": os.path.basename(seed_path)}
     m = cs.write_turn(args.state, 0, state, extra=extra)
     print(f"turn 0: {m['populated_tiles']} tiles, {m['total_people']:,.1f} people, {m['nations']} nations -> "
           f"{os.path.join(args.state, cs.turn_dir_name(0))}")
@@ -186,8 +204,9 @@ def step(args):
         if cur is None:
             sys.exit(f"no state in {args.state}; run: python engine/engine.py init")
         people, hours = age_one_year(cur.people, cur.hours)
+        tile_owner = update_ownership(cur.owner, cur.tiles, cur.nation, people)
         visible = active_visibility(cur.tiles, cur.nation, people, len(cur.nations) + 1)
-        state = cs.State(cur.tiles, people, hours, cur.activities, cur.nation, cur.nations,
+        state = cs.State(cur.tiles, people, hours, cur.activities, cur.nation, tile_owner, cur.nations,
                          visible, cur.explored | visible)
         m = cs.write_turn(args.state, cur.turn + 1, state,
                           extra={k: v for k, v in cur.manifest.items() if k.startswith("initial_")})
@@ -212,10 +231,11 @@ def main():
     ap.add_argument("--state", default=STATE)
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("init", help="write turn 0")
-    p.add_argument("--population", default=os.path.join(SERVER, "world_population.json"),
-                   help="population file to seed turn 0 from; use the one server.py shows")
-    p.add_argument("--nations", help="nation seed file (default: <population>.nations.json if it exists, "
-                                     "otherwise one nation per country code)")
+    p.add_argument("--population", default=os.path.join(SERVER, "world_population_start.json"),
+                   help="population file to seed turn 0 from (default: the starting scenario); use the one "
+                        "server.py shows")
+    p.add_argument("--nations", help="nation seed file (default: the <population name>*.nations.json next to "
+                                     "the population file; one is required)")
     p = sub.add_parser("step", help="advance the current turn")
     p.add_argument("--turns", type=int, default=1)
     sub.add_parser("verify", help="check the current turn's checksum")

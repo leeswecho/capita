@@ -72,12 +72,25 @@
   #legend .updated { margin-top: 6px; font-variant-numeric: tabular-nums; }
   #legend .updated.flash { color: var(--accent); }
 
-  .nbrs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
-  .nbrs button { background: rgba(255,255,255,0.05); color: var(--text); border: 1px solid var(--panel-border); border-radius: 6px; padding: 6px 2px; font: inherit; font-size: 11px; cursor: pointer; font-variant-numeric: tabular-nums; line-height: 1.3; }
-  .nbrs button:hover:not(:disabled) { border-color: var(--accent); }
-  .nbrs button:disabled { opacity: 0.35; cursor: default; }
-  .nbrs button.self { background: rgba(255, 211, 77, 0.15); border-color: var(--accent); cursor: default; }
-  .nbrs .dir { color: var(--muted); display: block; text-transform: uppercase; font-size: 10px; }
+  .act { background: rgba(255,255,255,0.05); color: var(--text); border: 1px solid var(--panel-border); border-radius: 6px; padding: 5px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+  .act:hover { border-color: var(--accent); }
+  .cohort-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .cohort-head b { color: var(--text); }
+  .cohort-chart { display: block; width: 100%; height: auto; }
+  .cohort-chart .bar { fill: #9fb3d9; pointer-events: none; }
+  .cohort-chart .bar.on { fill: var(--accent); }
+  .cohort-chart .hit { fill: transparent; cursor: crosshair; }
+  .cohort-chart .axis { stroke: rgba(255,255,255,0.18); stroke-width: 1; }
+  .cohort-chart text { fill: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+  .cohort-readout { font-size: 12px; color: var(--muted); min-height: 2.9em; margin: 4px 0 2px; font-variant-numeric: tabular-nums; }
+  .cohort-readout b { color: var(--text); }
+  .cohort-sub { font-size: 12px; color: var(--muted); margin: 8px 0 2px; }
+  .hours-row { grid-template-columns: 96px 1fr 44px; }
+  .hours-row .fill { background: #9fb3d9; }
+  .cohort-table { width: 100%; border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; margin-top: 6px; }
+  .cohort-table th, .cohort-table td { text-align: right; padding: 1px 4px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+  .cohort-table th { color: var(--muted); font-weight: 600; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-top: 8px; }
   .hint { color: var(--muted); font-size: 12px; margin-top: 22px; line-height: 1.6; }
   kbd { background: rgba(255,255,255,0.08); border-radius: 3px; padding: 0 4px; font-size: 11px; }
 
@@ -190,12 +203,6 @@ function heatLevelsHtml(active) {
   ).join("")}</div>`;
 }
 const fmtInt = n => Math.round(n).toLocaleString();
-function fmtDensity(d) {
-  if (d === 0) return "0";
-  if (d < 1) return d.toFixed(2);
-  if (d < 100) return d.toFixed(1);
-  return fmtInt(d);
-}
 const fmtLat = (v, d = 2) => `${Math.abs(v).toFixed(d)}°${v >= 0 ? "N" : "S"}`;
 const fmtLon = (v, d = 2) => `${Math.abs(v).toFixed(d)}°${v >= 0 ? "E" : "W"}`;
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -353,6 +360,7 @@ function fetchTile(tid) {
 
 async function loadData() {
   META = await (await fetch("/api/meta")).json();
+  stateTurn = META.turn ?? null;
   loadGlobeTexture(META.textures);
   TILE = META.map.tile_size_degrees;
   HEAT_LEVELS = HEAT_LEVELS_PER_DEG2.map(x => x * TILE * TILE);
@@ -477,12 +485,12 @@ function updateCountryTints() {
 async function pollPopulation() {
   if (!heatTex || popRefreshing) return;
   try {
-    const { version } = await (await fetch("/api/population/version")).json();
+    const { version, turn } = await (await fetch("/api/population/version")).json();
+    if (turn !== stateTurn) onTurnChange(turn);
     if (version === popVersion) return;
     popRefreshing = true;
     const meta = await (await fetch("/api/meta")).json();
     META.population_map = meta.population_map;
-    META.populated_tiles = meta.populated_tiles;
     await loadPopulationGrid();
     for (const key of tileCache.keys()) if (!key.endsWith(`@${popVersion}`)) tileCache.delete(key);
     // Re-render the tile in the side panel with the new numbers.
@@ -509,7 +517,6 @@ function renderPopulation(t) {
   if (!p) return '<div class="none">No population record for this tile.</div>';
   const cov = META.population_map?.population_coverage;
   const outside = cov && (t.lat < cov.south_lat || t.lat >= cov.north_lat);
-  const total = META.population_map?.total_population;
   const level = heatLevel(p.population);
   return `
     <div class="country">${p.country
@@ -518,10 +525,7 @@ function renderPopulation(t) {
     <div class="bignum">${fmtInt(p.population)} <small>people</small></div>
     ${heatLevelsHtml(level)}
     <dl class="kv">
-      <dt>Density</dt><dd>${fmtDensity(p.density_per_km2)} people/km²</dd>
       <dt>Tile area</dt><dd>${fmtInt(p.area_km2)} km²</dd>
-      ${total && p.population ? `<dt>World share</dt><dd>${(p.population / total * 100).toPrecision(2)}%</dd>` : ""}
-      ${p.rank ? `<dt>Rank</dt><dd>#${fmtInt(p.rank)} of ${fmtInt(META.populated_tiles)} populated tiles</dd>` : ""}
     </dl>
     ${outside ? `<div class="note">Outside the source's coverage (${fmtLat(cov.south_lat, 0)}–${fmtLat(cov.north_lat, 0)}), so population is 0.</div>` : ""}`;
 }
@@ -565,8 +569,6 @@ function percentBlock(types, values, colors, emptyText) {
 }
 
 function renderTile(t, pinned) {
-  const dirs = [["nw", "n", "ne"], ["w", null, "e"], ["sw", "s", "se"]];
-
   info.innerHTML = `
     <div class="tid">${t.id}${pinned ? '<span class="pin">PINNED</span>' : ""}</div>
     <div class="sub">${fmtLat(t.lat, 1)}–${fmtLat(t.lat + TILE, 1)}, ${fmtLon(t.lon, 1)}–${fmtLon(t.lon + TILE, 1)}
@@ -574,6 +576,9 @@ function renderTile(t, pinned) {
 
     <h2>Population</h2>
     ${renderPopulation(t)}
+
+    <h2>Cohorts <small>(by year of age${stateTurn != null ? `, turn ${stateTurn}` : ""})</small></h2>
+    <div id="cohorts">${cohortsPlaceholder(pinned)}</div>
 
     <h2>Terrain <small>(landform, whole tile)</small></h2>
     ${percentBlock(META.map.terrain_types, t.terrain, TERRAIN_COLORS, "No data")}
@@ -584,14 +589,7 @@ function renderTile(t, pinned) {
     <h2>River</h2>
     ${t.river
       ? `<div class="river-line">Yes · ${t.rivers.map(n => `<span class="river-name">${esc(n)}</span>`).join(", ")}</div>`
-      : '<div class="none">No</div>'}
-
-    <h2>Neighbours</h2>
-    <div class="nbrs">${dirs.flat().map(d => {
-      if (!d) return `<button class="self" disabled style="opacity:1"><span class="dir">tile</span>${t.id}</button>`;
-      const n = t.neighbors[d];
-      return `<button ${n ? `data-tid="${n}"` : "disabled"}><span class="dir">${d}</span>${n || "—"}</button>`;
-    }).join("")}</div>`;
+      : '<div class="none">No</div>'}`;
 }
 
 async function showTile(tid) {
@@ -612,6 +610,7 @@ async function showTile(tid) {
     if (shownTid !== tid) return;  // a newer hover won the race
     renderTile(t, pinned);
     info.dataset.pinned = String(pinned);
+    if (cohortsOpen && pinned) showCohorts(tid);
     updateRiverHighlight(t.rivers || []);
   } catch (e) {
     if (shownTid === tid) info.innerHTML = `<div class="empty">Couldn't load ${tid}: ${esc(e.message)}</div>`;
@@ -626,14 +625,120 @@ function updateRiverHighlight(names) {
   }
 }
 
+// ---------- cohorts ----------
+// A tile's cohorts (people and activity hours for each year of age) are fetched only when asked for:
+// "Show age cohorts" on a pinned tile. After that the section stays open for every tile you pin, until
+// "Hide". Responses are cached per tile and turn; a new turn (polled with the population version)
+// clears the cache and reloads the open section.
+let cohortsOpen = false, stateTurn = null;
+const cohortCache = new Map();
+
+function cohortsPlaceholder(pinned) {
+  if (stateTurn == null) return '<div class="none">No cohort state (run <code>python engine.py init</code>).</div>';
+  if (!pinned) return '<div class="none">Click the tile to pin it, then show its cohorts.</div>';
+  if (cohortsOpen) return '<div class="none">Loading cohorts…</div>';
+  return '<button class="act" data-cohorts="show">Show age cohorts</button>';
+}
+
+function fetchCohorts(tid) {
+  const key = `${tid}@${stateTurn}`;
+  if (!cohortCache.has(key)) {
+    cohortCache.set(key, fetch(`/api/tile/${tid}/cohorts`).then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    }).catch(e => { cohortCache.delete(key); throw e; }));
+  }
+  return cohortCache.get(key);
+}
+
+async function showCohorts(tid) {
+  try {
+    const c = await fetchCohorts(tid);
+    const box = document.getElementById("cohorts");
+    if (box && shownTid === tid && cohortsOpen) box.innerHTML = renderCohorts(c);
+  } catch (e) {
+    const box = document.getElementById("cohorts");
+    if (box && shownTid === tid) box.innerHTML = `<div class="none">Couldn't load cohorts: ${esc(e.message)}</div>`;
+  }
+}
+
+function onTurnChange(turn) {
+  stateTurn = turn;
+  cohortCache.clear();
+  const tid = pinnedTid || hoverTid;
+  if (tid) { shownTid = null; showTile(tid); }
+}
+
+// People are fractional in the state and rounded only here: whole people, with a decimal for tiny cohorts.
+const fmtPeople = n => n >= 10 ? fmtInt(n) : n === 0 ? "0" : n.toFixed(1);
+const ageLabel = (a, ages) => a === ages - 1 ? `${a}+` : String(a);
+
+function renderCohorts(c) {
+  if (c.error) return `<div class="none">${esc(c.error)}</div>`;
+  if (!c.people) return `<div class="cohort-head"><span>Nobody lives here at turn ${c.turn}.</span>
+    <button class="act" data-cohorts="hide">Hide</button></div>`;
+  const ages = c.ages, people = c.people, acts = c.activities;
+  const total = people.reduce((a, b) => a + b, 0);
+  const max = Math.max(...people) || 1;
+
+  // People by age: one thin bar per year, a single series (the heading names it, so no legend).
+  // Each age has a full-height invisible hit area so thin or empty bars are still easy to hover.
+  const W = 304, H = 92, top = 4, base = 74, bw = W / ages;
+  const bars = people.map((p, a) => {
+    const h = p > 0 ? Math.max(1, (p / max) * (base - top)) : 0;
+    return `<rect class="bar" data-age="${a}" x="${(a * bw + 0.4).toFixed(2)}" y="${(base - h).toFixed(2)}" width="${Math.max(0.8, bw - 0.8).toFixed(2)}" height="${h.toFixed(2)}"></rect>` +
+      `<rect class="hit" data-age="${a}" x="${(a * bw).toFixed(2)}" y="${top}" width="${bw.toFixed(2)}" height="${base - top}"></rect>`;
+  }).join("");
+  const ticks = [0, 20, 40, 60, 80, 100].map(a =>
+    `<text x="${Math.min(W - 10, a * bw + bw / 2).toFixed(1)}" y="${H - 4}" text-anchor="middle">${ageLabel(a, ages)}</text>`).join("");
+
+  // Hours per day, averaged over everyone in the tile (weighted by people).
+  const mean = acts.map((_, k) => total ? people.reduce((s, p, a) => s + p * c.hours[a][k], 0) / total : 0);
+  const unassigned = Math.max(0, 24 - mean.reduce((a, b) => a + b, 0));
+  const hourRows = acts.map((name, k) => [name, mean[k]]).concat(unassigned >= 0.05 ? [["(unassigned)", unassigned]] : []);
+
+  const rows = people.map((p, a) => `<tr><td>${ageLabel(a, ages)}</td><td>${fmtPeople(p)}</td>${
+    c.hours[a].map(h => `<td>${h.toFixed(1)}</td>`).join("")}</tr>`).join("");
+
+  return `
+    <div class="cohort-head"><span><b>${fmtPeople(total)}</b> people · up to ${fmtPeople(max)} per year of age</span>
+      <button class="act" data-cohorts="hide">Hide</button></div>
+    <svg class="cohort-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="People by year of age, 0 to ${ageLabel(ages - 1, ages)}">
+      <line class="axis" x1="0" x2="${W}" y1="${base + 0.5}" y2="${base + 0.5}"></line>
+      ${bars}${ticks}
+    </svg>
+    <div class="cohort-readout" id="cohortReadout">Hover over a bar to see that age's people and hours.</div>
+    <div class="cohort-sub">Hours per person per day (tile average)</div>
+    ${hourRows.map(([name, h]) => `<div class="bar-row hours-row">
+      <span>${esc(name)}</span>
+      <div class="track"><div class="fill" style="width:${(h / 24 * 100).toFixed(1)}%"></div></div>
+      <span class="pct">${h.toFixed(1)} h</span></div>`).join("")}
+    <details><summary>Table of all ${ages} ages</summary>
+      <table class="cohort-table"><thead><tr><th>Age</th><th>People</th>${acts.map(n => `<th>${esc(n)} h</th>`).join("")}</tr></thead>
+      <tbody>${rows}</tbody></table>
+    </details>`;
+}
+
+info.addEventListener("mouseover", async e => {
+  const hit = e.target.closest(".cohort-chart .hit");
+  const out = document.getElementById("cohortReadout");
+  const pending = pinnedTid && cohortCache.get(`${pinnedTid}@${stateTurn}`);
+  if (!hit || !out || !pending) return;
+  const c = await pending, a = +hit.dataset.age;
+  info.querySelectorAll(".cohort-chart .bar.on").forEach(b => b.classList.remove("on"));
+  info.querySelector(`.cohort-chart .bar[data-age="${a}"]`)?.classList.add("on");
+  out.innerHTML = `<b>Age ${ageLabel(a, c.ages)}</b>: ${fmtPeople(c.people[a])} people<br>` +
+    c.activities.map((n, k) => `${esc(n)} ${c.hours[a][k].toFixed(1)} h`).join(" · ");
+});
+
 info.addEventListener("click", e => {
-  const b = e.target.closest("button[data-tid]");
-  if (!b) return;
-  const tid = b.dataset.tid;
-  pinnedTid = tid;
-  showTile(tid);
-  const { lat, lon } = parseTileId(tid);
-  flyTo(lat + TILE / 2, lon + TILE / 2);
+  const cb = e.target.closest("button[data-cohorts]");
+  if (cb) {
+    cohortsOpen = cb.dataset.cohorts === "show";
+    const box = document.getElementById("cohorts");
+    box.innerHTML = cohortsPlaceholder(!!pinnedTid);
+    if (cohortsOpen) showCohorts(shownTid);
+  }
 });
 
 // ---------- interaction ----------

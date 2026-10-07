@@ -2,7 +2,8 @@
 
     python convert_map.py          # once, and again whenever world_map.yaml changes
     python convert_population.py   # once, and again whenever world_population.yaml changes
-    python server.py [--port 8000] [--host 127.0.0.1]
+    python engine.py init          # optional: cohort state for /api/tile/<id>/cohorts (engine.py)
+    python server.py [--port 8000] [--host 127.0.0.1] [--state state]
 
 Then open http://localhost:8000/ in a browser.
 
@@ -15,13 +16,17 @@ Endpoints:
                            row 0 = lat 89.5, col 0 = lon -180, 0.5-degree tiles); index into map.terrain_types
     /api/cover             dominant land cover per tile, same layout; index into map.cover_types, 255 = no land
     /api/population        people per tile, 259,200 little-endian uint32 in the same order
-    /api/population/version {"version": n}; n goes up each time world_population.json changes
+    /api/population/version {"version": n, "turn": t}; n goes up each time world_population.json
+                           changes; t is the cohort state's current turn (null if there is none)
     /api/population/countries {"version": n, "codes": [...], "index": [...]}: each tile's country,
                            as 0 (none) or k = codes[k - 1], in grid order (for the same-country tint)
 
 world_population.json is reread once per second, so edits to it show up in open pages
-without restarting the server.
+without restarting the server. The cohort state's current.json (cohort_state.py) is checked just as
+often; a new turn is memory-mapped, so switching turns reads nothing until a page asks for a tile.
     /api/tile/<id>         one tile record merged with its population record (JSON)
+    /api/tile/<id>/cohorts the tile's people and activity hours by single year of age, from the
+                           engine's current turn (JSON); read on request from memory-mapped files
     /api/tile_at?lat=&lon= the tile containing a point (JSON)
 """
 
@@ -36,6 +41,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+import cohort_state
 import grid
 from convert_map import read_map
 from convert_population import FORMAT as POP_FORMAT
@@ -158,7 +164,7 @@ def load_country_names(path: str) -> dict:
 
 
 class World:
-    def __init__(self, path: str, pop_path: str, countries_path: str):
+    def __init__(self, path: str, pop_path: str, countries_path: str, state_dir: str):
         # Map columns (convert_map.py). Tile records are built on demand, so startup stays fast.
         check_fresh(path, "convert_map.py")
         t0 = time.time()
@@ -191,6 +197,19 @@ class World:
         check_grid(self.pop.meta, os.path.basename(pop_path))
         self.country_names = load_country_names(countries_path)
 
+        # Cohort state written by engine.py. Only the pointer, manifest and row list are read here;
+        # people/hours are memory-mapped and read a tile at a time by cohorts_json().
+        self.state_dir = state_dir
+        self.turn = None
+        try:
+            self.reload_state()
+        except (OSError, ValueError, KeyError) as e:
+            print(f"  couldn't load the cohort state: {e}", flush=True)
+        if self.turn:
+            print(f"  cohort state: turn {self.turn.turn}, {self.turn.manifest['populated_tiles']} tiles", flush=True)
+        else:
+            print("  cohort state: none (run: python engine.py init)", flush=True)
+
     def reload_population_forever(self):
         """Reread the population file every POP_RELOAD_SECONDS; swap in a new snapshot when it changes."""
         last_error = None
@@ -212,12 +231,55 @@ class World:
                           f"{self.pop.version}: {e}", flush=True)
                 last_error = str(e)
 
+    def reload_state(self):
+        """Switch to the turn current.json names, if it changed. Returns True on a switch."""
+        cur = cohort_state.read_current(self.state_dir)
+        if cur is None:
+            self.turn = None
+            return False
+        if self.turn is not None and os.path.basename(self.turn.path) == cur["dir"]:
+            return False
+        self.turn = cohort_state.Turn(self.state_dir, cur["dir"], mmap=True)  # the old one is unmapped when unused
+        return True
+
+    def reload_state_forever(self):
+        """Check current.json every POP_RELOAD_SECONDS and map the new turn when the engine moves on."""
+        last_error = None
+        while True:
+            time.sleep(POP_RELOAD_SECONDS)
+            try:
+                if self.reload_state():
+                    print(f"Cohort state now at turn {self.turn.turn}", flush=True)
+                last_error = None
+            except (OSError, ValueError, KeyError) as e:
+                if str(e) != last_error:
+                    print(f"  couldn't load the cohort state, keeping the last good turn: {e}", flush=True)
+                last_error = str(e)
+
+    def cohorts_json(self, tid: str):
+        """The tile's cohorts at the current turn, or None if the id isn't a tile."""
+        i = tile_index(tid)
+        if i is None:
+            return None
+        st = self.turn
+        if st is None:
+            return json.dumps({"tile": tid, "turn": None, "error": "no cohort state; run: python engine.py init"}).encode()
+        body = {"tile": tid, "turn": st.turn, "activities": st.activities,
+                "hours_unit": st.manifest["hours_unit"], "ages": cohort_state.AGES,
+                "last_age_open_ended": True, "people": None, "hours": None}
+        r = st.row(i)
+        if r is not None:
+            body["people"] = st.people[r].tolist()
+            body["hours"] = [[round(h, 4) for h in row] for row in st.hours[r].tolist()]
+        return json.dumps(body, separators=(",", ":")).encode()
+
     def meta_json(self):
         pop = self.pop
         return json.dumps({
             "map": self.meta, "rivers": self.rivers, "population_map": pop.meta,
             "textures": [{"width": w, "url": f"/earth/{w}.jpg"} for w in self.textures],
             "populated_tiles": pop.populated_tiles, "population_version": pop.version,
+            "turn": self.turn.turn if self.turn else None,
         }).encode()
 
     def tile_json(self, tid: str):
@@ -296,9 +358,17 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return self.wfile.write(pop.grid)
         if path == "/api/population/version":
-            return self.send_json(json.dumps({"version": w.pop.version}).encode())
+            turn = w.turn.turn if w.turn else None
+            return self.send_json(json.dumps({"version": w.pop.version, "turn": turn}).encode())
         if path == "/api/population/countries":
             return self.send_json(w.pop.country_json)
+        m = re.fullmatch(r"/api/tile/([^/]+)/cohorts", path)
+        if m:
+            tid = m.group(1).upper()
+            body = w.cohorts_json(tid) if TILE_ID_RE.match(tid) else None
+            if body is None:
+                return self.send_json(json.dumps({"error": f"no tile {tid!r}"}).encode(), 404)
+            return self.send_json(body)
         if path.startswith("/api/tile/"):
             tid = path[len("/api/tile/"):].upper()
             body = w.tile_json(tid) if TILE_ID_RE.match(tid) else None
@@ -322,10 +392,12 @@ def main():
     ap.add_argument("--map", default=os.path.join(ROOT, "world_map.json"))
     ap.add_argument("--population", default=os.path.join(ROOT, "world_population.json"))
     ap.add_argument("--countries", default=os.path.join(ROOT, "ne_10m_admin_0_countries.geojson"))
+    ap.add_argument("--state", default=os.path.join(ROOT, "state"), help="cohort state written by engine.py")
     args = ap.parse_args()
 
-    Handler.world = World(args.map, args.population, args.countries)
+    Handler.world = World(args.map, args.population, args.countries, args.state)
     threading.Thread(target=Handler.world.reload_population_forever, daemon=True).start()
+    threading.Thread(target=Handler.world.reload_state_forever, daemon=True).start()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"Serving on http://{args.host}:{args.port}/  (Ctrl+C to stop)", flush=True)
     try:

@@ -52,6 +52,10 @@ The server does no rendering. It hands the browser compact data, and the browser
 | `static/index.html` | The globe viewer page (≈650 lines). |
 | `convert_map.py` | Converts `world_map.yaml` → `world_map.json`, and verifies the result. Also defines the JSON format id and the `MapColumns` reader the server uses. |
 | `convert_population.py` | Converts `world_population.yaml` → `world_population.json`, and verifies the result. Also defines the JSON format id the server checks. |
+| `engine.py` | The turn engine, run as its own process: `init` writes turn 0 of the cohort state, `step` advances it a year at a time, `verify` checks the current turn's checksum (§4.6). |
+| `cohort_state.py` | Reads and writes the cohort state (`state/`): the format id, atomic turn writing, memory-mapped reading, checksums and pruning. Shared by `engine.py` and the server. |
+| `state/` | The cohort state written by `engine.py`: `current.json` plus one `turn_NNNNN/` directory per recent turn (see `cohort_state_schema.md`). Generated; not committed. |
+| `gen_oecd_capitals.py` | Writes the scenario `world_population_oecd_capitals.yaml`/`.json`: 200 people in each OECD member's capital tile, 0 elsewhere. |
 | `demo_delhi.py` | Demo: rewrites `world_population.json` every second with a random population for the Delhi tile, to show live updating. Restores the original value on Ctrl+C. |
 | `grid.py` | The tile grid (0.5° tiles, ids, lookups, flat index, neighbours), shared by every script and the server. `static/index.html` has a JavaScript copy. |
 | `world_map.yaml` | Landform (`terrain`), cover including ice (`cover`), rivers and neighbour links for 259,200 tiles (see `world_map_schema.md`). Source for the JSON; the server doesn't read it. |
@@ -180,13 +184,14 @@ just keeps serving the last good data and tries again a second later.
 | `/` | `static/index.html` | the page |
 | `/earth.jpg` | the default globe texture, `map.source_image` (browser may cache for 1 h) | fallback if no sizes are listed |
 | `/earth/<width>.jpg` | the globe texture at one of the sizes listed in `/api/meta` → `textures` (cached 1 h) | globe surface |
-| `/api/meta` | JSON: map metadata, all rivers, population metadata, `populated_tiles`, `population_version` | page startup, and after each population change |
+| `/api/meta` | JSON: map metadata, all rivers, population metadata, `populated_tiles`, `population_version`, `turn` (the cohort state's current turn, or `null`) | page startup, and after each population change |
 | `/api/terrain` | 259,200 bytes, dominant landform index per tile (into `map.terrain_types`) | terrain overlay |
 | `/api/cover` | 259,200 bytes, dominant cover index per tile (into `map.cover_types`), 255 = open sea (no cover) | cover overlay |
 | `/api/population` | 259,200 `uint32` people counts; header `X-Population-Version` | heatmap |
-| `/api/population/version` | `{"version": n}` | the page's once-a-second poll |
+| `/api/population/version` | `{"version": n, "turn": t}`: the population file's version and the cohort state's current turn | the page's once-a-second poll |
 | `/api/population/countries` | `{"version": n, "codes": [...], "index": [...]}`: each tile's country as 0 (none) or k → `codes[k − 1]`, in grid order (≈650 KB) | same-country heatmap tint |
 | `/api/tile/<id>` | JSON: the tile record merged with its population fields and country name | side panel, on hover |
+| `/api/tile/<id>/cohorts` | JSON: the tile's `people` (101 values) and `hours` (101 × activities) at the current turn, plus `turn`, `activities`, `hours_unit`; `people`/`hours` are `null` if nobody lives there | the Cohorts section, only after "Show age cohorts" |
 | `/api/tile_at?lat=&lon=` | same as above, for the tile containing a point | convenience for scripts; the page doesn't use it |
 
 Everything except the texture is sent with `Cache-Control: no-cache`, so the browser always asks for
@@ -205,6 +210,33 @@ A `/api/tile/N285E0770` response looks like:
 ```
 
 ---
+
+### 4.6 The cohort state and the engine
+
+The game state below the tile totals is kept by a separate process, `engine.py`, which writes it to
+`state/` as NumPy `.npy` arrays plus a `manifest.json` per turn (format: `cohort_state_schema.md`):
+
+```
+engine.py step ──► state/.tmp_turn_00008/ ──rename──► state/turn_00008/ ──► state/current.json (atomic replace)
+                                                                                │ checked every 1 s
+server.py ◄── memory-maps people.npy / hours.npy of the turn current.json names ◄┘
+```
+
+- **The server reads almost nothing.** Switching turns reads only `current.json`, the manifest and
+  `tiles.npy` (the populated-tile list). The big arrays are memory-mapped, so a cohort request reads just
+  that tile's rows from disk (about 25 KB). A full-world state is about 120 MB per turn.
+- **Turns are never changed after they are written**, so the server can read one while the engine
+  writes the next. The engine keeps the newest 3 turn directories and deletes older ones. Windows won't
+  delete a file another process has mapped, so a turn the server still has open is skipped and removed
+  on a later step.
+- **One turn = one year.** `engine.py step` currently applies only ageing: every cohort moves up a
+  year, the 99-year-olds join the open-ended 100+ group (their hours are averaged, weighted by people),
+  and age 0 is left empty (no births or deaths yet). The activity list is a placeholder in `engine.py`.
+- **Determinism.** Each manifest carries a SHA-256 checksum of the arrays; `engine.py verify` rechecks
+  it. The yearly step uses only elementwise arithmetic, so it doesn't depend on how NumPy orders sums.
+- **The heatmap still comes from `world_population.json`,** not from the cohort state. Initialise the
+  state from the same population file the server shows (`engine.py init --population ...`) to keep the
+  two consistent.
 
 ## 5. The page (`static/index.html`)
 
@@ -318,14 +350,20 @@ Details:
 - **Races.** If you move to a new tile before the previous response arrives, the old response is
   ignored (`shownTid !== tid`).
 - **Pinning.** A click (not a drag) pins the tile, so the panel stops following the mouse. Click it
-  again or press Esc to unpin. Clicking a neighbour button pins that tile and flies the camera there.
+  again or press Esc to unpin. The "Go to" box also pins the tile it flies to.
 
 The side panel shows, top to bottom: tile id and bounds with cursor position; **Population** (country,
-people, heat level, density, area, world share, rank, and a note for tiles outside the data's 89.1°S–89.1°N
-coverage); **Terrain** (the landform) and **Cover** (what is on the land and frozen water; "Open water only" when
+people, heat level, tile area, and a note for tiles outside the data's 89.1°S–89.1°N coverage);
+**Cohorts** (see below); **Terrain** (the landform) and **Cover** (what is on the land and frozen water; "Open water only" when
 there is none), each as a stacked bar plus a bar per non-zero type (`percentBlock()`); **River**
-(yes/no and names);
-**Neighbours** (3 × 3 grid of buttons).
+(yes/no and names).
+
+**Cohorts** are loaded only on request. On a pinned tile the section shows a "Show age cohorts" button;
+clicking it fetches `/api/tile/<id>/cohorts` and draws people by year of age (hover a bar for that
+age's people and hours), the tile's average hours per person per day for each activity, and a
+collapsible table of all 101 ages. The section then stays open for every tile you pin until you click
+"Hide". Responses are cached per tile and turn. People counts are fractions in the state and are
+rounded only for display.
 
 ### 5.6 Live population updates
 
@@ -337,6 +375,7 @@ every 1 s:  GET /api/population/version
                            drop stale cached tiles
                            re-render the hovered or pinned tile
                            flash "Data version n · loaded hh:mm:ss" in the legend
+            turn changed? ──► drop cached cohorts, re-render the panel (reloading open cohorts)
 ```
 
 So the end-to-end delay from saving the file to seeing it on screen is at most about two seconds
@@ -348,8 +387,8 @@ restarts without special handling, and one tiny request per second is negligible
 
 Three.js's `OrbitControls` handle drag-to-rotate and scroll-to-zoom, with panning disabled. Each frame,
 rotation and zoom speed are scaled by the camera's altitude, so the globe doesn't whip past when
-you're close to the surface. Double-click, the "Go to" box (`N275E0865` or `27.9, 86.9`) and neighbour
-buttons all use `flyTo()`, which swings the camera along an arc and eases its altitude over 1.2 s.
+you're close to the surface. Double-click and the "Go to" box (`N275E0865` or `27.9, 86.9`) both use
+`flyTo()`, which swings the camera along an arc and eases its altitude over 1.2 s.
 
 ---
 
@@ -360,6 +399,17 @@ buttons all use `flyTo()`, which swings the camera along an arc and eases its al
 ```
 python server.py            # then open http://localhost:8000/
 ```
+
+**Run the turn engine (cohorts)**
+
+```
+python engine.py init --population world_population.json   # turn 0, a flat age distribution
+python engine.py step                                      # advance one year (--turns N for more)
+python engine.py verify                                    # recheck the current turn's checksum
+```
+
+The running server and any open page pick up each new turn within about two seconds. To start over,
+delete `state/` and run `init` again.
 
 **After regenerating the population data**
 
@@ -385,8 +435,8 @@ Then restart the server.
 python demo_delhi.py        # Ctrl+C to stop; restores Delhi's real value
 ```
 
-**When do I need to restart the server?** Only after changing `server.py`, `world_map.json` or the
-GeoJSON. Changes to `static/index.html` need only a browser refresh; changes to
+**When do I need to restart the server?** Only after changing `server.py`, `cohort_state.py`,
+`world_map.json` or the GeoJSON. Changes to `static/index.html` need only a browser refresh; changes to
 `world_population.json` need nothing.
 
 ---
@@ -410,5 +460,6 @@ GeoJSON. Changes to `static/index.html` need only a browser refresh; changes to
 - **Needs internet for Three.js.** The page loads Three.js from a CDN. For offline use, download
   `three.module.js` and `OrbitControls.js` into `static/` and point the import map at them; the
   server would then need a route to serve them.
+- **NumPy is now required** by the server and the engine (for the cohort state).
 - **Thin lines.** WebGL draws lines one pixel wide on most systems, so rivers and the grid look thin
   on high-resolution screens.

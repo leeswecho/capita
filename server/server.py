@@ -11,6 +11,8 @@ Endpoints:
     /                      the globe viewer (static/index.html)
     /earth.jpg             the globe texture (map.source_image)
     /earth/<width>.jpg     the same image at another size (e.g. /earth/16384.jpg); /api/meta lists them
+    /globe/<level>/<x>_<y>.jpg  one piece of the detail-tile pyramid (make_globe_tiles.py), shown when
+                           zoomed in; /api/meta -> globe_tiles describes it
     /api/meta              map metadata, all rivers and the available texture sizes (JSON)
     /api/terrain           dominant landform per tile, 259,200 bytes in grid order (grid.py:
                            row 0 = lat 89.5, col 0 = lon -180, 0.5-degree tiles); index into map.terrain_types
@@ -59,6 +61,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 POPCOUNT = np.array([bin(i).count("1") for i in range(256)], dtype=np.uint8)   # set bits per byte value
 POP_RELOAD_SECONDS = 1.0
 STATIC = os.path.join(ROOT, "static")
+GLOBE_TILES = os.path.join(ROOT, "globe_tiles")
 
 
 def check_grid(meta: dict, name: str):
@@ -179,6 +182,15 @@ class World:
         self.textures = find_textures(self.meta["source_image"])
         print(f"  globe textures: {', '.join(f'{w}px' for w in self.textures) or 'only ' + self.meta['source_image']}",
               flush=True)
+        # Optional detail-tile pyramid for zoomed-in views (make_globe_tiles.py).
+        try:
+            with open(os.path.join(GLOBE_TILES, "tiles.json"), encoding="utf-8") as f:
+                self.globe_tiles = json.load(f)
+            print(f"  detail tiles: {self.globe_tiles['levels']} levels, up to {self.globe_tiles['width']:,} px "
+                  "around the world", flush=True)
+        except (OSError, ValueError):
+            self.globe_tiles = None
+            print("  detail tiles: none (run make_globe_tiles.py)", flush=True)
 
         # Dense dominant-type grids for the client's terrain and cover overlays (first type wins a tie;
         # 255 = no cover, i.e. a tile with no land).
@@ -316,6 +328,7 @@ class World:
         return json.dumps({
             "map": self.meta, "rivers": self.rivers, "population_map": pop.meta,
             "textures": [{"width": w, "url": f"/earth/{w}.jpg"} for w in self.textures],
+            "globe_tiles": self.globe_tiles,
             "populated_tiles": pop.populated_tiles, "population_version": pop.version,
             "turn": self.turn.turn if self.turn else None,
         }).encode()
@@ -351,9 +364,9 @@ class World:
 class Handler(BaseHTTPRequestHandler):
     world: World = None  # set in main()
 
-    def log_message(self, fmt, *args):  # quieter: skip per-hover tile requests and version polls
+    def log_message(self, fmt, *args):  # quieter: skip per-hover tile requests, version polls and detail tiles
         line = str(args[0]) if args else ""
-        if "/api/tile" not in line and "/api/population/version" not in line:
+        if "/api/tile" not in line and "/api/population/version" not in line and "/globe/" not in line:
             super().log_message(fmt, *args)
 
     def send(self, status: int, body: bytes, ctype: str, cache: bool = False):
@@ -383,6 +396,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_file(os.path.join(STATIC, "index.html"), "text/html; charset=utf-8")
         if path == "/earth.jpg":
             return self.send_file(os.path.join(ROOT, w.meta["source_image"]), "image/jpeg", cache=True)
+        m = re.fullmatch(r"/globe/(\d{1,2})/(\d{1,4})_(\d{1,4})\.jpg", path)
+        if m:
+            return self.send_file(os.path.join(GLOBE_TILES, m.group(1), f"{m.group(2)}_{m.group(3)}.jpg"),
+                                  "image/jpeg", cache=True)
         m = re.fullmatch(r"/earth/(\d+)\.jpg", path)
         if m:
             name = w.textures.get(int(m.group(1)))   # only the sizes find_textures() listed

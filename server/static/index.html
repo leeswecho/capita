@@ -272,8 +272,134 @@ function loadGlobeTexture(textures) {
     globe.material.needsUpdate = true;
     document.getElementById("loading")?.remove();
   });
+  setupDetail(META.globe_tiles, width);
   document.getElementById("texInfo").textContent =
-    `Globe image ${width ? `${width.toLocaleString()} px wide` : "default"} (graphics card limit ${gpuMax.toLocaleString()} px)`;
+    `Globe image ${width ? `${width.toLocaleString()} px wide` : "default"} (graphics card limit ${gpuMax.toLocaleString()} px)` +
+    (detailMinLevel < (DETAIL?.levels ?? 0)
+      ? ` · detail tiles up to ${DETAIL.width.toLocaleString()} px when zoomed in` : "");
+}
+
+// ---------- detail tiles (level of detail) ----------
+// When zoomed in, the globe image is overlaid patch by patch with sharper pieces of a tile pyramid
+// (/globe/<level>/<x>_<y>.jpg, made by make_globe_tiles.py). Level L covers the world with
+// 2^(L+1) x 2^L square pieces of tile_px pixels, each 180 / 2^L degrees across, so every level doubles
+// the detail. Only levels sharper than the base globe image are used.
+// Every frame, updateDetail() walks the pyramid from level 0, skipping pieces beyond the horizon or
+// off screen, and goes one level finer wherever a piece would cover more screen pixels than it has.
+// The chosen pieces are loaded a few at a time and drawn as sphere patches just above the base globe;
+// until a piece arrives, its nearest loaded coarser piece (or the base globe) shows instead. Pieces
+// not used for a while are dropped to save memory. Add ?detail=0 to the page URL to turn this off.
+let DETAIL = null, detailMinLevel = 0, detailFrame = 0, detailLoads = 0;
+const detail = new Map();          // "L/x/y" -> { mesh, state: "loading" | "ready" | "failed", used }
+const detailGroup = new THREE.Group();
+scene.add(detailGroup);
+const DETAIL_MAX_LOADS = 6;        // pieces downloading at once
+const DETAIL_CACHE = 160;          // pieces kept (about 2.4 MB of graphics memory each)
+const D2R = Math.PI / 180;
+const detailFrustum = new THREE.Frustum(), detailMatrix = new THREE.Matrix4(), detailSphere = new THREE.Sphere();
+
+function setupDetail(info, baseWidth) {
+  if (!info || new URLSearchParams(location.search).get("detail") === "0") return;
+  DETAIL = info;
+  const w0 = info.tile_px * info.level0.cols;
+  detailMinLevel = 0;
+  while (detailMinLevel < info.levels && w0 * 2 ** detailMinLevel <= (baseWidth || 0)) detailMinLevel++;
+}
+
+function detailPiece(L, x, y) {
+  const key = `${L}/${x}/${y}`;
+  let e = detail.get(key);
+  if (e) return e;
+  const deg = 180 / 2 ** L;
+  const geo = new THREE.SphereGeometry(1.0001 + L * 0.00002, 16, 16,
+    (x * deg) * D2R, deg * D2R, (y * deg) * D2R, deg * D2R);   // lon from 180 W, colatitude from the pole
+  const mat = new THREE.MeshPhongMaterial({ specular: 0x222222, shininess: 12 });
+  e = { mesh: new THREE.Mesh(geo, mat), state: "new", used: 0 };
+  e.mesh.visible = false;
+  detailGroup.add(e.mesh);
+  detail.set(key, e);
+  return e;
+}
+
+function loadDetailPiece(L, x, y, e) {
+  e.state = "loading";
+  detailLoads++;
+  const url = DETAIL.url.replace("{level}", L).replace("{x}", x).replace("{y}", y);
+  new THREE.TextureLoader().load(url, tex => {
+    detailLoads--;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    const g = DETAIL.gutter || 0, side = DETAIL.tile_px + 2 * g;     // sample inside the border pixels
+    tex.offset.set(g / side, g / side);
+    tex.repeat.set(DETAIL.tile_px / side, DETAIL.tile_px / side);
+    if (!detail.has(`${L}/${x}/${y}`)) { tex.dispose(); return; }   // dropped while loading
+    e.mesh.material.map = tex;
+    e.mesh.material.needsUpdate = true;
+    e.state = "ready";
+  }, undefined, () => { detailLoads--; e.state = "failed"; });
+}
+
+function updateDetail() {
+  if (!DETAIL || detailMinLevel >= DETAIL.levels) return;
+  detailFrame++;
+  const d = camera.position.length();
+  const camDir = camera.position.clone().normalize();
+  const horizon = Math.acos(Math.min(1, 1 / d));                  // angular radius of the visible cap
+  const pxPerRad = renderer.domElement.clientHeight / (2 * Math.tan(camera.fov * D2R / 2));
+  camera.updateMatrixWorld();
+  detailMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+  detailFrustum.setFromProjectionMatrix(detailMatrix);
+  const wanted = [];
+  const visit = (L, x, y) => {
+    const deg = 180 / 2 ** L;
+    const c = latLonToVec(90 - (y + 0.5) * deg, -180 + (x + 0.5) * deg);
+    const radius = deg * D2R * Math.SQRT1_2;                         // centre-to-corner angle (upper bound)
+    const ang = Math.acos(THREE.MathUtils.clamp(c.dot(camDir), -1, 1));
+    if (ang - radius > horizon) return;                              // wholly beyond the horizon
+    detailSphere.set(c, 2 * Math.sin(radius / 2));
+    if (!detailFrustum.intersectsSphere(detailSphere)) return;       // off screen
+    const near = Math.max(0, ang - radius);
+    const dist = Math.sqrt(d * d + 1 - 2 * d * Math.cos(near));      // camera to the piece's nearest point
+    const screenPx = deg * D2R / Math.max(dist, 1e-4) * pxPerRad;    // pixels the piece spans on screen
+    if (screenPx > DETAIL.tile_px && L < DETAIL.levels - 1) {
+      for (let j = 0; j < 2; j++) for (let i = 0; i < 2; i++) visit(L + 1, 2 * x + i, 2 * y + j);
+    } else if (L >= detailMinLevel) {
+      wanted.push({ L, x, y, dist });
+    }
+  };
+  for (let x = 0; x < DETAIL.level0.cols; x++) visit(0, x, 0);
+
+  // Show each wanted piece, or its nearest loaded ancestor while it loads; queue the missing ones.
+  const show = new Set(), missing = [];
+  for (const w of wanted) {
+    const e = detailPiece(w.L, w.x, w.y);
+    e.used = detailFrame;
+    if (e.state === "ready") { show.add(e); continue; }
+    if (e.state === "new") missing.push({ ...w, e });
+    for (let L = w.L - 1, x = w.x >> 1, y = w.y >> 1; L >= detailMinLevel; L--, x >>= 1, y >>= 1) {
+      const a = detail.get(`${L}/${x}/${y}`);
+      if (a && a.state === "ready") { a.used = detailFrame; show.add(a); break; }
+    }
+  }
+  for (const e of detail.values()) e.mesh.visible = show.has(e);
+  missing.sort((a, b) => a.L - b.L || a.dist - b.dist);             // coarse and near first
+  for (const m of missing) {
+    if (detailLoads >= DETAIL_MAX_LOADS) break;
+    loadDetailPiece(m.L, m.x, m.y, m.e);
+  }
+
+  // Drop the least recently used pieces beyond the cache size (never one in use this frame).
+  if (detail.size > DETAIL_CACHE) {
+    const old = [...detail].filter(([, e]) => e.used < detailFrame && e.state !== "loading")
+      .sort((a, b) => a[1].used - b[1].used);
+    for (const [key, e] of old.slice(0, detail.size - DETAIL_CACHE)) {
+      detailGroup.remove(e.mesh);
+      e.mesh.geometry.dispose();
+      e.mesh.material.map?.dispose();
+      e.mesh.material.dispose();
+      detail.delete(key);
+    }
+  }
 }
 
 // Atmosphere glow (fresnel rim on a slightly larger back-facing sphere)
@@ -1023,6 +1149,7 @@ function frame(now) {
     statusEl.textContent = `${ll ? `${fmtLat(ll.lat)}, ${fmtLon(ll.lon)} · ${tileAt(ll.lat, ll.lon)} · ` : ""}eye alt ${Math.round(alt * EARTH_KM).toLocaleString()} km`;
   }
 
+  updateDetail();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }

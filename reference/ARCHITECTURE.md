@@ -68,6 +68,8 @@ The server does no rendering. It hands the browser compact data, and the browser
 | `ne_10m_populated_places_simple.geojson` | Natural Earth populated places, read by `gen_capitals_seed.py` (downloaded by it if missing). |
 | `world_population.yaml` | The full modern world per tile (see `world_population_schema.md`), the source of `world_population_current.json`. Kept in `reference/`; the server doesn't read it. |
 | `ne_10m_admin_0_countries.geojson` | Used only to turn country codes (`IND`) into names (`India`). Optional. |
+| `make_globe_tiles.py` | Cuts the 21,600 × 10,800 Blue Marble image (`data/world.200407.3x21600x10800.jpg`, outside the repo) into the detail-tile pyramid in `globe_tiles/` (§5.3). |
+| `globe_tiles/` | The detail-tile pyramid: `tiles.json` plus `<level>/<x>_<y>.jpg`, 682 pieces in 5 levels (25 MB). Optional: without it the page shows only the single globe image. |
 | `bmng_200407_4096x2048.jpg`, `bmng_200407_8192x4096.jpg`, `bmng_200407_16384x8192.jpg` | The image wrapped around the globe (NASA Blue Marble, July 2004) at three sizes; the page loads the largest the graphics card supports (§5.2). The 8192 one is `map.source_image` and the default. |
 | `gen_map.py`, `etopo_blocks.py`, `glwd.py`, `validate_map.py` | Build `world_map.yaml` from the datasets in `data/` (elevation blocks and GLWD wetland shares are cached there; see `world_map_generation.md`), and check it. |
 | `gen_population.py`, `ghsl.py` | Build `world_population.yaml` from the GHSL population raster in `data/` (see `world_population_schema.md`). |
@@ -189,6 +191,7 @@ just keeps serving the last good data and tries again a second later.
 | `/` | `static/index.html` | the page |
 | `/earth.jpg` | the default globe texture, `map.source_image` (browser may cache for 1 h) | fallback if no sizes are listed |
 | `/earth/<width>.jpg` | the globe texture at one of the sizes listed in `/api/meta` → `textures` (cached 1 h) | globe surface |
+| `/globe/<level>/<x>_<y>.jpg` | one piece of the detail-tile pyramid; `/api/meta` → `globe_tiles` describes the pyramid (cached 1 h) | sharper imagery when zoomed in |
 | `/api/meta` | JSON: map metadata, all rivers, population metadata, `populated_tiles`, `population_version`, `turn` (the cohort state's current turn, or `null`) | page startup, and after each population change |
 | `/api/terrain` | 259,200 bytes, dominant landform index per tile (into `map.terrain_types`) | terrain overlay |
 | `/api/cover` | 259,200 bytes, dominant cover index per tile (into `map.cover_types`), 255 = open sea (no cover) | cover overlay |
@@ -274,6 +277,7 @@ The globe is built from several spheres nested a hair apart, each drawn on top o
 | Layer | Radius | What it is |
 |-------|--------|------------|
 | Globe | 1.0000 | the Blue Marble image (size chosen below), lit by a light that follows the camera (always daylight where you look, like Google Earth) |
+| Detail tiles | 1.0001–1.00018 | sharper patches of the same image where you're zoomed in (§5.3); finer levels sit slightly higher |
 | Terrain overlay | 1.0005 | a 720 × 360 image, one pixel per tile, coloured by dominant landform; off by default |
 | Cover overlay | 1.0006 | the same for the dominant cover (including ice); open-sea tiles are transparent; off by default |
 | Population heatmap | 1.0007 | a 720 × 360 image, one pixel per tile, off-white with varying transparency (§5.4) |
@@ -304,6 +308,26 @@ them in `/api/meta` as `textures`. `chooseTexture()` picks the largest that fits
 takes about 700 MB of graphics memory, against about 180 MB for 8192. The side panel's last line shows
 which size was loaded and the card's limit. To add a size, save another 2:1 copy with the same name
 pattern and restart the server.
+
+**Detail tiles (level of detail).** A single image can't be sharper than the card's limit, so for
+zoomed-in views the page also uses a pyramid of small pieces (`globe_tiles/`, made by
+`make_globe_tiles.py` from the 21,600 px source). Level L covers the world with 2^(L+1) × 2^L square
+pieces of 675 px, each 180 / 2^L degrees across: level 0 is 1,350 px around the world and level 4 is
+the full 21,600 px. Only levels sharper than the base globe image are used: levels 3–4 over an 8,192 px
+base, only level 4 over a 16,384 px base.
+- **Choosing pieces:** every frame, `updateDetail()` walks the pyramid from level 0, skipping pieces
+  beyond the horizon or off screen, and goes a level finer wherever a piece would cover more screen
+  pixels than it has (675). The chosen pieces are drawn as sphere patches just above the base globe.
+- **Loading:** missing pieces load six at a time, coarse and near ones first. Until a piece arrives, its
+  nearest loaded coarser piece shows, or the base globe. Up to 160 pieces are kept (about 2.4 MB of
+  graphics memory each); the least recently used are dropped beyond that.
+- **No seams:** each piece is 679 px with a 2 px border copied from its neighbours (wrapping across the
+  180° line), and the page samples only the inner 675 px, so blending at piece edges uses the real
+  neighbouring pixels.
+- **Turning it off:** add `?detail=0` to the page URL, for example to compare.
+- **Limit:** the source is about 1.85 km per pixel at the equator, so at the closest zoom (about 190 km
+  up) the image is still magnified several times. A sharper source (NASA's 500 m Blue Marble, 4× the
+  pixels) would only need a new pyramid with more levels.
 
 ### 5.4 The heatmap
 

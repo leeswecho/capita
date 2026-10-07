@@ -1,0 +1,12 @@
+{
+  "tile_px": 675,
+  "gutter": 2,
+  "levels": 5,
+  "level0": {
+    "cols": 2,
+    "rows": 1
+  },
+  "width": 21600,
+  "source": "world.200407.3x21600x10800.jpg",
+  "url": "/globe/{level}/{x}_{y}.jpg"
+}

@@ -3,7 +3,7 @@
     python convert_map.py          # once, and again whenever world_map.yaml changes
     python convert_population.py   # once, and again whenever world_population.yaml changes
     python ../engine/engine.py init   # optional: cohort state for /api/tile/<id>/cohorts
-    python server.py [--port 8000] [--host 127.0.0.1] [--state state]
+    python server.py [--port 8000] [--host 127.0.0.1] [--state ../state]
 
 Then open http://localhost:8000/ in a browser.
 
@@ -392,7 +392,8 @@ def main():
     ap.add_argument("--map", default=os.path.join(ROOT, "world_map.json"))
     ap.add_argument("--population", default=os.path.join(ROOT, "world_population.json"))
     ap.add_argument("--countries", default=os.path.join(ROOT, "ne_10m_admin_0_countries.geojson"))
-    ap.add_argument("--state", default=os.path.join(ROOT, "state"), help="cohort state written by engine/engine.py")
+    ap.add_argument("--state", default=os.path.join(os.path.dirname(ROOT), "state"),
+                    help="cohort state written by engine/engine.py (default: the top-level state/ folder)")
     args = ap.parse_args()
 
     Handler.world = World(args.map, args.population, args.countries, args.state)

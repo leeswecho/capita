@@ -1,11 +1,11 @@
 """Turn engine: creates and advances the cohort state that server.py displays.
 
-    python engine/engine.py init [--population server/world_population.json] [--state server/state]
-    python engine/engine.py step [--turns 1] [--state server/state]
-    python engine/engine.py verify [--state server/state]
+    python engine/engine.py init [--population server/world_population.json] [--state state]
+    python engine/engine.py step [--turns 1] [--state state]
+    python engine/engine.py verify [--state state]
 
 (paths shown from the repository root; the script works from any directory). By default it uses the
-state directory and population file in ../server, the ones server.py reads.
+top-level state/ directory, which server.py also reads, and the population file in server/.
 
 `init` writes turn 0: every populated tile of the population file gets its people spread evenly over
 the 101 ages, and every cohort gets the same placeholder activity hours (ACTIVITIES). `step` advances
@@ -25,7 +25,9 @@ import sys
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SERVER = os.path.join(os.path.dirname(HERE), "server")
+REPO = os.path.dirname(HERE)
+SERVER = os.path.join(REPO, "server")
+STATE = os.path.join(REPO, "state")
 sys.path.insert(0, SERVER)   # cohort_state.py and grid.py live with the server, which uses them too
 
 import cohort_state as cs  # noqa: E402
@@ -96,7 +98,7 @@ def verify(args):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--state", default=os.path.join(SERVER, "state"))
+    ap.add_argument("--state", default=STATE)
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("init", help="write turn 0")
     p.add_argument("--population", default=os.path.join(SERVER, "world_population.json"),

@@ -52,9 +52,9 @@ The server does no rendering. It hands the browser compact data, and the browser
 | `static/index.html` | The globe viewer page (≈650 lines). |
 | `convert_map.py` | Converts `world_map.yaml` → `world_map.json`, and verifies the result. Also defines the JSON format id and the `MapColumns` reader the server uses. |
 | `convert_population.py` | Converts `world_population.yaml` → `world_population.json`, and verifies the result. Also defines the JSON format id the server checks. |
-| `../engine/engine.py` | The turn engine, in its own directory and run as its own process: `init` writes turn 0 of the cohort state, `step` advances it a year at a time, `verify` checks the current turn's checksum (§4.6). It imports `cohort_state.py` and `grid.py` from `server/`, and by default uses `server/state/` and `server/world_population.json`. |
-| `cohort_state.py` | Reads and writes the cohort state (`state/`): the format id, atomic turn writing, memory-mapped reading, checksums and pruning. Shared by `engine/engine.py` and the server. |
-| `state/` | The cohort state written by `engine/engine.py`: `current.json` plus one `turn_NNNNN/` directory per recent turn (see `cohort_state_schema.md`). Generated; not committed. |
+| `../engine/engine.py` | The turn engine, in its own directory and run as its own process: `init` writes turn 0 of the cohort state, `step` advances it a year at a time, `verify` checks the current turn's checksum (§4.6). It imports `cohort_state.py` and `grid.py` from `server/`, and by default uses the top-level `state/` folder and `server/world_population.json`. |
+| `cohort_state.py` | Reads and writes the cohort state (`../state/`): the format id, atomic turn writing, memory-mapped reading, checksums and pruning. Shared by `engine/engine.py` and the server. |
+| `../state/` | The cohort state written by `engine/engine.py`, in its own top-level folder next to `server/` and `engine/`: `current.json` plus one `turn_NNNNN/` directory per recent turn (see `cohort_state_schema.md`). Generated; not committed. |
 | `gen_oecd_capitals.py` | Writes the scenario `world_population_oecd_capitals.yaml`/`.json`: 200 people in each OECD member's capital tile, 0 elsewhere. |
 | `demo_delhi.py` | Demo: rewrites `world_population.json` every second with a random population for the Delhi tile, to show live updating. Restores the original value on Ctrl+C. |
 | `grid.py` | The tile grid (0.5° tiles, ids, lookups, flat index, neighbours), shared by every script and the server. `static/index.html` has a JavaScript copy. |
@@ -214,7 +214,7 @@ A `/api/tile/N285E0770` response looks like:
 ### 4.6 The cohort state and the engine
 
 The game state below the tile totals is kept by a separate process, `engine/engine.py`, which writes it to
-`server/state/` as NumPy `.npy` arrays plus a `manifest.json` per turn (format: `cohort_state_schema.md`):
+the top-level `state/` folder as NumPy `.npy` arrays plus a `manifest.json` per turn (format: `cohort_state_schema.md`):
 
 ```
 engine.py step ──► state/.tmp_turn_00008/ ──rename──► state/turn_00008/ ──► state/current.json (atomic replace)
@@ -409,7 +409,7 @@ python ../engine/engine.py verify    # recheck the current turn's checksum
 ```
 
 The running server and any open page pick up each new turn within about two seconds. To start over,
-delete `state/` and run `init` again.
+delete the top-level `state/` folder and run `init` again.
 
 **After regenerating the population data**
 

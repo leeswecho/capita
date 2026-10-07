@@ -52,9 +52,9 @@ The server does no rendering. It hands the browser compact data, and the browser
 | `static/index.html` | The globe viewer page (≈650 lines). |
 | `convert_map.py` | Converts `world_map.yaml` → `world_map.json`, and verifies the result. Also defines the JSON format id and the `MapColumns` reader the server uses. |
 | `convert_population.py` | Converts `world_population.yaml` → `world_population.json`, and verifies the result. Also defines the JSON format id the server checks. |
-| `engine.py` | The turn engine, run as its own process: `init` writes turn 0 of the cohort state, `step` advances it a year at a time, `verify` checks the current turn's checksum (§4.6). |
-| `cohort_state.py` | Reads and writes the cohort state (`state/`): the format id, atomic turn writing, memory-mapped reading, checksums and pruning. Shared by `engine.py` and the server. |
-| `state/` | The cohort state written by `engine.py`: `current.json` plus one `turn_NNNNN/` directory per recent turn (see `cohort_state_schema.md`). Generated; not committed. |
+| `../engine/engine.py` | The turn engine, in its own directory and run as its own process: `init` writes turn 0 of the cohort state, `step` advances it a year at a time, `verify` checks the current turn's checksum (§4.6). It imports `cohort_state.py` and `grid.py` from `server/`, and by default uses `server/state/` and `server/world_population.json`. |
+| `cohort_state.py` | Reads and writes the cohort state (`state/`): the format id, atomic turn writing, memory-mapped reading, checksums and pruning. Shared by `engine/engine.py` and the server. |
+| `state/` | The cohort state written by `engine/engine.py`: `current.json` plus one `turn_NNNNN/` directory per recent turn (see `cohort_state_schema.md`). Generated; not committed. |
 | `gen_oecd_capitals.py` | Writes the scenario `world_population_oecd_capitals.yaml`/`.json`: 200 people in each OECD member's capital tile, 0 elsewhere. |
 | `demo_delhi.py` | Demo: rewrites `world_population.json` every second with a random population for the Delhi tile, to show live updating. Restores the original value on Ctrl+C. |
 | `grid.py` | The tile grid (0.5° tiles, ids, lookups, flat index, neighbours), shared by every script and the server. `static/index.html` has a JavaScript copy. |
@@ -213,8 +213,8 @@ A `/api/tile/N285E0770` response looks like:
 
 ### 4.6 The cohort state and the engine
 
-The game state below the tile totals is kept by a separate process, `engine.py`, which writes it to
-`state/` as NumPy `.npy` arrays plus a `manifest.json` per turn (format: `cohort_state_schema.md`):
+The game state below the tile totals is kept by a separate process, `engine/engine.py`, which writes it to
+`server/state/` as NumPy `.npy` arrays plus a `manifest.json` per turn (format: `cohort_state_schema.md`):
 
 ```
 engine.py step ──► state/.tmp_turn_00008/ ──rename──► state/turn_00008/ ──► state/current.json (atomic replace)
@@ -229,13 +229,13 @@ server.py ◄── memory-maps people.npy / hours.npy of the turn current.json 
   writes the next. The engine keeps the newest 3 turn directories and deletes older ones. Windows won't
   delete a file another process has mapped, so a turn the server still has open is skipped and removed
   on a later step.
-- **One turn = one year.** `engine.py step` currently applies only ageing: every cohort moves up a
+- **One turn = one year.** `engine/engine.py step` currently applies only ageing: every cohort moves up a
   year, the 99-year-olds join the open-ended 100+ group (their hours are averaged, weighted by people),
-  and age 0 is left empty (no births or deaths yet). The activity list is a placeholder in `engine.py`.
-- **Determinism.** Each manifest carries a SHA-256 checksum of the arrays; `engine.py verify` rechecks
+  and age 0 is left empty (no births or deaths yet). The activity list is a placeholder in `engine/engine.py`.
+- **Determinism.** Each manifest carries a SHA-256 checksum of the arrays; `engine/engine.py verify` rechecks
   it. The yearly step uses only elementwise arithmetic, so it doesn't depend on how NumPy orders sums.
 - **The heatmap still comes from `world_population.json`,** not from the cohort state. Initialise the
-  state from the same population file the server shows (`engine.py init --population ...`) to keep the
+  state from the same population file the server shows (`engine/engine.py init --population ...`) to keep the
   two consistent.
 
 ## 5. The page (`static/index.html`)
@@ -403,9 +403,9 @@ python server.py            # then open http://localhost:8000/
 **Run the turn engine (cohorts)**
 
 ```
-python engine.py init --population world_population.json   # turn 0, a flat age distribution
-python engine.py step                                      # advance one year (--turns N for more)
-python engine.py verify                                    # recheck the current turn's checksum
+python ../engine/engine.py init      # turn 0 from world_population.json, a flat age distribution
+python ../engine/engine.py step      # advance one year (--turns N for more)
+python ../engine/engine.py verify    # recheck the current turn's checksum
 ```
 
 The running server and any open page pick up each new turn within about two seconds. To start over,

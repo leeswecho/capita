@@ -2,7 +2,7 @@
 
     python convert_map.py          # once, and again whenever world_map.yaml changes
     python convert_population.py   # once, and again whenever world_population.yaml changes
-    python engine.py init          # optional: cohort state for /api/tile/<id>/cohorts (engine.py)
+    python ../engine/engine.py init   # optional: cohort state for /api/tile/<id>/cohorts
     python server.py [--port 8000] [--host 127.0.0.1] [--state state]
 
 Then open http://localhost:8000/ in a browser.
@@ -197,7 +197,7 @@ class World:
         check_grid(self.pop.meta, os.path.basename(pop_path))
         self.country_names = load_country_names(countries_path)
 
-        # Cohort state written by engine.py. Only the pointer, manifest and row list are read here;
+        # Cohort state written by engine/engine.py. Only the pointer, manifest and row list are read here;
         # people/hours are memory-mapped and read a tile at a time by cohorts_json().
         self.state_dir = state_dir
         self.turn = None
@@ -208,7 +208,7 @@ class World:
         if self.turn:
             print(f"  cohort state: turn {self.turn.turn}, {self.turn.manifest['populated_tiles']} tiles", flush=True)
         else:
-            print("  cohort state: none (run: python engine.py init)", flush=True)
+            print("  cohort state: none (run: python ../engine/engine.py init)", flush=True)
 
     def reload_population_forever(self):
         """Reread the population file every POP_RELOAD_SECONDS; swap in a new snapshot when it changes."""
@@ -263,7 +263,7 @@ class World:
             return None
         st = self.turn
         if st is None:
-            return json.dumps({"tile": tid, "turn": None, "error": "no cohort state; run: python engine.py init"}).encode()
+            return json.dumps({"tile": tid, "turn": None, "error": "no cohort state; run: python engine/engine.py init"}).encode()
         body = {"tile": tid, "turn": st.turn, "activities": st.activities,
                 "hours_unit": st.manifest["hours_unit"], "ages": cohort_state.AGES,
                 "last_age_open_ended": True, "people": None, "hours": None}
@@ -392,7 +392,7 @@ def main():
     ap.add_argument("--map", default=os.path.join(ROOT, "world_map.json"))
     ap.add_argument("--population", default=os.path.join(ROOT, "world_population.json"))
     ap.add_argument("--countries", default=os.path.join(ROOT, "ne_10m_admin_0_countries.geojson"))
-    ap.add_argument("--state", default=os.path.join(ROOT, "state"), help="cohort state written by engine.py")
+    ap.add_argument("--state", default=os.path.join(ROOT, "state"), help="cohort state written by engine/engine.py")
     args = ap.parse_args()
 
     Handler.world = World(args.map, args.population, args.countries, args.state)

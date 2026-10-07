@@ -1,7 +1,7 @@
 # Cohort state format (`capita/cohort-state-1`)
 
 The cohort state holds, for every populated tile, the people of each single year of age and how many
-hours a day they spend on each activity. The turn engine (`server/engine.py`) writes it, and the web
+hours a day they spend on each activity. The turn engine (`engine/engine.py`) writes it, and the web
 server (`server/server.py`) reads it. This document is the contract between the two, written so that
 an engine in any language can produce it. `server/cohort_state.py` is the Python implementation.
 
@@ -96,9 +96,9 @@ transpose before writing, or write `fortran_order: True` with the reversed memor
 4. Optionally delete old turn directories, never the current one. On Windows, deleting a directory
    fails while a reader still has its files memory-mapped; skip it and try again later.
 
-## Turn rules (`engine.py`, for now)
+## Turn rules (`engine/engine.py`, for now)
 
 One turn is one year. Each turn every cohort moves up one year of age. The 99-year-olds join the
 100+ group, whose hours become the average of the two groups weighted by people. Age 0 is left empty,
 because there are no births or deaths yet. Activity hours move with the people. The activity list and
-its starting hours (8 sleep, 6 subsistence, 2 childcare, 8 other) are placeholders in `engine.py`.
+its starting hours (8 sleep, 6 subsistence, 2 childcare, 8 other) are placeholders in `engine/engine.py`.

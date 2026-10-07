@@ -634,7 +634,7 @@ let cohortsOpen = false, stateTurn = null;
 const cohortCache = new Map();
 
 function cohortsPlaceholder(pinned) {
-  if (stateTurn == null) return '<div class="none">No cohort state (run <code>python engine.py init</code>).</div>';
+  if (stateTurn == null) return '<div class="none">No cohort state (run <code>python engine/engine.py init</code>).</div>';
   if (!pinned) return '<div class="none">Click the tile to pin it, then show its cohorts.</div>';
   if (cohortsOpen) return '<div class="none">Loading cohorts…</div>';
   return '<button class="act" data-cohorts="show">Show age cohorts</button>';

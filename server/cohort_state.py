@@ -23,8 +23,10 @@ Layout (see reference/cohort_state_schema.md for the full, language-neutral spec
         consumed.npy          <f8 [N, P]       how much they consumed: the need, or all there was if that fell short
         decay.npy            <f4 [N, P]       share of each product's holdings lost at the end of that year
         stock.npy             <f8 [N, P]       amount of each product held at the start of this turn, after decay
+        deaths.npy            <f8 [N, C]       people who died of each cause in the year that ended with this turn
 
 Products (P columns, in manifest "products" order) are measured in their own units: food in kcal.
+Causes of death (C columns) are in manifest "causes" order.
 Only tiles with people get a row. Nation ids are 1..M-1 and are never reused; row 0 of the visibility
 arrays belongs to "no nation" and is all zeros. Bits are packed little-endian: tile i is bit i % 8 of
 byte i // 8. A turn directory is complete before current.json names it and is never changed afterwards,
@@ -41,14 +43,14 @@ import numpy as np
 
 import grid
 
-FORMAT = "capita/cohort-state-5"
+FORMAT = "capita/cohort-state-6"
 AGES = 101                      # ages 0..99, then 100 = "100 and over"
 HOURS_UNIT = "mean hours per person per day, averaged over the year"
 BITS_BYTES = (grid.COUNT + 7) // 8          # one visibility row: 259,200 tiles -> 32,400 bytes
 DTYPES = {"tiles": "<u4", "people": "<f8", "hours": "<f4", "nation": "<u2", "owner": "<u2",
           "visible": "<u1", "explored": "<u1",
           "production": "<f8", "labor": "<f8", "production_max": "<f8", "need": "<f8", "consumed": "<f8",
-          "decay": "<f4", "stock": "<f8"}
+          "decay": "<f4", "stock": "<f8", "deaths": "<f8"}
 ARRAYS = tuple(DTYPES)                      # file order, which is also checksum order
 ECONOMY = ("production", "labor", "production_max", "need", "consumed", "decay", "stock")   # [N, P] each
 PRODUCT_KEYS = ("name", "unit")
@@ -80,14 +82,16 @@ def nations_bytes(nations) -> bytes:
 class State:
     """Everything in one turn. The engine builds one, write_turn() saves it, Turn reads it back."""
 
-    def __init__(self, tiles, people, hours, activities, nation, owner, nations, visible, explored, products, economy):
+    def __init__(self, tiles, people, hours, activities, nation, owner, nations, visible, explored, products, economy,
+                 causes, deaths):
         """products: [{"name": "food", "unit": "kcal"}, ...]; economy: {name: array [N, P]} for each name in
-        ECONOMY, with columns in products order."""
+        ECONOMY, with columns in products order; causes: names of the causes of death; deaths: [N, C]."""
         self.tiles, self.people, self.hours, self.nation, self.owner = tiles, people, hours, nation, owner
         self.visible, self.explored = visible, explored
         self.activities, self.nations, self.products = list(activities), nations, list(products)
         for k in ECONOMY:
             setattr(self, k, economy[k])
+        self.causes, self.deaths = list(causes), deaths
 
     def arrays(self):
         return {k: getattr(self, k) for k in ARRAYS}
@@ -108,6 +112,7 @@ class State:
         shapes = {"tiles": (n,), "people": (n, AGES), "hours": (n, AGES, len(self.activities)), "nation": (n,), "owner": (grid.COUNT,),
                   "visible": (m, BITS_BYTES), "explored": (m, BITS_BYTES)}
         shapes.update({k: (n, len(self.products)) for k in ECONOMY})
+        shapes["deaths"] = (n, len(self.causes))
         for k, shape in shapes.items():
             if getattr(self, k).shape != shape:
                 raise ValueError(f"{k} must have shape {list(shape)}, got {list(getattr(self, k).shape)}")
@@ -123,6 +128,10 @@ class State:
                 raise ValueError(f"{k} must not be negative")
         if np.any(self.consumed > self.need * (1 + 1e-9)):
             raise ValueError("consumed must not exceed need")
+        if len(set(self.causes)) != len(self.causes) or not all(isinstance(c, str) for c in self.causes):
+            raise ValueError(f"causes must be unique names: {self.causes}")
+        if np.any(self.deaths < 0):
+            raise ValueError("deaths must not be negative")
         if np.any((self.decay < 0) | (self.decay > 1)):
             raise ValueError("decay must be between 0 and 1")
         for i, rec in enumerate(self.nations, 1):
@@ -191,6 +200,7 @@ def write_turn(state_dir: str, turn: int, s: State, extra: dict = None) -> dict:
         "activities": s.activities,
         "hours_unit": HOURS_UNIT,
         "products": s.products,
+        "causes": s.causes,
         "visibility_bits": "row k = nation id k; tile i is bit i % 8 of byte i // 8",
         "arrays": {k: {"file": f"{k}.npy", "dtype": DTYPES[k], "shape": list(a.shape)} for k, a in s.arrays().items()},
         "populated_tiles": len(s.tiles),
@@ -237,13 +247,15 @@ class Turn(State):
         self.turn = m["turn"]
         with open(os.path.join(self.path, "nations.json"), encoding="utf-8") as f:
             nations = json.load(f)["nations"]
-        small = ("tiles", "nation", "owner", *ECONOMY)   # always read in full; the rest are mapped when mmap=True
+        small = ("tiles", "nation", "owner", *ECONOMY, "deaths")   # read in full; the rest are mapped when mmap=True
         a = {k: np.load(os.path.join(self.path, f"{k}.npy"), mmap_mode=None if mmap is False or k in small else "r")
              for k in ARRAYS}
         super().__init__(a["tiles"], a["people"], a["hours"], m["activities"], a["nation"], a["owner"], nations,
-                         a["visible"], a["explored"], m["products"], {k: a[k] for k in ECONOMY})
+                         a["visible"], a["explored"], m["products"], {k: a[k] for k in ECONOMY},
+                         m["causes"], a["deaths"])
         if len(self.tiles) != len(self.people) or len(self.visible) != len(nations) + 1 or \
-                any(a[k].shape != (len(self.tiles), len(self.products)) for k in ECONOMY):
+                any(a[k].shape != (len(self.tiles), len(self.products)) for k in ECONOMY) or \
+                a["deaths"].shape != (len(self.tiles), len(self.causes)):
             raise ValueError(f"{dir_name}: array sizes don't match the manifest")
 
     def row(self, index: int):

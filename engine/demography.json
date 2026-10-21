@@ -7,5 +7,45 @@
       [31, 0.1271], [34, 0.1171], [37, 0.0975], [40, 0.074], [43, 0.0498], [46, 0.03], [49, 0.02],
       [52, 0.0148], [55, 0.01], [58, 0.0063], [61, 0.003], [64, 0], [100, 0]
     ]
+  },
+  "deaths": {
+    "about": "Causes of death, each a yearly hazard (deaths per person-year) for each tile and age; they add, a cohort's share dying in the year is 1 - exp(-total), and the deaths are split among the causes in proportion to their hazards. Rates are per person over the year, evaluated at the cohort's mid-year age; children born during the year face half a year at age 0.25. Well fed, the causes together are calibrated to reproduce the Siler forager curve that turn 0's age structure comes from (Gurven & Kaplan 2007: life expectancy at birth about 34), split roughly as their cause-of-death shares. mortality_modifiers() in engine.py scales each cause per tile; that is where future infrastructure will reduce them. Listed in the order of the deaths.npy columns.",
+    "starvation": {
+      "about": "Deaths from too little food, including infections that kill people because they are starving. Hazard by the tile's share of food need met in the year (consumed / need): none at 90% or more, about 20% dying a year at half the need (hazard 0.223), about 60% at a quarter (0.916), about 99% with nothing (4.6), filled in linearly. Children under under_age and people of over_age and older have the hazard multiplied by vulnerable_factor.",
+      "product": "food",
+      "hazard_by_share_of_need_met": [[0, 4.6], [0.25, 0.916], [0.5, 0.223], [0.9, 0], [1, 0]],
+      "vulnerable_under_age": 5,
+      "vulnerable_over_age": 65,
+      "vulnerable_factor": 2
+    },
+    "predation_and_accidents": {
+      "about": "Animal attacks, snakebite, falls, drowning and other accidents while working: hazard_per_hour x the year's hours of the activity, so about 0.4% a year for an adult foraging about 8.5 hours a day.",
+      "activity": "subsistence",
+      "hazard_per_hour": 1.3e-6
+    },
+    "cancer": {
+      "about": "Hazard a x exp(b x age): a fifth of the Siler ageing term.",
+      "a": 9.4e-6,
+      "b": 0.086
+    },
+    "other_age_related": {
+      "about": "Heart disease, organ failure, frailty and other age-related causes besides cancer. Hazard a x exp(b x age): the other four fifths of the Siler ageing term.",
+      "a": 3.76e-5,
+      "b": 0.086
+    },
+    "infection": {
+      "about": "Infections that kill otherwise healthy, well-fed people. Hazard base x a climate factor x (1 + wetlands_extra x the tile's wetland share). The Siler curve comes mostly from tropical foragers, so the climate factor is 1 up to full_to_latitude degrees north or south, falling linearly to min_factor at min_at_latitude and beyond. base is the Siler constant term (0.013) less predation and accidents for working adults.",
+      "base": 0.009,
+      "climate": {"full_to_latitude": 23.5, "min_at_latitude": 60, "min_factor": 0.6},
+      "wetlands_extra": 0.5
+    },
+    "child_mortality": {
+      "about": "Deaths of infants and young children, beyond the causes above. Hazard a x exp(-b x age), the Siler infant term, multiplied by 1 + shortfall_factor x the tile's childcare shortfall: 1 - (childcare hours given / hours needed), at least 0. Hours needed per child per day by age are care_need_by_age points, filled in linearly (rough: infants carried or held much of the day, little needed by 10). With the turn-0 hours the tiles give about 1.8 times what is needed.",
+      "a": 0.422,
+      "b": 1.131,
+      "care_activity": "childcare",
+      "care_need_by_age": [[0, 6], [1, 5], [2, 4], [3, 3], [5, 1.5], [8, 0.5], [10, 0], [100, 0]],
+      "shortfall_factor": 2
+    }
   }
 }

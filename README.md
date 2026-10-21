@@ -50,7 +50,7 @@ First choose the nation you're playing (or open `http://localhost:8001/?nation=A
 means the player has entered all their commands for the turn. It runs `engine.py step` as its own
 process, and the viewer on port 8000 shows the new turn by itself. The control page and the viewer are
 kept separate on purpose for now. Below it, the page lists the food each of the nation's tiles produced
-in the past year, and how much of its people's need that met.
+in the past year, how much of its people's need that met, and how many people died of each cause.
 
 Each turn has two phases, which the engine records in `state/phase.json` and both pages show:
 **orders** (the turn accepts commands) and then **resolving** (commands are closed while the engine
@@ -85,7 +85,9 @@ engine.py init / step ─────────────┘
   level off at what the tile's terrain can sustain. People eat according to their age, everyone
   eating less when there isn't enough, and food that isn't eaten decays completely. The rules and their
   values are in `engine/economy.json`. Children are born at a placeholder rate by age
-  (`engine/demography.json`), and every cohort ages one year. There are no deaths yet. Ownership is first come, first served. Each nation actively sees every tile where it has people,
+  (`engine/demography.json`), and people die of starvation, predation and accidents, cancer,
+  other age-related causes, infection and child mortality, each with its own rule in the same file.
+  Then every cohort ages one year. Ownership is first come, first served. Each nation actively sees every tile where it has people,
   plus the 8 tiles around each one.
 
 ## Data

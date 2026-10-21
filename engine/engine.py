@@ -27,10 +27,15 @@ placeholder activity hours shaped by age (starting_hours()). It also creates the
   will change them per tile. Food decays completely for now, so none carries over.
 - Demographics, after production and consumption, so they can respond to the year's food: births
   (births()) from a rate per person per year by age (demography.json, read on every step). The rate
-  is a placeholder; birth_rates() is where a decision model will choose instead. No deaths yet.
+  is a placeholder; birth_rates() is where a decision model will choose instead. Then deaths
+  (mortality()): several causes, each a yearly hazard by tile and age, which add (death_hazards()):
+  starvation from the food shortfall, predation and accidents from hours of work, cancer and other
+  age-related causes from age, infection from terrain, and child mortality from age and the childcare
+  shortfall. mortality_modifiers() is where future infrastructure will reduce them. Fractions of
+  people die; the deaths by tile and cause are stored.
 - Ageing: each cohort moves up one year and the 99-year-olds join the open-ended 100-and-over group.
-  The year's newborns become age 0. Activity hours move with the people; in the 100+ group the hours
-  of the two merged groups are averaged, weighted by people.
+  The year's surviving newborns become age 0. Activity hours belong to the age, not the cohort: people
+  take on the hours of their new age (age_one_year()).
 - Ownership, recomputed every turn (update_ownership()): first come, first served. A nation owns a tile
   from the turn it is the first to have people living there, and loses it when none of its people live
   there any more.
@@ -225,10 +230,10 @@ def foraging_max(tiles, world, rules):
     return (on_land + on_water) * np.where(river, f["river_factor"], 1.0)
 
 
-def production_max(tiles, products, rules):
+def production_max(tiles, products, rules, world):
     """The most each row's tile can produce of each product in a year, float64 [N, P] in products order."""
     m = np.zeros((len(tiles), len(products)))
-    m[:, products.index(rules["foraging"]["product"])] = foraging_max(tiles, read_map(MAP), rules)
+    m[:, products.index(rules["foraging"]["product"])] = foraging_max(tiles, world, rules)
     return m
 
 
@@ -297,14 +302,29 @@ def economy_extra(rules):
 
 
 def load_demography(path=DEMOGRAPHY):
-    """demography.json: {"births": {"per_person_per_year_by_age": [[age, rate], ...]}}."""
+    """demography.json: {"births": {"per_person_per_year_by_age": [[age, rate], ...]}, "deaths": {cause: {...}}}."""
     with open(path, encoding="utf-8") as f:
         demo = json.load(f)
-    pts = demo["births"]["per_person_per_year_by_age"]
-    ages = [a for a, _ in pts]
-    if ages != sorted(set(ages)) or any(r < 0 for _, r in pts):
-        sys.exit(f"{os.path.basename(path)}: births need increasing ages and rates of at least 0")
+    d = demo["deaths"]
+    tables = [("births", demo["births"]["per_person_per_year_by_age"]),
+              ("child_mortality care_need_by_age", d["child_mortality"]["care_need_by_age"]),
+              ("starvation hazard_by_share_of_need_met", d["starvation"]["hazard_by_share_of_need_met"])]
+    for label, pts in tables:
+        xs = [x for x, _ in pts]
+        if xs != sorted(set(xs)) or any(v < 0 for _, v in pts):
+            sys.exit(f"{os.path.basename(path)}: {label} needs increasing first values and second values of at least 0")
+    if death_causes(demo) != CAUSES:
+        sys.exit(f"{os.path.basename(path)}: deaths must list {CAUSES} in that order, got {death_causes(demo)}")
     return demo
+
+
+# The causes of death the engine models, in demography.json and deaths.npy column order. Adding one means
+# adding its rules and a branch in death_hazards().
+CAUSES = ["starvation", "predation_and_accidents", "cancer", "other_age_related", "infection", "child_mortality"]
+
+
+def death_causes(demo):
+    return [k for k in demo["deaths"] if k != "about"]
 
 
 def birth_rates(people, demo):
@@ -322,6 +342,90 @@ def births(people, rates):
     """Children born on each row's tile during the year, float64 [N]: people x rate, summed over ages.
     They belong to the tile's nation and become age 0 at the next turn."""
     return (people * rates).sum(axis=1)
+
+
+def interp_table(x, pts):
+    xs, ys = zip(*pts)
+    return np.interp(x, xs, ys)
+
+
+def infection_factor(tiles, world, spec):
+    """Each row's terrain multiplier for infection, float64 [N]: a climate factor (1 in the tropics,
+    falling toward the poles) x (1 + wetlands_extra x the tile's wetland share)."""
+    idx = tiles.astype(np.int64)
+    lat = np.abs(90 - (idx // grid.WIDTH + 0.5) * grid.TILE)
+    c = spec["climate"]
+    cold = np.clip((lat - c["full_to_latitude"]) / (c["min_at_latitude"] - c["full_to_latitude"]), 0, 1)
+    wet = np.asarray(world.cover[world.cover_types.index("wetlands")], dtype=np.float64)[idx] / 100
+    return (1 - (1 - c["min_factor"]) * cold) * (1 + spec["wetlands_extra"] * wet)
+
+
+def childcare_shortfall(people, hours, activities, spec):
+    """Each row's childcare shortfall, float64 [N] in 0..1: 1 - (hours given / hours needed), 0 when
+    enough is given. Given: everyone's hours of the care activity; needed: each child's hours by age."""
+    given = (people * hours[:, :, activities.index(spec["care_activity"])]).sum(axis=1)
+    needed = (people * interp_table(np.arange(AGES), spec["care_need_by_age"])).sum(axis=1)
+    ratio = np.divide(given, needed, out=np.ones_like(given), where=needed > 0)
+    return np.clip(1 - ratio, 0, 1)
+
+
+def death_hazards(cause, x, work_hours, food_met, care_short, infection, demo):
+    """One cause's yearly hazard, broadcastable to [N, K], for exact ages x [K].
+
+    work_hours: [N, K] hours a day of the predation activity at those ages; food_met: [N] share of food
+    need met in the year; care_short: [N] childcare shortfall; infection: [N] terrain factor.
+    """
+    d = demo["deaths"][cause]
+    x = x[None, :]
+    if cause == "starvation":
+        vulnerable = np.where((x < d["vulnerable_under_age"]) | (x >= d["vulnerable_over_age"]), d["vulnerable_factor"], 1.0)
+        return interp_table(food_met, d["hazard_by_share_of_need_met"])[:, None] * vulnerable
+    if cause == "predation_and_accidents":
+        return work_hours * 365 * d["hazard_per_hour"]
+    if cause in ("cancer", "other_age_related"):
+        return d["a"] * np.exp(d["b"] * x)
+    if cause == "infection":
+        return d["base"] * infection[:, None] + 0 * x
+    if cause == "child_mortality":
+        return d["a"] * np.exp(-d["b"] * x) * (1 + d["shortfall_factor"] * care_short[:, None])
+    raise ValueError(f"no hazard for cause {cause!r}")
+
+
+def mortality_modifiers(n, causes):
+    """Multiplier on each row's hazard for each cause, float64 [N, C]. All 1 for now; this is where
+    future infrastructure will reduce causes tile by tile (medicine for infection, say)."""
+    return np.ones((n, len(causes)))
+
+
+def mortality(people, born, hours, activities, tiles, world, food_met, demo):
+    """The year's deaths. Returns (survivors [N, AGES], surviving newborns [N], deaths by cause [N, C]).
+
+    Each cohort lives the year at its mid-year age (a + 1 for the cohort aged a at the start of the
+    turn, which turns a + 1 during it); children born during the year live half of it, at age 0.25.
+    The causes' hazards h_c add up to H; a share 1 - exp(-H) dies, split among the causes as h_c / H.
+    Pure elementwise arithmetic and sums over ages, so results don't depend on BLAS.
+    """
+    d = demo["deaths"]
+    pred = d["predation_and_accidents"]["activity"]
+    work = hours[:, :, activities.index(pred)]
+    care_short = childcare_shortfall(people, hours, activities, d["child_mortality"])
+    infection = infection_factor(tiles, world, d["infection"])
+    mods = mortality_modifiers(len(tiles), CAUSES)
+
+    def die(count, x, work_h, exposure):
+        hz = [death_hazards(c, x, work_h, food_met, care_short, infection, demo) * mods[:, k:k + 1] * exposure
+              for k, c in enumerate(CAUSES)]
+        total = np.zeros(count.shape)
+        for h in hz:
+            total = total + h
+        dead = count * -np.expm1(-total)
+        share = lambda h: np.divide(h, total, out=np.zeros(total.shape), where=total > 0)
+        by_cause = np.stack([(dead * share(h)).sum(axis=1) for h in hz], axis=1)
+        return count - dead, by_cause
+
+    survivors, deaths = die(people, np.arange(AGES) + 1.0, work, 1.0)
+    newborns, newborn_deaths = die(born[:, None], np.array([0.25]), work[:, :1], 0.5)
+    return survivors, newborns[:, 0], deaths + newborn_deaths
 
 
 def demography_extra(demo):
@@ -354,33 +458,33 @@ def init(args):
     zeros = np.zeros((len(tiles), len(products)))   # turn 0 follows no year: nothing made or held yet
     economy = {"production": zeros, "labor": zeros.copy(), "stock": zeros.copy(),
                "need": zeros.copy(), "consumed": zeros.copy(),
-               "production_max": production_max(tiles, [p["name"] for p in products], rules),
+               "production_max": production_max(tiles, [p["name"] for p in products], rules, read_map(MAP)),
                "decay": economy_modifiers(len(tiles), rules)}
+    demo = load_demography()
     state = cs.State(tiles, people, hours, ACTIVITIES, nation, tile_owner, nations, visible, visible.copy(),
-                     products, economy)
+                     products, economy, CAUSES, np.zeros((len(tiles), len(CAUSES))))
     extra = {"initial_population_source": os.path.basename(args.population),
              "initial_nations_source": os.path.basename(seed_path), **economy_extra(rules),
-             **demography_extra(load_demography())}
+             **demography_extra(demo)}
     m = cs.write_turn(args.state, 0, state, extra=extra)
     cs.write_phase(args.state, 0, cs.ORDERS)
     print(f"turn 0: {m['populated_tiles']} tiles, {m['total_people']:,.1f} people, {m['nations']} nations -> "
           f"{os.path.join(args.state, cs.turn_dir_name(0))}")
 
 
-def age_one_year(people, hours):
-    """Next year's (people, hours). Pure elementwise arithmetic, so results don't depend on the CPU
-    or on how NumPy orders a sum, which keeps replays deterministic."""
+def age_one_year(people):
+    """Next year's people: every cohort moves up a year, and the 99-year-olds join the 100-and-over
+    group. Age 0 is left for the year's newborns. Pure elementwise arithmetic, so results don't depend
+    on the CPU or on how NumPy orders a sum, which keeps replays deterministic.
+
+    Activity hours belong to the age, not the cohort, so they stay where they are: people take on the
+    hours of their new age. (Moving them with the cohort would leave everyone born in the game with a
+    newborn's hours for life, since nothing yet decides how a cohort's activities change as it grows.)
+    """
     new_people = np.zeros_like(people)
     new_people[:, 1:AGES - 1] = people[:, 0:AGES - 2]
     new_people[:, AGES - 1] = people[:, AGES - 2] + people[:, AGES - 1]
-    new_hours = hours.copy()                    # age 0 keeps its activity profile for future births
-    new_hours[:, 1:AGES - 1] = hours[:, 0:AGES - 2]
-    a, b = people[:, AGES - 2, None], people[:, AGES - 1, None]
-    total = a + b
-    with np.errstate(invalid="ignore", divide="ignore"):
-        merged = (hours[:, AGES - 2] * a + hours[:, AGES - 1] * b) / total
-    new_hours[:, AGES - 1] = np.where(total > 0, merged, hours[:, AGES - 1]).astype(np.float32)
-    return new_people, new_hours
+    return new_people
 
 
 def step(args):
@@ -398,7 +502,8 @@ def step(args):
                          f"{[p['name'] for p in cur.products]}; start a new state to change them")
             names = [p["name"] for p in products]
             # Production: the year that is ending, so this turn's people and hours, before they age.
-            prod_max = production_max(cur.tiles, names, rules)
+            world = read_map(MAP)
+            prod_max = production_max(cur.tiles, names, rules, world)
             production, labor = produce(cur.people, cur.hours, cur.activities, prod_max, names, rules)
             held = cur.stock + production
             need, consumed = consume(cur.people, held, consumption_rates(names, rules))
@@ -406,16 +511,20 @@ def step(args):
             economy = {"production": production, "labor": labor, "production_max": prod_max, "need": need,
                        "consumed": consumed, "decay": decay, "stock": end_of_year(held, consumed, decay)}
 
-            # Demographics: the year's births (deaths to come), from the people who lived it.
+            # Demographics: the year's births and deaths, among the people who lived it.
             demo = load_demography()
             born = births(cur.people, birth_rates(cur.people, demo))
+            fc = names.index(demo["deaths"]["starvation"]["product"])
+            food_met = np.divide(consumed[:, fc], need[:, fc], out=np.ones(len(cur.tiles)), where=need[:, fc] > 0)
+            survivors, born_alive, deaths = mortality(cur.people, born, cur.hours, cur.activities, cur.tiles, world,
+                                                      food_met, demo)
 
-            people, hours = age_one_year(cur.people, cur.hours)
-            people[:, 0] = born
+            people, hours = age_one_year(survivors), cur.hours
+            people[:, 0] = born_alive
             tile_owner = update_ownership(cur.owner, cur.tiles, cur.nation, people)
             visible = active_visibility(cur.tiles, cur.nation, people, len(cur.nations) + 1)
             state = cs.State(cur.tiles, people, hours, cur.activities, cur.nation, tile_owner, cur.nations,
-                             visible, cur.explored | visible, products, economy)
+                             visible, cur.explored | visible, products, economy, CAUSES, deaths)
             extra = {k: v for k, v in cur.manifest.items() if k.startswith("initial_")}
             m = cs.write_turn(args.state, cur.turn + 1, state,
                               extra={**extra, **economy_extra(rules), **demography_extra(demo)})
@@ -428,7 +537,9 @@ def step(args):
         short = ", ".join(f"{p['name']} {consumed[:, i].sum() / need[:, i].sum():.1%} of need met "
                           f"({np.count_nonzero(consumed[:, i] < need[:, i] * (1 - 1e-9))} tiles short)"
                           for i, p in enumerate(products) if need[:, i].sum() > 0)
-        print(f"turn {m['turn']}: {m['total_people']:,.1f} people ({born.sum():,.1f} born), made {made}; {short}; "
+        died = ", ".join(f"{c} {deaths[:, k].sum():,.1f}" for k, c in enumerate(CAUSES))
+        print(f"turn {m['turn']}: {m['total_people']:,.1f} people ({born.sum():,.1f} born, {deaths.sum():,.1f} died: "
+              f"{died}), made {made}; {short}; "
               f"checksum {m['checksum']['value'][:12]}")
     gone = cs.prune(args.state, keep=KEEP_TURNS)
     if gone:

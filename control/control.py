@@ -30,6 +30,9 @@ Endpoints:
                            that ended with the current turn: per product, the amount made, the labor
                            hours behind it, the tile's yearly maximum, its people's need and what they
                            consumed, with totals; the PRODUCTION_ROWS most productive tiles (JSON)
+    /api/nation/<id>/deaths  how many people died of each cause on each populated tile the nation owns
+                           in the year that ended with the current turn, with totals; the PRODUCTION_ROWS
+                           tiles with the most deaths (JSON)
     POST /api/commit       commit the turn: advance the engine one step and return
                            {"turn": t, "phase": p, "output": "..."}; 409 if there is no state or the
                            turn is already resolving, 500 with the engine's output if the step fails (JSON)
@@ -102,6 +105,27 @@ class Control:
         return json.dumps({"turn": t.turn, "nations": [
             {"id": n["id"], "code": n["code"], "name": self.country_names.get(n["code"]) or n["code"], "alive": n["alive"]}
             for n in t.nations]}).encode()
+
+    def deaths_json(self, nid: int):
+        """JSON for /api/nation/<id>/deaths, or None if there is no such nation."""
+        t = self.current_turn()
+        if t is None or not 1 <= nid <= len(t.nations):
+            return None
+        n = t.nations[nid - 1]
+        rows = np.flatnonzero(t.owner[t.tiles] == nid)
+        people = np.asarray(t.people[rows]).sum(axis=1)
+        deaths = t.deaths[rows]
+        order = np.argsort(-deaths.sum(axis=1), kind="stable")[:PRODUCTION_ROWS] if len(rows) else rows
+        tile_ids = [grid.tile_id(*grid.corner(*divmod(int(t.tiles[r]), grid.WIDTH))) for r in rows[order]]
+        return json.dumps({
+            "turn": t.turn,
+            "nation": {"id": nid, "code": n["code"], "name": self.country_names.get(n["code"]) or n["code"]},
+            "causes": t.causes,
+            "populated_tiles": len(rows),
+            "totals": {"people": float(people.sum()), "deaths": deaths.sum(axis=0).tolist()},
+            "tiles": [{"tile": tid, "people": float(people[i]), "deaths": deaths[i].tolist()}
+                      for tid, i in zip(tile_ids, order)],
+        }).encode()
 
     def production_json(self, nid: int):
         """JSON for /api/nation/<id>/production, or None if there is no such nation."""
@@ -190,9 +214,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(self.control.status_json())
         if path == "/api/nations":
             return self.send_json(self.control.nations_json())
-        m = re.fullmatch(r"/api/nation/(\d+)/production", path)
+        m = re.fullmatch(r"/api/nation/(\d+)/(production|deaths)", path)
         if m:
-            body = self.control.production_json(int(m.group(1)))
+            report = self.control.production_json if m.group(2) == "production" else self.control.deaths_json
+            body = report(int(m.group(1)))
             if body is None:
                 return self.send_json(json.dumps({"error": f"no nation {m.group(1)}"}).encode(), 404)
             return self.send_json(body)

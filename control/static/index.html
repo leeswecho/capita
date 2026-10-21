@@ -62,6 +62,10 @@
     <h1>Production and consumption <small id="productionWhen"></small></h1>
     <div id="production"><div class="none">Choose a nation to see what its tiles produce.</div></div>
   </div>
+  <div class="panel">
+    <h1>Deaths <small id="deathsWhen"></small></h1>
+    <div id="deaths"><div class="none">Choose a nation to see its deaths.</div></div>
+  </div>
 </main>
 <script>
   const turnEl = document.getElementById("turn");
@@ -95,7 +99,7 @@
     else if (nationId === null && !committing && !message.classList.contains("error")) show(CHOOSE_HINT);
     if (status.turn !== null && status.turn !== shownTurn) {
       shownTurn = status.turn;
-      loadNations().then(loadProduction);
+      loadNations().then(loadReports);
     }
   }
 
@@ -158,7 +162,8 @@
     choose(keep);
   }
 
-  nationSelect.addEventListener("change", () => { choose(nationSelect.value); loadProduction(); });
+  nationSelect.addEventListener("change", () => { choose(nationSelect.value); loadReports(); });
+  function loadReports() { loadProduction(); loadDeaths(); }
 
   // ---------- production and consumption ----------
   // What each tile the nation owns made and consumed in the year that ended with the current turn. The
@@ -230,6 +235,54 @@
         <tbody>${body.tiles.map(r => row(esc(r.tile), r)).join("")}</tbody>
         <tfoot>${row("Total", { people: t.people, labor_hours: t.labor_hours, produced: t.produced, max: t.max,
                                 need: t.need, consumed: t.consumed })}</tfoot>
+      </table></div>`;
+  }
+
+  // ---------- deaths ----------
+  // How many people died of each cause on each tile the nation owns in the year that ended with the
+  // current turn. People die in fractions, so small numbers are shown with a decimal.
+  const deathsEl = document.getElementById("deaths");
+  const deathsWhenEl = document.getElementById("deathsWhen");
+  const causeLabel = c => c.replace(/_/g, " ").replace(/^./, s => s.toUpperCase());
+  const few = x => x >= 100 ? big(x) : num(x, 1);
+
+  async function loadDeaths() {
+    if (nationId === null) {
+      deathsWhenEl.textContent = "";
+      deathsEl.innerHTML = '<div class="none">Choose a nation to see its deaths.</div>';
+      return;
+    }
+    const id = nationId;
+    let body;
+    try {
+      body = await (await fetch(`/api/nation/${id}/deaths`)).json();
+    } catch { return; }
+    if (id !== nationId || body.error) return;
+    deathsWhenEl.textContent = body.turn > 0 ? `(the year that ended with turn ${body.turn})` : "";
+    if (body.turn === 0) {
+      deathsEl.innerHTML = '<div class="none">Nothing yet: the first figures appear after the first commit.</div>';
+      return;
+    }
+    if (!body.populated_tiles) {
+      deathsEl.innerHTML = `<div class="none">${esc(body.nation.name)} has no populated tiles.</div>`;
+      return;
+    }
+    const t = body.totals, sum = a => a.reduce((x, y) => x + y, 0);
+    const died = sum(t.deaths);
+    const perK = (d, p) => p + d > 0 ? num(1000 * d / (p + d), 1) : "–";   // per 1,000 alive during the year, roughly
+    const row = (label, r) => `<tr><td>${label}</td><td>${num(r.people)}</td><td>${few(sum(r.deaths))}</td>
+      <td>${perK(sum(r.deaths), r.people)}</td>${r.deaths.map(d => `<td>${few(d)}</td>`).join("")}</tr>`;
+    const causes = body.causes.map((c, k) => [c, t.deaths[k]]).sort((a, b) => b[1] - a[1])
+      .map(([c, d]) => `${esc(causeLabel(c).toLowerCase())} ${few(d)}`).join(", ");
+    const shown = body.tiles.length < body.populated_tiles
+      ? ` Showing the ${body.tiles.length} tiles with the most deaths of ${num(body.populated_tiles)}.` : "";
+    deathsEl.innerHTML = `
+      <p class="summary"><b>${few(died)}</b> died (${perK(died, t.people)} per 1,000): ${causes}.${shown}</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Tile</th><th>People now</th><th>Died</th><th>Per 1,000</th>
+          ${body.causes.map(c => `<th>${esc(causeLabel(c))}</th>`).join("")}</tr></thead>
+        <tbody>${body.tiles.map(r => row(esc(r.tile), r)).join("")}</tbody>
+        <tfoot>${row("Total", { people: t.people, deaths: t.deaths })}</tfoot>
       </table></div>`;
   }
 

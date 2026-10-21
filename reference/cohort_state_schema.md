@@ -1,4 +1,4 @@
-# Game state format (`capita/cohort-state-5`)
+# Game state format (`capita/cohort-state-6`)
 
 The game state holds, for every populated tile, the people of each single year of age, how many hours
 a day they spend on each activity, and which nation they belong to. It also holds a record for each
@@ -10,7 +10,8 @@ in any language can produce it. `server/cohort_state.py` is the Python implement
 Version 2 added nations (`nations.json`, `nation.npy`) and visibility (`visible.npy`, `explored.npy`);
 version 3 added tile ownership (`owner.npy`); version 4 added products and production (`production.npy`,
 `labor.npy`, `production_max.npy`, `decay.npy`, `stock.npy`, and `products` in the manifest); version 5
-added consumption (`need.npy`, `consumed.npy`). Older states can't be read; delete the state folder and
+added consumption (`need.npy`, `consumed.npy`); version 6 added deaths (`deaths.npy`, and `causes` in
+the manifest). Older states can't be read; delete the state folder and
 run `engine.py init` again.
 
 ## Directory layout
@@ -36,6 +37,7 @@ state/
     consumed.npy
     decay.npy
     stock.npy
+    deaths.npy
   turn_00008/
   ...
 ```
@@ -45,7 +47,7 @@ Turn directories are named `turn_` + the turn number as 5 digits, zero-padded.
 ## `current.json`
 
 ```json
-{ "format": "capita/cohort-state-5", "turn": 7, "dir": "turn_00007" }
+{ "format": "capita/cohort-state-6", "turn": 7, "dir": "turn_00007" }
 ```
 
 Readers open the directory named by `dir`. Writers replace this file atomically: write
@@ -54,7 +56,7 @@ Readers open the directory named by `dir`. Writers replace this file atomically:
 ## `phase.json`
 
 ```json
-{ "format": "capita/cohort-state-5", "turn": 7, "phase": "resolving", "since": "2026-10-21T20:28:13Z" }
+{ "format": "capita/cohort-state-6", "turn": 7, "phase": "resolving", "since": "2026-10-21T20:28:13Z" }
 ```
 
 Each turn goes through two phases:
@@ -98,6 +100,7 @@ tiles, `M` is the number of nations + 1, and `P` is the number of products.
 | `consumed.npy` | `<f8` (float64) | `[N, P]` | How much they actually consumed: the need, or all the tile held if that was less. A shortfall is shared evenly, so people of every age consumed `consumed / need` of their need. |
 | `decay.npy` | `<f4` (float32) | `[N, P]` | The share of the tile's holdings of each product lost at the end of that year, 0–1. Per tile, so that future rules can change it locally. |
 | `stock.npy` | `<f8` (float64) | `[N, P]` | How much of each product the tile holds at the start of this turn, after decay. |
+| `deaths.npy` | `<f8` (float64) | `[N, C]` | How many people died of each cause on the tile in the **year that ended with this turn**, newborns included; `C` is the number of causes, in `manifest.causes` order. Fractions are allowed: people die in fractions, even below one. All zeros at turn 0. |
 
 Products are columns in `manifest.products` order.
 
@@ -159,13 +162,14 @@ indexed by nation id instead.
 
 ```json
 {
-  "format": "capita/cohort-state-5",
+  "format": "capita/cohort-state-6",
   "turn": 7,
   "grid": { "tile_size_degrees": 0.5, "width": 720, "height": 360 },
   "ages": { "count": 101, "last_is_open_ended": true },
   "activities": ["sleep", "subsistence", "childcare", "other"],
   "hours_unit": "mean hours per person per day, averaged over the year",
   "products": [{ "name": "food", "unit": "kcal" }],
+  "causes": ["starvation", "predation_and_accidents", "cancer", "other_age_related", "infection", "child_mortality"],
   "visibility_bits": "row k = nation id k; tile i is bit i % 8 of byte i // 8",
   "arrays": {
     "tiles":    { "file": "tiles.npy",    "dtype": "<u4", "shape": [49910] },
@@ -181,7 +185,8 @@ indexed by nation id instead.
     "need":           { "file": "need.npy",           "dtype": "<f8", "shape": [49910, 1] },
     "consumed":       { "file": "consumed.npy",       "dtype": "<f8", "shape": [49910, 1] },
     "decay":          { "file": "decay.npy",          "dtype": "<f4", "shape": [49910, 1] },
-    "stock":          { "file": "stock.npy",          "dtype": "<f8", "shape": [49910, 1] }
+    "stock":          { "file": "stock.npy",          "dtype": "<f8", "shape": [49910, 1] },
+    "deaths":         { "file": "deaths.npy",         "dtype": "<f8", "shape": [49910, 6] }
   },
   "populated_tiles": 49910,
   "nations": 224,
@@ -192,17 +197,18 @@ indexed by nation id instead.
   "economy_rules_source": "engine/economy.json",
   "economy_rules": { "products": { ... }, "foraging": { ... } },
   "demography_rules_source": "engine/demography.json",
-  "demography_rules": { "births": { ... } }
+  "demography_rules": { "births": { ... }, "deaths": { ... } }
 }
 ```
 
 - `products` lists each product's `name` and `unit`, in the order of the product columns.
 - `economy_rules` is a copy of the rules the engine used to compute this turn's production and decay
   (`engine/economy.json` at the time), so a replay can tell whether they changed. `demography_rules`
-  is the same for births (`engine/demography.json`).
+  is the same for births and deaths (`engine/demography.json`).
+- `causes` lists the causes of death, in the order of the `deaths.npy` columns.
 - `checksum.value` is the SHA-256 of the raw data bytes (not the `.npy` headers) of `tiles`, `people`,
-  `hours`, `nation`, `owner`, `visible`, `explored`, `production`, `labor`, `production_max`, `need`, `consumed`, `decay` and
-  `stock`, in that order, followed by the `nations` list as
+  `hours`, `nation`, `owner`, `visible`, `explored`, `production`, `labor`, `production_max`, `need`, `consumed`, `decay`,
+  `stock` and `deaths`, in that order, followed by the `nations` list as
   canonical JSON: sorted keys, no whitespace (`","` and `":"` separators), UTF-8. It shows whether a
   deterministic replay reproduced a turn exactly. `total_people` is informational only and isn't part
   of the checksum.
@@ -222,10 +228,10 @@ indexed by nation id instead.
 
 ## Turn rules (`engine/engine.py`, for now)
 
-One turn is one year. Each turn every cohort moves up one year of age. The 99-year-olds join the
-100+ group, whose hours become the average of the two groups weighted by people. Age 0 holds the
-children born during the year (below); there are no deaths yet. Activity hours move with the people,
-and age 0 keeps its own. The activity list and
+One turn is one year. Each turn every surviving cohort moves up one year of age, and the 99-year-olds
+join the 100+ group. Age 0 holds the children born during the year who survived it (below). Activity
+hours belong to the age, not the cohort: people take on the hours of their new age, so that people
+born in the game work as adults once they grow up. The activity list and
 its starting hours are placeholders in `engine/engine.py` (`starting_hours()`): rough smooth curves by
 age, so that babies sleep more, subsistence work starts around age 10 and peaks in adulthood, and
 childcare peaks around age 30.
@@ -268,8 +274,30 @@ summed over ages (`births()`), and become age 0 of the new turn, in the tile's n
 `[age, rate]` points, filled in linearly, that counts men and women alike, with each birth counting
 half to each parent at their own ages. Over a lifetime it adds up to half the children per woman,
 about 5.8 for foragers, and gives about 38 births per 1,000 people a year at the turn-0 age structure.
-`birth_rates()` is where a decision model will choose instead. Deaths are still to come, so for now
-the population only grows.
+`birth_rates()` is where a decision model will choose instead.
+
+Then **deaths** (`mortality()`), among the same people. Each cause is a yearly hazard (deaths per
+person-year) for every tile and age (`death_hazards()`), and the causes add: a cohort's share dying in
+the year is `1 − e^(−total)`, and its deaths are split among the causes in proportion to their
+hazards. Each cohort lives the year at its mid-year age; children born during the year face half a
+year at age 0.25. People die in fractions. `mortality_modifiers()` multiplies each cause per tile; all
+1 for now, it is where future infrastructure will reduce them. The causes, with their rules and values
+in the `deaths` section of `engine/demography.json`:
+
+| cause | depends on | rule |
+|---|---|---|
+| `starvation` | the year's food | Hazard by the tile's share of food need met (`consumed / need`): none at 90% or more, about 20% dying a year at half the need, about 60% at a quarter, filled in linearly. Doubled for children under 5 and people 65 and older. Includes infections that kill people because they are starving. |
+| `predation_and_accidents` | hours of work | Animal attacks, snakebite, falls, drowning: 1.3 × 10⁻⁶ per hour of the `subsistence` activity, about 0.4% a year for an adult foraging 8.5 hours a day. |
+| `cancer` | age | `a × e^(b × age)`: a fifth of the Siler ageing term. |
+| `other_age_related` | age | Heart disease, organ failure, frailty...: the other four fifths of it. |
+| `infection` | terrain | Infections that kill otherwise healthy people: 0.009 × a climate factor (1 in the tropics, falling to 0.6 at 60° latitude and beyond) × (1 + 0.5 × the tile's wetland share). |
+| `child_mortality` | age, childcare | The Siler infant term `0.422 × e^(−1.131 × age)` × (1 + 2 × the tile's childcare shortfall). The shortfall is `1 − hours of childcare given / hours needed`, at least 0, with the hours each child needs by age (6 a day for a newborn, none by 10). The turn-0 hours give about 1.8 times the need. |
+
+Well fed, the causes together reproduce the Siler forager curve that turn 0's age structure comes from
+(Gurven & Kaplan 2007; life expectancy at birth about 34): about 27 deaths per 1,000 a year at that
+structure against 38 births, so a well-fed population grows about 1% a year until food runs short. In
+the starting scenario the population settles after about 150 years at about 1.8 times its start, with
+births and deaths at about 39 per 1,000 and each tile meeting about 88% of its food need.
 
 **Nations at turn 0** (`make_nations()`) come from a **nation seed**, which `init` requires: `--nations`,
 or the `<population name>.nations.json` / `<population name>_*.nations.json` next to the population file

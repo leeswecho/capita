@@ -50,6 +50,10 @@ python control/control.py             # then open http://localhost:8001/
 `engine.py step` as its own process, and the viewer on port 8000 shows the new turn by itself. The
 control page and the viewer are kept separate on purpose for now.
 
+Each turn has two phases, which the engine records in `state/phase.json` and both pages show:
+**orders** (the turn accepts commands) and then **resolving** (commands are closed while the engine
+applies them and a year's passage of time to compute the next turn, which opens for orders).
+
 Useful server options: `--port` (default `8000`), `--host` (default `127.0.0.1`, local only, no
 authentication), and `--population <file>`. For example, `--population world_population_current.json`
 shows the full modern world instead of the starting scenario. Page URL options: `?texture=8192` caps

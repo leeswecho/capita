@@ -19,7 +19,9 @@
   main { max-width: 420px; margin: 0 auto; padding: 48px 16px; }
   .panel { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 10px; padding: 18px; }
   h1 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 14px; font-weight: 600; }
-  #turn { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; margin-bottom: 18px; }
+  #turn { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  #phase { color: var(--muted); margin: 2px 0 18px; }
+  #phase.resolving { color: var(--accent); }
   #commit { width: 100%; padding: 12px; border: 0; border-radius: 8px; background: var(--accent); color: #000; font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; }
   #commit:disabled { opacity: 0.45; cursor: default; }
   #message { margin-top: 12px; min-height: 1.45em; color: var(--muted); font-size: 13px; white-space: pre-wrap; }
@@ -31,15 +33,19 @@
   <div class="panel">
     <h1>Control</h1>
     <div id="turn">Turn …</div>
+    <div id="phase"></div>
     <button id="commit" disabled>Commit Turn</button>
     <div id="message"></div>
   </div>
 </main>
 <script>
   const turnEl = document.getElementById("turn");
+  const phaseEl = document.getElementById("phase");
+  // The phases of a turn: it accepts commands, then the engine resolves them into the next turn.
+  const PHASES = { orders: "Accepting commands", resolving: "Resolving: commands closed, the engine is computing the next turn…" };
   const button = document.getElementById("commit");
   const message = document.getElementById("message");
-  let committing = false;
+  let committing = false, lastStatus = { turn: null, phase: null };
 
   function show(text, isError = false) {
     message.textContent = text;
@@ -47,8 +53,11 @@
   }
 
   function render(status) {
+    lastStatus = status;
     turnEl.textContent = status.turn === null ? "No game state" : `Turn ${status.turn}`;
-    button.disabled = committing || status.busy || status.turn === null;
+    phaseEl.textContent = PHASES[status.phase] ?? "";
+    phaseEl.classList.toggle("resolving", status.phase === "resolving");
+    button.disabled = committing || status.phase !== "orders";
     if (status.turn === null && !committing) show("Run: python engine/engine.py init", true);
   }
 
@@ -65,7 +74,8 @@
   button.addEventListener("click", async () => {
     committing = true;
     button.disabled = true;
-    show("Committing…");
+    show("");
+    render({ ...lastStatus, phase: "resolving" });   // commands close as soon as the player commits
     try {
       const r = await fetch("/api/commit", { method: "POST" });
       const body = await r.json();

@@ -10,13 +10,19 @@ the player has entered everything for this turn, so the engine advances to the n
 runs `engine/engine.py step` as its own process, so the engine stays the only writer of the state;
 the viewer picks up the new turn by itself within about two seconds.
 
+Each turn has a phase (cohort_state.read_phase()), which the engine records: "orders" while the turn
+accepts commands, and "resolving" while the engine applies them and a year's passage of time to
+compute the next turn. Commands, and commits, are refused while the turn is resolving, however the
+step was started (from this page or from a terminal).
+
 Endpoints:
     /                      the control page (static/index.html)
-    /api/status            {"turn": t, "busy": b}: the state's current turn (null if there is none)
-                           and whether a commit is running (JSON)
+    /api/status            {"turn": t, "phase": p, "since": s}: the state's current turn and its
+                           phase, "orders" or "resolving" (both null if there is no state), and when
+                           that phase began (JSON)
     POST /api/commit       commit the turn: advance the engine one step and return
-                           {"turn": t, "output": "..."}; 409 if a commit is already running, 500 with
-                           the engine's output if the step fails (JSON)
+                           {"turn": t, "phase": p, "output": "..."}; 409 if there is no state or the
+                           turn is already resolving, 500 with the engine's output if the step fails (JSON)
 """
 import argparse
 import json
@@ -43,27 +49,34 @@ class Control:
         self.state_dir = state_dir
         self.lock = threading.Lock()   # held while a commit's engine step runs
 
-    def turn(self):
-        cur = cs.read_current(self.state_dir)
-        return cur["turn"] if cur else None
+    def status(self) -> dict:
+        """The current turn and phase. A commit of ours still starting the engine counts as resolving."""
+        ph = cs.read_phase(self.state_dir) or {"turn": None, "phase": None, "since": None}
+        if ph["turn"] is not None and self.lock.locked():
+            ph["phase"] = cs.RESOLVING
+        return ph
 
     def status_json(self) -> bytes:
-        return json.dumps({"turn": self.turn(), "busy": self.lock.locked()}).encode()
+        return json.dumps(self.status()).encode()
 
     def commit(self):
         """Advance one turn. Returns (status, JSON body)."""
         if not self.lock.acquire(blocking=False):
-            return 409, json.dumps({"error": "a commit is already running"}).encode()
+            return 409, json.dumps({"error": "the turn is already resolving"}).encode()
         try:
-            if self.turn() is None:
+            ph = cs.read_phase(self.state_dir)
+            if ph is None:
                 return 409, json.dumps({"error": "no game state; run: python engine/engine.py init"}).encode()
+            if ph["phase"] == cs.RESOLVING:
+                return 409, json.dumps({"error": f"turn {ph['turn']} is already resolving"}).encode()
             run = subprocess.run([sys.executable, ENGINE, "--state", self.state_dir, "step"],
                                  capture_output=True, text=True)
             output = (run.stdout + run.stderr).strip()
             print(output, flush=True)
             if run.returncode != 0:
                 return 500, json.dumps({"error": "the engine step failed", "output": output}).encode()
-            return 200, json.dumps({"turn": self.turn(), "output": output}).encode()
+            ph = cs.read_phase(self.state_dir)
+            return 200, json.dumps({"turn": ph["turn"], "phase": ph["phase"], "output": output}).encode()
         finally:
             self.lock.release()
 

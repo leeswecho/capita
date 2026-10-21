@@ -25,6 +25,11 @@ placeholder activity hours shaped by age (starting_hours()). It also creates the
 Each step reads the current turn, computes the next one in memory and writes it as a new turn directory
 (cohort_state.py), so the web server can keep reading the old turn until the new one is complete. The
 engine is the only writer; it can run while the server is running.
+
+The engine also records each turn's phase (cohort_state.write_phase()): a turn is in "orders" while it
+accepts the players' commands, and in "resolving" while the engine computes the next turn from it.
+`init` opens turn 0 for orders; `step` marks the current turn resolving, writes the next turn, then
+opens that one for orders. If a step fails, the turn it was resolving goes back to orders.
 """
 import argparse
 import json
@@ -178,6 +183,7 @@ def init(args):
     extra = {"initial_population_source": os.path.basename(args.population),
              "initial_nations_source": os.path.basename(seed_path)}
     m = cs.write_turn(args.state, 0, state, extra=extra)
+    cs.write_phase(args.state, 0, cs.ORDERS)
     print(f"turn 0: {m['populated_tiles']} tiles, {m['total_people']:,.1f} people, {m['nations']} nations -> "
           f"{os.path.join(args.state, cs.turn_dir_name(0))}")
 
@@ -200,16 +206,23 @@ def age_one_year(people, hours):
 
 def step(args):
     for _ in range(args.turns):
-        cur = cs.open_current(args.state, mmap=False)
-        if cur is None:
+        ptr = cs.read_current(args.state)
+        if ptr is None:
             sys.exit(f"no state in {args.state}; run: python engine/engine.py init")
-        people, hours = age_one_year(cur.people, cur.hours)
-        tile_owner = update_ownership(cur.owner, cur.tiles, cur.nation, people)
-        visible = active_visibility(cur.tiles, cur.nation, people, len(cur.nations) + 1)
-        state = cs.State(cur.tiles, people, hours, cur.activities, cur.nation, tile_owner, cur.nations,
-                         visible, cur.explored | visible)
-        m = cs.write_turn(args.state, cur.turn + 1, state,
-                          extra={k: v for k, v in cur.manifest.items() if k.startswith("initial_")})
+        cs.write_phase(args.state, ptr["turn"], cs.RESOLVING)   # close this turn's commands before reading it
+        try:
+            cur = cs.Turn(args.state, ptr["dir"], mmap=False)
+            people, hours = age_one_year(cur.people, cur.hours)
+            tile_owner = update_ownership(cur.owner, cur.tiles, cur.nation, people)
+            visible = active_visibility(cur.tiles, cur.nation, people, len(cur.nations) + 1)
+            state = cs.State(cur.tiles, people, hours, cur.activities, cur.nation, tile_owner, cur.nations,
+                             visible, cur.explored | visible)
+            m = cs.write_turn(args.state, cur.turn + 1, state,
+                              extra={k: v for k, v in cur.manifest.items() if k.startswith("initial_")})
+        except BaseException:
+            cs.write_phase(args.state, ptr["turn"], cs.ORDERS)   # no new turn was written; reopen this one
+            raise
+        cs.write_phase(args.state, m["turn"], cs.ORDERS)
         del cur
         print(f"turn {m['turn']}: {m['total_people']:,.1f} people, checksum {m['checksum']['value'][:12]}")
     gone = cs.prune(args.state, keep=KEEP_TURNS)

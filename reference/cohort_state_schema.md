@@ -15,6 +15,7 @@ run `engine.py init` again.
 ```
 state/
   current.json          pointer to the current turn
+  phase.json            the current turn's phase: accepting commands, or resolving
   turn_00007/           one directory per turn; never changed once current.json has named it
     manifest.json
     nations.json
@@ -39,6 +40,31 @@ Turn directories are named `turn_` + the turn number as 5 digits, zero-padded.
 
 Readers open the directory named by `dir`. Writers replace this file atomically: write
 `current.json.tmp`, then rename it over `current.json`.
+
+## `phase.json`
+
+```json
+{ "format": "capita/cohort-state-3", "turn": 7, "phase": "resolving", "since": "2026-10-21T20:28:13Z" }
+```
+
+Each turn goes through two phases:
+
+| phase | meaning |
+|-------|---------|
+| `orders` | The turn is open: players can enter commands for it, and commit it. |
+| `resolving` | The turn's commands are closed. The engine is applying them, along with a year's passage of time, to compute the next turn. |
+
+The turn number always names a finished turn; the phase says what is happening to it. Resolving turn
+7 ends when turn 8 is written, which opens in `orders`. `since` is when the phase began (UTC, ISO 8601).
+
+The file is separate from the turn directories and is not part of any checksum, because it changes
+while the turn itself doesn't. It applies **only to the turn it names**: if it is missing, or names a
+turn other than the current one, the current turn is in `orders`. That lets the writer replace
+`current.json` first and `phase.json` second, with no wrong reading in between. `cohort_state.read_phase()`
+applies this rule. Writers replace the file atomically, like `current.json`.
+
+A turn left `resolving` by an engine that was killed outright stays so until `engine.py step` runs
+again, which resolves it normally. A step that fails with an error puts its turn back in `orders`.
 
 ## Arrays
 
@@ -149,10 +175,13 @@ indexed by nation id instead.
 
 ## Writing a turn
 
-1. Write all the files into `state/.tmp_turn_NNNNN/`.
-2. Rename that directory to `state/turn_NNNNN/`. A turn that already exists is never overwritten.
-3. Replace `current.json` atomically so it points at the new directory.
-4. Optionally delete old turn directories, never the current one. On Windows, deleting a directory
+1. Set the current turn's phase to `resolving`, before reading it.
+2. Write all the files into `state/.tmp_turn_NNNNN/`.
+3. Rename that directory to `state/turn_NNNNN/`. A turn that already exists is never overwritten.
+4. Replace `current.json` atomically so it points at the new directory.
+5. Set the new turn's phase to `orders`. (If anything before step 4 fails, set the old turn back to
+   `orders` instead.)
+6. Optionally delete old turn directories, never the current one. On Windows, deleting a directory
    fails while a reader still has its files memory-mapped; skip it and try again later.
 
 ## Turn rules (`engine/engine.py`, for now)

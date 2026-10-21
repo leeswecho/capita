@@ -31,6 +31,7 @@
   #goto::placeholder { color: var(--muted); }
   #turn { cursor: default; font-weight: 600; font-variant-numeric: tabular-nums; transition: color 0.3s; }
   #turn.flash { color: var(--accent); }
+  #turn .phase { font-weight: 400; color: var(--muted); }
 
   #status { position: absolute; left: 12px; bottom: 10px; font-size: 12px; color: var(--muted); background: rgba(0,0,0,0.45); padding: 4px 10px; border-radius: 6px; font-variant-numeric: tabular-nums; pointer-events: none; }
   #loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 15px; pointer-events: none; }
@@ -492,6 +493,7 @@ function fetchTile(tid) {
 async function loadData() {
   META = await (await fetch("/api/meta")).json();
   stateTurn = META.turn ?? null;
+  statePhase = META.phase ?? null;
   showTurn(false);
   loadGlobeTexture(META.textures);
   TILE = META.map.tile_size_degrees;
@@ -645,7 +647,8 @@ function updateOwnerTints(reload = false) {
 async function pollPopulation() {
   if (!heatTex || popRefreshing) return;
   try {
-    const { version, turn } = await (await fetch("/api/population/version")).json();
+    const { version, turn, phase } = await (await fetch("/api/population/version")).json();
+    if (phase !== statePhase) { statePhase = phase; showTurn(false); }
     if (turn !== stateTurn) onTurnChange(turn);
     if (version === popVersion) return;
     popRefreshing = true;
@@ -834,10 +837,15 @@ async function showCohorts(tid) {
   }
 }
 
-// The turn chip at the start of the toolbar; it flashes when the engine advances a turn.
+// The turn chip at the start of the toolbar, with the turn's phase: "orders open" while it accepts
+// commands (on the control page), "resolving" while the engine computes the next turn. It flashes on
+// a new turn.
+let statePhase = null;
+const PHASE_LABELS = { orders: "orders open", resolving: "resolving…" };
 function showTurn(flash) {
   const el = document.getElementById("turn");
-  el.textContent = stateTurn == null ? "No game state" : `Turn ${stateTurn}`;
+  el.innerHTML = stateTurn == null ? "No game state"
+    : `Turn ${stateTurn} <span class="phase">· ${PHASE_LABELS[statePhase] ?? PHASE_LABELS.orders}</span>`;
   if (flash) {
     el.classList.add("flash");
     setTimeout(() => el.classList.remove("flash"), 1500);

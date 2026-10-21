@@ -18,8 +18,10 @@ Endpoints:
                            row 0 = lat 89.5, col 0 = lon -180, 0.5-degree tiles); index into map.terrain_types
     /api/cover             dominant land cover per tile, same layout; index into map.cover_types, 255 = no land
     /api/population        people per tile, 259,200 little-endian uint32 in the same order
-    /api/population/version {"version": n, "turn": t}; n goes up each time the population file
-                           changes; t is the cohort state's current turn (null if there is none)
+    /api/population/version {"version": n, "turn": t, "phase": p}; n goes up each time the population
+                           file changes; t is the cohort state's current turn (null if there is none)
+                           and p its phase: "orders" (accepting commands) or "resolving" (the engine
+                           is computing the next turn), null if there is no state
     /api/owners            the owner of every tile at the current turn: 259,200 little-endian uint16
                            nation ids in grid order, 0 = unowned; header X-Turn (for the ownership tint)
 
@@ -214,6 +216,7 @@ class World:
         # people/hours are memory-mapped and read a tile at a time by cohorts_json().
         self.state_dir = state_dir
         self.turn = None
+        self.phase = None
         try:
             self.reload_state()
         except (OSError, ValueError, KeyError) as e:
@@ -247,6 +250,8 @@ class World:
     def reload_state(self):
         """Switch to the turn current.json names, if it changed. Returns True on a switch."""
         cur = cohort_state.read_current(self.state_dir)
+        ph = cohort_state.read_phase(self.state_dir, cur)
+        self.phase = ph["phase"] if ph else None
         if cur is None:
             self.turn = None
             return False
@@ -330,7 +335,7 @@ class World:
             "textures": [{"width": w, "url": f"/earth/{w}.jpg"} for w in self.textures],
             "globe_tiles": self.globe_tiles,
             "populated_tiles": pop.populated_tiles, "population_version": pop.version,
-            "turn": self.turn.turn if self.turn else None,
+            "turn": self.turn.turn if self.turn else None, "phase": self.phase,
         }).encode()
 
     def tile_json(self, tid: str):
@@ -423,7 +428,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.wfile.write(pop.grid)
         if path == "/api/population/version":
             turn = w.turn.turn if w.turn else None
-            return self.send_json(json.dumps({"version": w.pop.version, "turn": turn}).encode())
+            return self.send_json(json.dumps({"version": w.pop.version, "turn": turn, "phase": w.phase}).encode())
         if path == "/api/owners":
             st = w.turn
             if st is None:

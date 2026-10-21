@@ -53,7 +53,7 @@ The server does no rendering. It hands the browser compact data, and the browser
 | `convert_map.py` | Converts `world_map.yaml` → `world_map.json`, and verifies the result. Also defines the JSON format id and the `MapColumns` reader the server uses. |
 | `convert_population.py` | Converts `world_population.yaml` → `world_population_current.json` (the full modern world, prototype data), and verifies the result. Also defines the columnar format id the server checks and the loader other scripts use. |
 | `../engine/engine.py` | The turn engine, in its own directory and run as its own process: `init` writes turn 0 of the cohort state, `step` advances it a year at a time, `verify` checks the current turn's checksum (§4.6). It imports `cohort_state.py` and `grid.py` from `server/`, and by default uses the top-level `state/` folder and `server/world_population_start.json` with its nation seed. |
-| `../control/control.py`, `../control/static/index.html` | The player's control page, a separate server on port 8001 so control stays apart from the view. **Commit Turn** (`POST /api/commit`) runs `engine/engine.py step` as its own process, one commit at a time (a second one while a step runs gets 409); `/api/status` gives the current turn. It reads only `current.json` and never writes the state itself. |
+| `../control/control.py`, `../control/static/index.html` | The player's control page, a separate server on port 8001 so control stays apart from the view. **Commit Turn** (`POST /api/commit`) runs `engine/engine.py step` as its own process. Commits are accepted only while the turn's phase is `orders`; one sent while it is `resolving`, however the step was started, gets 409. `/api/status` gives the current turn and phase. It reads only `current.json` and `phase.json` and never writes the state itself. |
 | `cohort_state.py` | Reads and writes the cohort state (`../state/`): the format id, atomic turn writing, memory-mapped reading, checksums and pruning. Shared by `engine/engine.py` and the server. |
 | `../state/` | The cohort state written by `engine/engine.py`, in its own top-level folder next to `server/` and `engine/`: `current.json` plus one `turn_NNNNN/` directory per recent turn (see `cohort_state_schema.md`). Generated; not committed. |
 | `gen_start_capitals.py` | Writes the game's starting scenario: `world_population_start.json` (200 people in each of 38 start tiles, 0 elsewhere; the start tiles are placeholder locations at present-day capitals; country and area copied from `world_population_current.json`), `../reference/world_population_capitals.yaml` (the same as YAML) and `world_population_start_capitals.nations.json`, the nation seed (one nation per start tile, with that tile as its capital) that `engine.py init` picks up automatically. |
@@ -197,7 +197,7 @@ just keeps serving the last good data and tries again a second later.
 | `/api/terrain` | 259,200 bytes, dominant landform index per tile (into `map.terrain_types`) | terrain overlay |
 | `/api/cover` | 259,200 bytes, dominant cover index per tile (into `map.cover_types`), 255 = open sea (no cover) | cover overlay |
 | `/api/population` | 259,200 `uint32` people counts; header `X-Population-Version` | heatmap |
-| `/api/population/version` | `{"version": n, "turn": t}`: the population file's version and the cohort state's current turn | the page's once-a-second poll |
+| `/api/population/version` | `{"version": n, "turn": t, "phase": p}`: the population file's version, the cohort state's current turn, and its phase (`orders` or `resolving`) | the page's once-a-second poll; the turn chip |
 | `/api/owners` | 259,200 little-endian `uint16`: the nation that owns each tile at the current turn, in grid order, 0 = unowned (518 KB); header `X-Turn` | ownership tint |
 | `/api/tile/<id>` | JSON: the tile record merged with its population fields and country name, plus `nation` (the nation whose people live there at the current turn) and `owner` (the nation that owns the tile), each with `is_capital` and `null` if none | side panel, on hover |
 | `/api/tile/<id>/cohorts` | JSON: the tile's `people` (101 values) and `hours` (101 × activities) at the current turn, plus `turn`, `activities`, `hours_unit`; `people`/`hours` are `null` if nobody lives there | the Cohorts section, only after "Show age cohorts" |
@@ -240,6 +240,11 @@ server.py ◄── memory-maps the arrays of the turn current.json names ◄─
   writes the next. The engine keeps the newest 3 turn directories and deletes older ones. Windows won't
   delete a file another process has mapped, so a turn the server still has open is skipped and removed
   on a later step.
+- **Phases.** Each turn is first open for **orders** (players enter commands, then commit), then
+  **resolving** (commands closed; the engine computes the next turn). The engine records this in
+  `state/phase.json`, beside the turns rather than inside them, because a turn never changes once
+  written. The control page refuses commits while a turn is resolving, and the viewer's turn chip shows
+  the phase.
 - **One turn = one year.** `engine/engine.py step` currently applies only ageing: every cohort moves up a
   year, the 99-year-olds join the open-ended 100+ group (their hours are averaged, weighted by people),
   and age 0 is left empty (no births or deaths yet). The activity list and the starting hours

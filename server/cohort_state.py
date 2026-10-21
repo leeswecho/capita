@@ -4,6 +4,8 @@ Layout (see reference/cohort_state_schema.md for the full, language-neutral spec
 
     state/
       current.json            {"format": ..., "turn": 7, "dir": "turn_00007"}; replaced atomically
+      phase.json              {"format": ..., "turn": 7, "phase": "resolving", "since": ...}: what is
+                              happening to the current turn (see read_phase()); replaced atomically
       turn_00007/
         manifest.json         turn number, activity names, units, array shapes/dtypes, checksum
         nations.json          one record per nation: id, code, capital tile, founded turn, alive
@@ -25,6 +27,7 @@ import hashlib
 import json
 import os
 import shutil
+import time
 
 import numpy as np
 
@@ -39,6 +42,8 @@ DTYPES = {"tiles": "<u4", "people": "<f8", "hours": "<f4", "nation": "<u2", "own
 ARRAYS = tuple(DTYPES)                      # file order, which is also checksum order
 NATION_KEYS = ("id", "code", "capital", "founded_turn", "alive")
 CURRENT = "current.json"
+PHASE = "phase.json"
+ORDERS, RESOLVING = "orders", "resolving"   # the phases of a turn; see read_phase()
 
 
 def turn_dir_name(turn: int) -> str:
@@ -200,6 +205,36 @@ class Turn(State):
 
     def verify(self) -> bool:
         return self.checksum() == self.manifest["checksum"]["value"]
+
+
+def write_phase(state_dir: str, turn: int, phase: str):
+    """Record that `turn` is in `phase`. Only the engine calls this."""
+    if phase not in (ORDERS, RESOLVING):
+        raise ValueError(f"unknown phase {phase!r}")
+    since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    _write_json_atomic(os.path.join(state_dir, PHASE), {"format": FORMAT, "turn": turn, "phase": phase, "since": since})
+
+
+def read_phase(state_dir: str, cur: dict = None):
+    """The phase of the current turn, {"turn": t, "phase": p, "since": s}, or None if there is no state.
+
+    A turn is in ORDERS while it accepts the players' commands, and in RESOLVING once they are closed
+    and the engine is applying them, along with a year's passage of time, to compute the next turn.
+    phase.json applies only to the turn it names: if it is missing, or names an older turn, the current
+    turn is in ORDERS. So the engine can write the new turn first and open it for orders second, and a
+    reader in between still sees the right thing. `cur` is a current.json just read, to save rereading it.
+    """
+    cur = cur or read_current(state_dir)
+    if cur is None:
+        return None
+    try:
+        with open(os.path.join(state_dir, PHASE), encoding="utf-8") as f:
+            ph = json.load(f)
+    except FileNotFoundError:
+        ph = {}
+    if ph.get("turn") != cur["turn"] or ph.get("phase") not in (ORDERS, RESOLVING):
+        return {"turn": cur["turn"], "phase": ORDERS, "since": None}
+    return {"turn": cur["turn"], "phase": ph["phase"], "since": ph.get("since")}
 
 
 def open_current(state_dir: str, mmap: bool = True):

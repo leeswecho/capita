@@ -17,9 +17,13 @@ Endpoints:
     /api/terrain           dominant landform per tile, 259,200 bytes in grid order (grid.py:
                            row 0 = lat 89.5, col 0 = lon -180, 0.5-degree tiles); index into map.terrain_types
     /api/cover             dominant land cover per tile, same layout; index into map.cover_types, 255 = no land
-    /api/population        people per tile, 259,200 little-endian uint32 in the same order
-    /api/population/version {"version": n, "turn": t, "phase": p}; n goes up each time the population
-                           file changes; t is the cohort state's current turn (null if there is none)
+    /api/population        people per tile, 259,200 little-endian uint32 in the same order (rounded):
+                           the current turn's when there is a game state, else the population file's;
+                           headers X-Population-Version, X-People-Source ("turn" or "population file")
+                           and X-Turn
+    /api/population/version {"version": n, "turn": t, "phase": p}; n goes up each time the people shown
+                           change (a new turn, or an edit to the population file when there is no game
+                           state); t is the cohort state's current turn (null if there is none)
                            and p its phase: "orders" (accepting commands) or "resolving" (the engine
                            is computing the next turn), null if there is no state
     /api/owners            the owner of every tile at the current turn: 259,200 little-endian uint16
@@ -27,8 +31,10 @@ Endpoints:
 
 The population file (--population; default world_population_start.json, the game's starting
 scenario) is reread once per second, so edits to it show up in open pages
-without restarting the server. The cohort state's current.json (cohort_state.py) is checked just as
-often; a new turn is memory-mapped, so switching turns reads nothing until a page asks for a tile.
+without restarting the server. It always supplies each tile's country and area; its people counts are
+shown only while there is no game state. The cohort state's current.json (cohort_state.py) is checked
+just as often; a new turn is memory-mapped, and its people are summed per tile (refresh_people()) for
+the heatmap and the side panel.
     /api/tile/<id>         one tile record merged with its population record (JSON)
     /api/tile/<id>/cohorts the tile's people and activity hours by single year of age, from the
                            engine's current turn (JSON); read on request from memory-mapped files
@@ -147,6 +153,23 @@ class Population:
         self.populated_tiles = len(populated)
 
 
+class PeopleView:
+    """The people counts the viewer shows (heatmap, side panel, totals): the current turn's when there
+    is a game state, the population file's when there isn't. Like Population, never modified once
+    built; World.refresh_people() swaps in a new one, with a higher version, whenever they change."""
+
+    def __init__(self, counts, version: int, source: str, turn):
+        self.counts = counts                 # people per tile, float64 [COUNT] in grid order (fractions allowed)
+        self.version, self.source, self.turn = version, source, turn
+        self.grid = np.rint(counts).astype("<u4").tobytes()   # the heatmap's whole people per tile
+        populated = np.flatnonzero(counts > 0)
+        order = populated[np.argsort(-counts[populated], kind="stable")]
+        self.rank = np.zeros(len(counts), dtype=np.int64)    # 1 = most people, 0 = nobody
+        self.rank[order] = np.arange(1, len(order) + 1)
+        self.populated_tiles = len(populated)
+        self.total = float(counts.sum())
+
+
 def read_population(path: str, version: int) -> Population:
     with open(path, "rb") as f:
         return Population(f.read(), version)
@@ -217,10 +240,14 @@ class World:
         self.state_dir = state_dir
         self.turn = None
         self.phase = None
+        self.people = None                   # the PeopleView the viewer shows; see refresh_people()
+        self.people_lock = threading.Lock()  # both reload threads can rebuild it
         try:
             self.reload_state()
         except (OSError, ValueError, KeyError) as e:
             print(f"  couldn't load the cohort state: {e}", flush=True)
+        if self.people is None:
+            self.refresh_people()
         if self.turn:
             print(f"  cohort state: turn {self.turn.turn}, {self.turn.manifest['populated_tiles']} tiles", flush=True)
         else:
@@ -240,6 +267,8 @@ class World:
                 self.pop = Population(raw, self.pop.version + 1)
                 last_error = None
                 print(f"Reloaded {os.path.basename(self.pop_path)} (version {self.pop.version})", flush=True)
+                if self.turn is None:        # with a game state, the turn's people are shown instead
+                    self.refresh_people()
             except (OSError, ValueError) as e:
                 # Often a half-written file; keep serving the last good data and retry next second.
                 if str(e) != last_error:
@@ -253,12 +282,29 @@ class World:
         ph = cohort_state.read_phase(self.state_dir, cur)
         self.phase = ph["phase"] if ph else None
         if cur is None:
-            self.turn = None
+            if self.turn is not None:   # the state was deleted: back to the population file's people
+                self.turn = None
+                self.refresh_people()
             return False
         if self.turn is not None and os.path.basename(self.turn.path) == cur["dir"]:
             return False
         self.turn = cohort_state.Turn(self.state_dir, cur["dir"], mmap=True)  # the old one is unmapped when unused
+        self.refresh_people()
         return True
+
+    def refresh_people(self):
+        """Rebuild the people the viewer shows, from the current turn if there is one (summing each
+        populated tile's ages; reads the turn's people array once), else from the population file."""
+        with self.people_lock:
+            st, pop = self.turn, self.pop
+            if st is not None:
+                counts = np.zeros(WIDTH * HEIGHT)
+                counts[st.tiles] = np.asarray(st.people).sum(axis=1)
+                source, turn = "turn", st.turn
+            else:
+                counts, source, turn = np.asarray(pop.population, dtype=np.float64), "population file", None
+            version = self.people.version + 1 if self.people else 1
+            self.people = PeopleView(counts, version, source, turn)
 
     def reload_state_forever(self):
         """Check current.json every POP_RELOAD_SECONDS and map the new turn when the engine moves on."""
@@ -329,12 +375,13 @@ class World:
         return json.dumps(body, separators=(",", ":")).encode()
 
     def meta_json(self):
-        pop = self.pop
+        pop, view = self.pop, self.people
         return json.dumps({
             "map": self.meta, "rivers": self.rivers, "population_map": pop.meta,
             "textures": [{"width": w, "url": f"/earth/{w}.jpg"} for w in self.textures],
             "globe_tiles": self.globe_tiles,
-            "populated_tiles": pop.populated_tiles, "population_version": pop.version,
+            "populated_tiles": view.populated_tiles, "population_version": view.version,
+            "people": {"source": view.source, "turn": view.turn, "total": view.total},
             "turn": self.turn.turn if self.turn else None, "phase": self.phase,
         }).encode()
 
@@ -343,16 +390,19 @@ class World:
         if i is None:
             return None
         body = {"id": tid, **self.map.tile(i)}
-        pop = self.pop
+        pop, view = self.pop, self.people
         country = pop.country[i]
+        people, area = float(view.counts[i]), pop.area_km2[i]
         body["population"] = {
             "country": country,
             "country_name": self.country_names.get(country) if country else None,
-            "population": pop.population[i],
-            "area_km2": pop.area_km2[i],
-            "density_per_km2": pop.density_per_km2[i],
-            "rank": pop.rank.get(i),
-            "version": pop.version,
+            "population": round(people, 2),      # the current turn's people, or the population file's
+            "area_km2": area,
+            "density_per_km2": round(people / area, 4) if area else 0.0,
+            "rank": int(view.rank[i]) or None,
+            "version": view.version,
+            "source": view.source,
+            "turn": view.turn,
         }
         # The nation whose people live here, and the nation that owns the tile (they can differ once
         # ownership rules go beyond first come, first served).
@@ -418,17 +468,20 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/cover":
             return self.send(200, w.cover_grid, "application/octet-stream")
         if path == "/api/population":
-            pop = w.pop
+            view = w.people
             self.send_response(200)
             self.send_header("Content-Type", "application/octet-stream")
-            self.send_header("Content-Length", str(len(pop.grid)))
+            self.send_header("Content-Length", str(len(view.grid)))
             self.send_header("Cache-Control", "no-cache")
-            self.send_header("X-Population-Version", str(pop.version))
+            self.send_header("X-Population-Version", str(view.version))
+            self.send_header("X-People-Source", view.source)
+            if view.turn is not None:
+                self.send_header("X-Turn", str(view.turn))
             self.end_headers()
-            return self.wfile.write(pop.grid)
+            return self.wfile.write(view.grid)
         if path == "/api/population/version":
             turn = w.turn.turn if w.turn else None
-            return self.send_json(json.dumps({"version": w.pop.version, "turn": turn, "phase": w.phase}).encode())
+            return self.send_json(json.dumps({"version": w.people.version, "turn": turn, "phase": w.phase}).encode())
         if path == "/api/owners":
             st = w.turn
             if st is None:

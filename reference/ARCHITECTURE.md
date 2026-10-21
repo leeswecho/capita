@@ -197,10 +197,10 @@ just keeps serving the last good data and tries again a second later.
 | `/api/meta` | JSON: map metadata, all rivers, population metadata, `populated_tiles`, `population_version`, `turn` (the cohort state's current turn, or `null`) | page startup, and after each population change |
 | `/api/terrain` | 259,200 bytes, dominant landform index per tile (into `map.terrain_types`) | terrain overlay |
 | `/api/cover` | 259,200 bytes, dominant cover index per tile (into `map.cover_types`), 255 = open sea (no cover) | cover overlay |
-| `/api/population` | 259,200 `uint32` people counts; header `X-Population-Version` | heatmap |
-| `/api/population/version` | `{"version": n, "turn": t, "phase": p}`: the population file's version, the cohort state's current turn, and its phase (`orders` or `resolving`) | the page's once-a-second poll; the turn chip |
+| `/api/population` | 259,200 `uint32` people counts (rounded): the current turn's, or the population file's when there is no game state; headers `X-Population-Version`, `X-People-Source` (`turn` or `population file`) and `X-Turn` | heatmap; the legend's "People at turn n" |
+| `/api/population/version` | `{"version": n, "turn": t, "phase": p}`: the version of the people shown (up by one on each new turn, or on each edit to the population file while there is no game state), the cohort state's current turn, and its phase (`orders` or `resolving`) | the page's once-a-second poll; the turn chip |
 | `/api/owners` | 259,200 little-endian `uint16`: the nation that owns each tile at the current turn, in grid order, 0 = unowned (518 KB); header `X-Turn` | ownership tint |
-| `/api/tile/<id>` | JSON: the tile record merged with its population fields and country name, plus `nation` (the nation whose people live there at the current turn) and `owner` (the nation that owns the tile), each with `is_capital` and `null` if none | side panel, on hover |
+| `/api/tile/<id>` | JSON: the tile record merged with its population fields (people, rank and density from the current turn, or from the population file when there is no game state; country and area from the file) and country name, plus `nation` (the nation whose people live there at the current turn) and `owner` (the nation that owns the tile), each with `is_capital` and `null` if none | side panel, on hover |
 | `/api/tile/<id>/cohorts` | JSON: the tile's `people` (101 values) and `hours` (101 × activities) at the current turn, plus `turn`, `activities`, `hours_unit`; `people`/`hours` are `null` if nobody lives there | the Cohorts section, only after "Show age cohorts" |
 | `/api/nations` | JSON: the current turn's nations (`id`, `code`, `name`, `capital` tile id, `alive`, `founded_turn`, `people`, `owned_tiles`, `visible_tiles`, `explored_tiles`); built once per turn | the "View as" list |
 | `/api/nation/<id>/visibility` | 64,800 bytes: the nation's active-visibility bits, then its explored bits (tile i = bit i % 8 of byte i // 8); header `X-Turn` | the fog of war for "View as" |
@@ -277,9 +277,12 @@ server.py ◄── memory-maps the arrays of the turn current.json names ◄─
   full world (224 nations) adds 14 MB per turn.
 - **Determinism.** Each manifest carries a SHA-256 checksum of the arrays; `engine/engine.py verify` rechecks
   it. The yearly step uses only elementwise arithmetic, so it doesn't depend on how NumPy orders sums.
-- **The heatmap still comes from the population file (`world_population_start.json`),** not from the game state. Initialise the
-  state from the same population file the server shows (`engine/engine.py init --population ...`) to keep the
-  two consistent.
+- **The people the viewer shows come from the game state** whenever there is one: on each new turn the
+  server sums each tile's ages (`World.refresh_people()`, a `PeopleView`) for the heatmap, the side panel's
+  people count, rank and density, and the world total. The population file still supplies each tile's
+  country and area, and its people are shown only when there is no game state (or after it is deleted).
+  Initialise the state from the same population file the server is given (`engine/engine.py init
+  --population ...`) so that countries and areas match the people.
 
 ## 5. The page (`static/index.html`)
 
@@ -448,7 +451,7 @@ every 1 s:  GET /api/population/version
                            GET /api/population    (repaint heatmap image)
                            drop stale cached tiles
                            re-render the hovered or pinned tile
-                           flash "Data version n · loaded hh:mm:ss" in the legend
+                           flash "People at turn n · loaded hh:mm:ss" in the legend
             turn changed? ──► drop cached cohorts, re-render the panel (reloading open cohorts)
 ```
 

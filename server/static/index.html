@@ -564,8 +564,9 @@ async function loadData() {
 }
 
 // ---------- live population updates ----------
-// The server rereads the population file every second and bumps a version number when it changes.
-// The page polls that version every second and, on a change, repaints the heatmap and the side panel.
+// The people shown are the engine's current turn when there is a game state, else the population
+// file's. The server bumps a version number whenever they change (a new turn, or an edit to the file);
+// the page polls that version every second and, on a change, repaints the heatmap and the side panel.
 const heatCanvas = document.createElement("canvas");
 let heatTex = null, popVersion = 0, popRefreshing = false;
 
@@ -581,8 +582,10 @@ async function loadPopulationGrid() {
   ctx.putImageData(heatImg, 0, 0);
   heatTex.needsUpdate = true;
   popVersion = +r.headers.get("X-Population-Version") || popVersion;
+  const fromTurn = r.headers.get("X-People-Source") === "turn";
   const el = document.getElementById("popUpdated");
-  el.textContent = `Data version ${popVersion} · loaded ${new Date().toLocaleTimeString()}`;
+  el.textContent = `${fromTurn ? `People at turn ${r.headers.get("X-Turn")}` : `Population file, version ${popVersion}`}` +
+    ` · loaded ${new Date().toLocaleTimeString()}`;
 }
 
 let heatImg = null;                 // the heatmap's pixels (ImageData)

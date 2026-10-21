@@ -190,13 +190,16 @@ indexed by nation id instead.
   "initial_population_source": "world_population_start.json",
   "initial_nations_source": "world_population_start_capitals.nations.json",
   "economy_rules_source": "engine/economy.json",
-  "economy_rules": { "products": { ... }, "foraging": { ... } }
+  "economy_rules": { "products": { ... }, "foraging": { ... } },
+  "demography_rules_source": "engine/demography.json",
+  "demography_rules": { "births": { ... } }
 }
 ```
 
 - `products` lists each product's `name` and `unit`, in the order of the product columns.
 - `economy_rules` is a copy of the rules the engine used to compute this turn's production and decay
-  (`engine/economy.json` at the time), so a replay can tell whether they changed.
+  (`engine/economy.json` at the time), so a replay can tell whether they changed. `demography_rules`
+  is the same for births (`engine/demography.json`).
 - `checksum.value` is the SHA-256 of the raw data bytes (not the `.npy` headers) of `tiles`, `people`,
   `hours`, `nation`, `owner`, `visible`, `explored`, `production`, `labor`, `production_max`, `need`, `consumed`, `decay` and
   `stock`, in that order, followed by the `nations` list as
@@ -220,8 +223,9 @@ indexed by nation id instead.
 ## Turn rules (`engine/engine.py`, for now)
 
 One turn is one year. Each turn every cohort moves up one year of age. The 99-year-olds join the
-100+ group, whose hours become the average of the two groups weighted by people. Age 0 is left empty,
-because there are no births or deaths yet. Activity hours move with the people. The activity list and
+100+ group, whose hours become the average of the two groups weighted by people. Age 0 holds the
+children born during the year (below); there are no deaths yet. Activity hours move with the people,
+and age 0 keeps its own. The activity list and
 its starting hours are placeholders in `engine/engine.py` (`starting_hours()`): rough smooth curves by
 age, so that babies sleep more, subsistence work starts around age 10 and peaks in adulthood, and
 childcare peaks around age 30.
@@ -256,6 +260,16 @@ turns it into a rate per tile (`decay.npy`). For now every tile gets the base ra
 where future products and infrastructure will change it. A product that keeps better, such as
 preserved food, is a separate product with its own rate. Food's rate is 1: food that isn't eaten is all
 lost by the next turn.
+
+**Demographics, after production and consumption** (so that they can respond to the year's food):
+for now, births. Each tile's births are its people × a birth rate per person per year for their age,
+summed over ages (`births()`), and become age 0 of the new turn, in the tile's nation. The rate
+(`birth_rates()`) is a placeholder from `engine/demography.json`, read on every step: one table of
+`[age, rate]` points, filled in linearly, that counts men and women alike, with each birth counting
+half to each parent at their own ages. Over a lifetime it adds up to half the children per woman,
+about 5.8 for foragers, and gives about 38 births per 1,000 people a year at the turn-0 age structure.
+`birth_rates()` is where a decision model will choose instead. Deaths are still to come, so for now
+the population only grows.
 
 **Nations at turn 0** (`make_nations()`) come from a **nation seed**, which `init` requires: `--nations`,
 or the `<population name>.nations.json` / `<population name>_*.nations.json` next to the population file

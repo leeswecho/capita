@@ -25,9 +25,12 @@ placeholder activity hours shaped by age (starting_hours()). It also creates the
   and the rest is carried to the next turn as stock.
   Base rates come from economy.json; economy_modifiers() is where future products and infrastructure
   will change them per tile. Food decays completely for now, so none carries over.
-- Ageing: each cohort moves up one year and the 99-year-olds join the open-ended 100-and-over group
-  (no births or deaths yet). Activity hours move with the people; in the 100+ group the hours of the
-  two merged groups are averaged, weighted by people.
+- Demographics, after production and consumption, so they can respond to the year's food: births
+  (births()) from a rate per person per year by age (demography.json, read on every step). The rate
+  is a placeholder; birth_rates() is where a decision model will choose instead. No deaths yet.
+- Ageing: each cohort moves up one year and the 99-year-olds join the open-ended 100-and-over group.
+  The year's newborns become age 0. Activity hours move with the people; in the 100+ group the hours
+  of the two merged groups are averaged, weighted by people.
 - Ownership, recomputed every turn (update_ownership()): first come, first served. A nation owns a tile
   from the turn it is the first to have people living there, and loses it when none of its people live
   there any more.
@@ -63,6 +66,7 @@ from convert_map import read_map  # noqa: E402
 
 KEEP_TURNS = 3
 RULES = os.path.join(HERE, "economy.json")
+DEMOGRAPHY = os.path.join(HERE, "demography.json")
 MAP = os.path.join(SERVER, "world_map.json")
 
 # Placeholder activities. Replace with the real list; the state files carry the names, so readers adapt.
@@ -292,6 +296,38 @@ def economy_extra(rules):
     return {"economy_rules_source": os.path.relpath(RULES, REPO).replace(os.sep, "/"), "economy_rules": rules}
 
 
+def load_demography(path=DEMOGRAPHY):
+    """demography.json: {"births": {"per_person_per_year_by_age": [[age, rate], ...]}}."""
+    with open(path, encoding="utf-8") as f:
+        demo = json.load(f)
+    pts = demo["births"]["per_person_per_year_by_age"]
+    ages = [a for a, _ in pts]
+    if ages != sorted(set(ages)) or any(r < 0 for _, r in pts):
+        sys.exit(f"{os.path.basename(path)}: births need increasing ages and rates of at least 0")
+    return demo
+
+
+def birth_rates(people, demo):
+    """Births per person per year at each age, float64 [N, AGES], for each row's people.
+
+    Placeholder: the same rate by age everywhere (demography.json), averaged over men and women and
+    counting each birth half to each parent. This is where a decision model (a trained neural net,
+    say) will choose instead, from whatever it is given about each tile: food, labor, age structure...
+    """
+    ages, rates = zip(*demo["births"]["per_person_per_year_by_age"])
+    return np.broadcast_to(np.interp(np.arange(AGES), ages, rates), people.shape)
+
+
+def births(people, rates):
+    """Children born on each row's tile during the year, float64 [N]: people x rate, summed over ages.
+    They belong to the tile's nation and become age 0 at the next turn."""
+    return (people * rates).sum(axis=1)
+
+
+def demography_extra(demo):
+    return {"demography_rules_source": os.path.relpath(DEMOGRAPHY, REPO).replace(os.sep, "/"), "demography_rules": demo}
+
+
 def init(args):
     if cs.read_current(args.state):
         sys.exit(f"{args.state} already has a state; delete it first to start over")
@@ -323,7 +359,8 @@ def init(args):
     state = cs.State(tiles, people, hours, ACTIVITIES, nation, tile_owner, nations, visible, visible.copy(),
                      products, economy)
     extra = {"initial_population_source": os.path.basename(args.population),
-             "initial_nations_source": os.path.basename(seed_path), **economy_extra(rules)}
+             "initial_nations_source": os.path.basename(seed_path), **economy_extra(rules),
+             **demography_extra(load_demography())}
     m = cs.write_turn(args.state, 0, state, extra=extra)
     cs.write_phase(args.state, 0, cs.ORDERS)
     print(f"turn 0: {m['populated_tiles']} tiles, {m['total_people']:,.1f} people, {m['nations']} nations -> "
@@ -369,13 +406,19 @@ def step(args):
             economy = {"production": production, "labor": labor, "production_max": prod_max, "need": need,
                        "consumed": consumed, "decay": decay, "stock": end_of_year(held, consumed, decay)}
 
+            # Demographics: the year's births (deaths to come), from the people who lived it.
+            demo = load_demography()
+            born = births(cur.people, birth_rates(cur.people, demo))
+
             people, hours = age_one_year(cur.people, cur.hours)
+            people[:, 0] = born
             tile_owner = update_ownership(cur.owner, cur.tiles, cur.nation, people)
             visible = active_visibility(cur.tiles, cur.nation, people, len(cur.nations) + 1)
             state = cs.State(cur.tiles, people, hours, cur.activities, cur.nation, tile_owner, cur.nations,
                              visible, cur.explored | visible, products, economy)
             extra = {k: v for k, v in cur.manifest.items() if k.startswith("initial_")}
-            m = cs.write_turn(args.state, cur.turn + 1, state, extra={**extra, **economy_extra(rules)})
+            m = cs.write_turn(args.state, cur.turn + 1, state,
+                              extra={**extra, **economy_extra(rules), **demography_extra(demo)})
         except BaseException:
             cs.write_phase(args.state, ptr["turn"], cs.ORDERS)   # no new turn was written; reopen this one
             raise
@@ -385,7 +428,7 @@ def step(args):
         short = ", ".join(f"{p['name']} {consumed[:, i].sum() / need[:, i].sum():.1%} of need met "
                           f"({np.count_nonzero(consumed[:, i] < need[:, i] * (1 - 1e-9))} tiles short)"
                           for i, p in enumerate(products) if need[:, i].sum() > 0)
-        print(f"turn {m['turn']}: {m['total_people']:,.1f} people, made {made}; {short}; "
+        print(f"turn {m['turn']}: {m['total_people']:,.1f} people ({born.sum():,.1f} born), made {made}; {short}; "
               f"checksum {m['checksum']['value'][:12]}")
     gone = cs.prune(args.state, keep=KEEP_TURNS)
     if gone:

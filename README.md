@@ -84,7 +84,8 @@ engine.py init / step ─────────────┘
 - **Current turn rules** (placeholders): each tile's people forage for food (kcal), with returns that
   level off at what the tile's terrain can sustain. People eat according to their age, everyone
   eating less when there isn't enough, and food that isn't eaten decays completely. The rules and their
-  values are in `engine/economy.json`. Then every cohort ages one year, with no births or deaths yet. Ownership is first come, first served. Each nation actively sees every tile where it has people,
+  values are in `engine/economy.json`. Children are born at a placeholder rate by age
+  (`engine/demography.json`), and every cohort ages one year. There are no deaths yet. Ownership is first come, first served. Each nation actively sees every tile where it has people,
   plus the 8 tiles around each one.
 
 ## Data

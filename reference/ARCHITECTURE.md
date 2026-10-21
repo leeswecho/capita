@@ -254,9 +254,12 @@ server.py ◄── memory-maps the arrays of the turn current.json names ◄─
   and the need and what was consumed are stored (the shortfall is for mortality, still to come). What
   is left loses its decay rate (food: all of it) and the rest carries over as stock. The rules and their values are in
   `engine/economy.json`, read on every step; `cohort_state_schema.md` gives the formulas.
+- **Demographics.** Next come births: each tile's people × a placeholder birth rate per person per
+  year by age (`engine/demography.json`, averaged over men and women), to be replaced by a decision
+  model in `birth_rates()`. There are no deaths yet.
 - **One turn = one year.** `engine/engine.py step` then applies ageing: every cohort moves up a
   year, the 99-year-olds join the open-ended 100+ group (their hours are averaged, weighted by people),
-  and age 0 is left empty (no births or deaths yet). The activity list and the starting hours
+  and the year's newborns become age 0. The activity list and the starting hours
   for each age (rough curves in `starting_hours()`) are placeholders in `engine/engine.py`.
 - **Nations.** Each turn holds a record per nation (`nations.json`: id, code, capital tile, founded
   turn, alive), the nation of each populated tile (`nation.npy`), the owner of every tile

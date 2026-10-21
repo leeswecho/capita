@@ -1,0 +1,11 @@
+{
+  "about": "Demography rules read by engine.py on every step; edit them and the next turn uses the new values. A copy goes into each turn's manifest. Rates are per year (one turn).",
+  "births": {
+    "about": "Placeholder until a decision model (birth_rates() in engine.py) chooses when to have children. per_person_per_year_by_age lists [age, births per person per year] points, filled in linearly between them, counting men and women alike: each birth counts half to the mother and half to the father, at their own ages, so the rates cover both (half the people are women) and add up over a lifetime to half the children per woman. Derived from a forager-like fertility of about 5.8 children per woman, with fathers older on average and fathering children over a longer span. Gives about 38 births per 1,000 people a year at the turn-0 age structure.",
+    "per_person_per_year_by_age": [
+      [0, 0], [14, 0], [16, 0.02], [18, 0.0442], [20, 0.0692], [22, 0.0975], [25, 0.118], [28, 0.1291],
+      [31, 0.1271], [34, 0.1171], [37, 0.0975], [40, 0.074], [43, 0.0498], [46, 0.03], [49, 0.02],
+      [52, 0.0148], [55, 0.01], [58, 0.0063], [61, 0.003], [64, 0], [100, 0]
+    ]
+  }
+}

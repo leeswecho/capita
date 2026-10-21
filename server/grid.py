@@ -43,6 +43,17 @@ def row_col(lat, lon):
     return round((90 - TILE - lat) * PER_DEG), round((lon + 180) * PER_DEG)
 
 
+EARTH_RADIUS_KM = 6371.0072       # the sphere world_population.yaml's area_km2 uses
+
+
+def area_km2(row):
+    """Surface area of a tile in grid row `row` (a number or a NumPy array of rows), land and water."""
+    import numpy as np   # here, not at the top: the rest of grid.py needs only the standard library
+    lat = 90 - (np.asarray(row) + 1) * TILE
+    rad = math.pi / 180
+    return EARTH_RADIUS_KM ** 2 * TILE * rad * (np.sin((lat + TILE) * rad) - np.sin(lat * rad))
+
+
 def index(lat, lon):
     r, c = row_col(lat, lon)
     return r * WIDTH + c

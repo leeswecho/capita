@@ -16,9 +16,11 @@
     --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   }
   html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font: 14px/1.45 var(--font); }
-  main { max-width: 420px; margin: 0 auto; padding: 48px 16px; }
+  main { max-width: 760px; margin: 0 auto; padding: 48px 16px; display: grid; gap: 14px; }
   .panel { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 10px; padding: 18px; }
   h1 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 14px; font-weight: 600; }
+  h1 small { text-transform: none; letter-spacing: 0; font-weight: 400; }
+  #nation { width: 100%; padding: 9px 10px; border: 1px solid var(--panel-border); border-radius: 8px; background: #12161f; color: var(--text); font: inherit; font-size: 15px; }
   #turn { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
   #phase { color: var(--muted); margin: 2px 0 18px; }
   #phase.resolving { color: var(--accent); }
@@ -26,16 +28,36 @@
   #commit:disabled { opacity: 0.45; cursor: default; }
   #message { margin-top: 12px; min-height: 1.45em; color: var(--muted); font-size: 13px; white-space: pre-wrap; }
   #message.error { color: var(--error); }
+  .none { color: var(--muted); }
+  .summary { margin: 0 0 12px; color: var(--muted); }
+  .summary b { color: var(--text); font-weight: 600; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13px; }
+  th, td { padding: 5px 8px; text-align: right; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--panel-border); }
+  tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.025); }
+  tfoot td { border-top: 1px solid var(--panel-border); font-weight: 600; }
+  .bar { display: inline-block; width: 46px; height: 6px; margin-left: 6px; vertical-align: middle; background: rgba(255, 255, 255, 0.08); border-radius: 3px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--accent); }
 </style>
 </head>
 <body>
 <main>
+  <div class="panel">
+    <h1>Playing as</h1>
+    <select id="nation"><option value="">Choose a nation…</option></select>
+  </div>
   <div class="panel">
     <h1>Control</h1>
     <div id="turn">Turn …</div>
     <div id="phase"></div>
     <button id="commit" disabled>Commit Turn</button>
     <div id="message"></div>
+  </div>
+  <div class="panel">
+    <h1>Production <small id="productionWhen"></small></h1>
+    <div id="production"><div class="none">Choose a nation to see what its tiles produce.</div></div>
   </div>
 </main>
 <script>
@@ -45,11 +67,18 @@
   const PHASES = { orders: "Accepting commands", resolving: "Resolving: commands closed, the engine is computing the next turn…" };
   const button = document.getElementById("commit");
   const message = document.getElementById("message");
+  const nationSelect = document.getElementById("nation");
   let committing = false, lastStatus = { turn: null, phase: null };
+  let nations = [], nationId = null, shownTurn = null;   // the controlled nation; the turn the panels show
+  const CHOOSE_HINT = "Choose the nation you're playing to issue commands.";
 
   function show(text, isError = false) {
     message.textContent = text;
     message.classList.toggle("error", isError);
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
   }
 
   function render(status) {
@@ -57,8 +86,14 @@
     turnEl.textContent = status.turn === null ? "No game state" : `Turn ${status.turn}`;
     phaseEl.textContent = PHASES[status.phase] ?? "";
     phaseEl.classList.toggle("resolving", status.phase === "resolving");
-    button.disabled = committing || status.phase !== "orders";
+    // Commands, and so commits, need a nation to issue them for.
+    button.disabled = committing || status.phase !== "orders" || nationId === null;
     if (status.turn === null && !committing) show("Run: python engine/engine.py init", true);
+    else if (nationId === null && !committing && !message.classList.contains("error")) show(CHOOSE_HINT);
+    if (status.turn !== null && status.turn !== shownTurn) {
+      shownTurn = status.turn;
+      loadNations().then(loadProduction);
+    }
   }
 
   async function poll() {
@@ -87,6 +122,101 @@
     committing = false;
     poll();
   });
+
+  // ---------- choosing a nation ----------
+  // The choice comes from ?nation=CODE in the URL, else the last one this browser chose. Changing it
+  // updates both, so a URL can be bookmarked or opened in another tab for a different nation.
+  function savedCode() {
+    const fromUrl = new URLSearchParams(location.search).get("nation");
+    if (fromUrl) return fromUrl.toUpperCase();
+    try { return localStorage.getItem("capita.nation"); } catch { return null; }
+  }
+
+  function choose(code) {
+    const n = nations.find(n => n.code === code && n.alive);
+    nationId = n ? n.id : null;
+    nationSelect.value = n ? n.code : "";
+    const url = new URL(location.href);
+    if (n) url.searchParams.set("nation", n.code); else url.searchParams.delete("nation");
+    history.replaceState(null, "", url);
+    try { if (n) localStorage.setItem("capita.nation", n.code); } catch {}
+    if (message.textContent === CHOOSE_HINT) show("");
+    render(lastStatus);
+  }
+
+  async function loadNations() {
+    try {
+      nations = (await (await fetch("/api/nations")).json()).nations;
+    } catch { return; }
+    const keep = nationSelect.value || savedCode();
+    nationSelect.innerHTML = '<option value="">Choose a nation…</option>' + nations.filter(n => n.alive)
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(n => `<option value="${esc(n.code)}">${esc(n.name)} (${esc(n.code)})</option>`).join("");
+    choose(keep);
+  }
+
+  nationSelect.addEventListener("change", () => { choose(nationSelect.value); loadProduction(); });
+
+  // ---------- production ----------
+  // What each tile the nation owns made in the year that ended with the current turn. The engine
+  // computes it while resolving the previous turn, so turn 0 has none.
+  const productionEl = document.getElementById("production");
+  const whenEl = document.getElementById("productionWhen");
+  const num = (x, digits = 0) => x.toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits });
+  function big(x) {   // 268,123,456 -> "268.1M"
+    const a = Math.abs(x);
+    return a >= 1e9 ? `${num(x / 1e9, 2)}B` : a >= 1e6 ? `${num(x / 1e6, 1)}M` : a >= 1e3 ? `${num(x / 1e3, 1)}k` : num(x);
+  }
+
+  async function loadProduction() {
+    if (nationId === null) {
+      whenEl.textContent = "";
+      productionEl.innerHTML = '<div class="none">Choose a nation to see what its tiles produce.</div>';
+      return;
+    }
+    const id = nationId;
+    let body;
+    try {
+      body = await (await fetch(`/api/nation/${id}/production`)).json();
+    } catch { return; }
+    if (id !== nationId || body.error) return;   // the choice changed while loading
+    whenEl.textContent = body.turn > 0 ? `(the year that ended with turn ${body.turn})` : "";
+    if (body.turn === 0) {
+      productionEl.innerHTML = '<div class="none">Nothing yet. Each turn shows what was made in the year before it, so the first figures appear after the first commit.</div>';
+      return;
+    }
+    if (!body.populated_tiles) {
+      productionEl.innerHTML = `<div class="none">${esc(body.nation.name)} has no populated tiles.</div>`;
+      return;
+    }
+    productionEl.innerHTML = body.products.map((p, k) => productTable(body, p, k)).join("");
+  }
+
+  function productTable(body, p, k) {
+    const t = body.totals;
+    const perDay = (made, people) => people > 0 ? num(made / people / 365) : "–";
+    const share = (made, max) => {
+      const s = max > 0 ? made / max : 0;
+      return `${num(100 * s)}%<span class="bar"><i style="width:${(100 * Math.min(s, 1)).toFixed(1)}%"></i></span>`;
+    };
+    const row = (label, people, made, labor, max, title = "") => `<tr${title ? ` title="${esc(title)}"` : ""}>
+      <td>${label}</td><td>${num(people)}</td><td>${big(labor)}</td>
+      <td title="${num(made)} ${esc(p.unit)}">${big(made)}</td><td>${perDay(made, people)}</td><td>${share(made, max)}</td></tr>`;
+    const shown = body.tiles.length < body.populated_tiles
+      ? ` Showing the ${body.tiles.length} most productive of ${num(body.populated_tiles)} populated tiles.` : "";
+    const empty = body.owned_tiles - body.populated_tiles;
+    return `
+      <p class="summary"><b>${big(t.produced[k])} ${esc(p.unit)}</b> of ${esc(p.name)} from
+        <b>${num(body.populated_tiles)}</b> populated tile${body.populated_tiles === 1 ? "" : "s"}
+        (${perDay(t.produced[k], t.people)} ${esc(p.unit)} per person per day).${shown}
+        ${empty ? ` ${num(empty)} owned tile${empty === 1 ? " has" : "s have"} nobody living there.` : ""}</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Tile</th><th>People</th><th>Labor (h)</th><th>${esc(p.name)} (${esc(p.unit)})</th>
+          <th>${esc(p.unit)} / person / day</th><th>Of tile's max</th></tr></thead>
+        <tbody>${body.tiles.map(r => row(esc(r.tile), r.people, r.produced[k], r.labor_hours[k], r.max[k])).join("")}</tbody>
+        <tfoot>${row("Total", t.people, t.produced[k], t.labor_hours[k], t.max[k])}</tfoot>
+      </table></div>`;
+  }
 
   poll();
   setInterval(poll, 1000);   // picks up turns advanced elsewhere, such as engine.py step from a terminal

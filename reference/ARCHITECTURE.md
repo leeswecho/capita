@@ -52,8 +52,9 @@ The server does no rendering. It hands the browser compact data, and the browser
 | `static/index.html` | The globe viewer page (≈650 lines). |
 | `convert_map.py` | Converts `world_map.yaml` → `world_map.json`, and verifies the result. Also defines the JSON format id and the `MapColumns` reader the server uses. |
 | `convert_population.py` | Converts `world_population.yaml` → `world_population_current.json` (the full modern world, prototype data), and verifies the result. Also defines the columnar format id the server checks and the loader other scripts use. |
-| `../engine/engine.py` | The turn engine, in its own directory and run as its own process: `init` writes turn 0 of the cohort state, `step` advances it a year at a time, `verify` checks the current turn's checksum (§4.6). It imports `cohort_state.py` and `grid.py` from `server/`, and by default uses the top-level `state/` folder and `server/world_population_start.json` with its nation seed. |
-| `../control/control.py`, `../control/static/index.html` | The player's control page, a separate server on port 8001 so control stays apart from the view. **Commit Turn** (`POST /api/commit`) runs `engine/engine.py step` as its own process. Commits are accepted only while the turn's phase is `orders`; one sent while it is `resolving`, however the step was started, gets 409. `/api/status` gives the current turn and phase. It reads only `current.json` and `phase.json` and never writes the state itself. |
+| `../engine/engine.py` | The turn engine, in its own directory and run as its own process: `init` writes turn 0 of the cohort state, `step` advances it a year at a time, `verify` checks the current turn's checksum (§4.6). It imports `cohort_state.py`, `grid.py` and `convert_map.py` from `server/` (it reads `world_map.json` for production), and by default uses the top-level `state/` folder and `server/world_population_start.json` with its nation seed. |
+| `../engine/economy.json` | The economy rules the engine reads on every step: the products (food, in kcal) with their decay rates, and the foraging model's yields and factors. |
+| `../control/control.py`, `../control/static/index.html` | The player's control page, a separate server on port 8001 so control stays apart from the view. **Commit Turn** (`POST /api/commit`) runs `engine/engine.py step` as its own process. Commits are accepted only while the turn's phase is `orders`; one sent while it is `resolving`, however the step was started, gets 409. `/api/status` gives the current turn and phase. The player first chooses the nation they control (remembered by the browser, or `?nation=AUS` in the URL); Commit Turn stays disabled until they do. The page then lists what each populated tile that nation owns produced in the year that ended with the current turn (`/api/nation/<id>/production`: the 100 most productive tiles, with totals). It reads the state and never writes it. |
 | `cohort_state.py` | Reads and writes the cohort state (`../state/`): the format id, atomic turn writing, memory-mapped reading, checksums and pruning. Shared by `engine/engine.py` and the server. |
 | `../state/` | The cohort state written by `engine/engine.py`, in its own top-level folder next to `server/` and `engine/`: `current.json` plus one `turn_NNNNN/` directory per recent turn (see `cohort_state_schema.md`). Generated; not committed. |
 | `gen_start_capitals.py` | Writes the game's starting scenario: `world_population_start.json` (200 people in each of 38 start tiles, 0 elsewhere; the start tiles are placeholder locations at present-day capitals; country and area copied from `world_population_current.json`), `../reference/world_population_capitals.yaml` (the same as YAML) and `world_population_start_capitals.nations.json`, the nation seed (one nation per start tile, with that tile as its capital) that `engine.py init` picks up automatically. |
@@ -245,7 +246,13 @@ server.py ◄── memory-maps the arrays of the turn current.json names ◄─
   `state/phase.json`, beside the turns rather than inside them, because a turn never changes once
   written. The control page refuses commits while a turn is resolving, and the viewer's turn chip shows
   the phase.
-- **One turn = one year.** `engine/engine.py step` currently applies only ageing: every cohort moves up a
+- **Production.** Each step first works out what the year produced, from the current people and their
+  activity hours before they age. Foraging turns `subsistence` hours into food (kcal), at about 1,000
+  kcal an hour while labor is light, levelling off at what the tile's land cover, landform, latitude,
+  water and rivers can sustain. Each product then loses its decay rate (food: all of it, since nobody
+  stores or eats it yet), and the rest carries over as stock. The rules and their values are in
+  `engine/economy.json`, read on every step; `cohort_state_schema.md` gives the formulas.
+- **One turn = one year.** `engine/engine.py step` then applies ageing: every cohort moves up a
   year, the 99-year-olds join the open-ended 100+ group (their hours are averaged, weighted by people),
   and age 0 is left empty (no births or deaths yet). The activity list and the starting hours
   for each age (rough curves in `starting_hours()`) are placeholders in `engine/engine.py`.

@@ -1,0 +1,38 @@
+{
+  "about": "Economy rules read by engine.py on every step; edit them and the next turn uses the new values. A copy goes into each turn's manifest. Amounts are per year (one turn), in each product's unit.",
+  "products": {
+    "food": {
+      "unit": "kcal",
+      "decay": 1.0,
+      "about": "decay is the base share of a tile's holdings lost at the end of each year; economy_modifiers() in engine.py turns it into a per-tile rate, which is where future products and infrastructure will change it. A product that keeps better (preserved food, say) is a separate product with its own rate. Food that isn't eaten is all lost by the next turn."
+    }
+  },
+  "foraging": {
+    "about": "Hunting and gathering. Labor H (person-hours a year of the activity) yields P = max * (1 - exp(-return_per_hour * H / max)): about return_per_hour per hour while labor is light, levelling off at the tile's sustainable maximum. max = (land area x the cover-weighted yield_per_km2 x landform factor x climate factor + water area x water_yield_per_km2) x river_factor if the tile has a navigable river. Yields come from observed forager densities: about 800,000 kcal per person per year.",
+    "product": "food",
+    "activity": "subsistence",
+    "return_per_hour": 1000,
+    "yield_per_km2": {
+      "grass": 200000,
+      "forest": 120000,
+      "desert": 20000,
+      "sand": 100000,
+      "wetlands": 400000,
+      "tundra": 15000,
+      "ice": 0
+    },
+    "landform_factor": {
+      "plains": 1.0,
+      "hills": 0.8,
+      "mountains": 0.5
+    },
+    "climate": {
+      "about": "Land yields fall linearly from full at full_to_latitude degrees north or south to min_factor at min_at_latitude and beyond.",
+      "full_to_latitude": 40,
+      "min_at_latitude": 70,
+      "min_factor": 0.4
+    },
+    "water_yield_per_km2": 50000,
+    "river_factor": 1.2
+  }
+}

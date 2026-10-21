@@ -16,7 +16,13 @@ Layout (see reference/cohort_state_schema.md for the full, language-neutral spec
         owner.npy             <u2 [259200]     nation id that owns each tile of the whole grid (0 = nobody)
         visible.npy           <u1 [M, 32400]   active visibility: row k = nation id k, one bit per tile
         explored.npy          <u1 [M, 32400]   tiles each nation has ever seen (visible is a subset)
+        production.npy        <f8 [N, P]       amount of each product made in the year that ended with this turn
+        labor.npy             <f8 [N, P]       person-hours of work that went into each product that year
+        production_max.npy    <f8 [N, P]       the most the tile can produce in a year (production saturates here)
+        decay.npy             <f4 [N, P]       share of each product's holdings lost at the end of that year
+        stock.npy             <f8 [N, P]       amount of each product held at the start of this turn, after decay
 
+Products (P columns, in manifest "products" order) are measured in their own units: food in kcal.
 Only tiles with people get a row. Nation ids are 1..M-1 and are never reused; row 0 of the visibility
 arrays belongs to "no nation" and is all zeros. Bits are packed little-endian: tile i is bit i % 8 of
 byte i // 8. A turn directory is complete before current.json names it and is never changed afterwards,
@@ -33,13 +39,16 @@ import numpy as np
 
 import grid
 
-FORMAT = "capita/cohort-state-3"
+FORMAT = "capita/cohort-state-4"
 AGES = 101                      # ages 0..99, then 100 = "100 and over"
 HOURS_UNIT = "mean hours per person per day, averaged over the year"
 BITS_BYTES = (grid.COUNT + 7) // 8          # one visibility row: 259,200 tiles -> 32,400 bytes
 DTYPES = {"tiles": "<u4", "people": "<f8", "hours": "<f4", "nation": "<u2", "owner": "<u2",
-          "visible": "<u1", "explored": "<u1"}
+          "visible": "<u1", "explored": "<u1",
+          "production": "<f8", "labor": "<f8", "production_max": "<f8", "decay": "<f4", "stock": "<f8"}
 ARRAYS = tuple(DTYPES)                      # file order, which is also checksum order
+ECONOMY = ("production", "labor", "production_max", "decay", "stock")   # [N, P] each
+PRODUCT_KEYS = ("name", "unit")
 NATION_KEYS = ("id", "code", "capital", "founded_turn", "alive")
 CURRENT = "current.json"
 PHASE = "phase.json"
@@ -68,10 +77,14 @@ def nations_bytes(nations) -> bytes:
 class State:
     """Everything in one turn. The engine builds one, write_turn() saves it, Turn reads it back."""
 
-    def __init__(self, tiles, people, hours, activities, nation, owner, nations, visible, explored):
+    def __init__(self, tiles, people, hours, activities, nation, owner, nations, visible, explored, products, economy):
+        """products: [{"name": "food", "unit": "kcal"}, ...]; economy: {name: array [N, P]} for each name in
+        ECONOMY, with columns in products order."""
         self.tiles, self.people, self.hours, self.nation, self.owner = tiles, people, hours, nation, owner
         self.visible, self.explored = visible, explored
-        self.activities, self.nations = list(activities), nations
+        self.activities, self.nations, self.products = list(activities), nations, list(products)
+        for k in ECONOMY:
+            setattr(self, k, economy[k])
 
     def arrays(self):
         return {k: getattr(self, k) for k in ARRAYS}
@@ -91,6 +104,7 @@ class State:
                 raise ValueError(f"{k} must be {DTYPES[k]}, got {a.dtype}")
         shapes = {"tiles": (n,), "people": (n, AGES), "hours": (n, AGES, len(self.activities)), "nation": (n,), "owner": (grid.COUNT,),
                   "visible": (m, BITS_BYTES), "explored": (m, BITS_BYTES)}
+        shapes.update({k: (n, len(self.products)) for k in ECONOMY})
         for k, shape in shapes.items():
             if getattr(self, k).shape != shape:
                 raise ValueError(f"{k} must have shape {list(shape)}, got {list(getattr(self, k).shape)}")
@@ -98,6 +112,14 @@ class State:
             raise ValueError("tiles must be strictly increasing grid indices")
         if len(set(self.activities)) != len(self.activities):
             raise ValueError("activity names must be unique")
+        if any(tuple(sorted(p)) != tuple(sorted(PRODUCT_KEYS)) for p in self.products) or \
+                len({p["name"] for p in self.products}) != len(self.products):
+            raise ValueError(f"products must have unique names and keys {PRODUCT_KEYS}: {self.products}")
+        for k in ("production", "labor", "production_max", "stock"):
+            if np.any(getattr(self, k) < 0):
+                raise ValueError(f"{k} must not be negative")
+        if np.any((self.decay < 0) | (self.decay > 1)):
+            raise ValueError("decay must be between 0 and 1")
         for i, rec in enumerate(self.nations, 1):
             if tuple(sorted(rec)) != tuple(sorted(NATION_KEYS)) or rec["id"] != i:
                 raise ValueError(f"nation record {i} must have keys {NATION_KEYS} and id {i}: {rec}")
@@ -163,6 +185,7 @@ def write_turn(state_dir: str, turn: int, s: State, extra: dict = None) -> dict:
         "ages": {"count": AGES, "last_is_open_ended": True},
         "activities": s.activities,
         "hours_unit": HOURS_UNIT,
+        "products": s.products,
         "visibility_bits": "row k = nation id k; tile i is bit i % 8 of byte i // 8",
         "arrays": {k: {"file": f"{k}.npy", "dtype": DTYPES[k], "shape": list(a.shape)} for k, a in s.arrays().items()},
         "populated_tiles": len(s.tiles),
@@ -209,12 +232,13 @@ class Turn(State):
         self.turn = m["turn"]
         with open(os.path.join(self.path, "nations.json"), encoding="utf-8") as f:
             nations = json.load(f)["nations"]
-        small = ("tiles", "nation", "owner")   # always read in full; the rest are mapped when mmap=True
+        small = ("tiles", "nation", "owner", *ECONOMY)   # always read in full; the rest are mapped when mmap=True
         a = {k: np.load(os.path.join(self.path, f"{k}.npy"), mmap_mode=None if mmap is False or k in small else "r")
              for k in ARRAYS}
         super().__init__(a["tiles"], a["people"], a["hours"], m["activities"], a["nation"], a["owner"], nations,
-                         a["visible"], a["explored"])
-        if len(self.tiles) != len(self.people) or len(self.visible) != len(nations) + 1:
+                         a["visible"], a["explored"], m["products"], {k: a[k] for k in ECONOMY})
+        if len(self.tiles) != len(self.people) or len(self.visible) != len(nations) + 1 or \
+                any(a[k].shape != (len(self.tiles), len(self.products)) for k in ECONOMY):
             raise ValueError(f"{dir_name}: array sizes don't match the manifest")
 
     def row(self, index: int):

@@ -1,13 +1,15 @@
-# Game state format (`capita/cohort-state-3`)
+# Game state format (`capita/cohort-state-4`)
 
 The game state holds, for every populated tile, the people of each single year of age, how many hours
 a day they spend on each activity, and which nation they belong to. It also holds a record for each
-nation, which nation owns each tile, and what each nation can see. The turn engine (`engine/engine.py`) writes it, and the web server
+nation, which nation owns each tile, and what each nation can see, and for every populated tile what
+it produced in the past year and what it holds of each product. The turn engine (`engine/engine.py`) writes it, and the web server
 (`server/server.py`) reads it. This document is the contract between the two, written so that an engine
 in any language can produce it. `server/cohort_state.py` is the Python implementation.
 
 Version 2 added nations (`nations.json`, `nation.npy`) and visibility (`visible.npy`, `explored.npy`);
-version 3 added tile ownership (`owner.npy`). Older states can't be read; delete the state folder and
+version 3 added tile ownership (`owner.npy`); version 4 added products and production (`production.npy`,
+`labor.npy`, `production_max.npy`, `decay.npy`, `stock.npy`, and `products` in the manifest). Older states can't be read; delete the state folder and
 run `engine.py init` again.
 
 ## Directory layout
@@ -26,6 +28,11 @@ state/
     owner.npy
     visible.npy
     explored.npy
+    production.npy
+    labor.npy
+    production_max.npy
+    decay.npy
+    stock.npy
   turn_00008/
   ...
 ```
@@ -35,7 +42,7 @@ Turn directories are named `turn_` + the turn number as 5 digits, zero-padded.
 ## `current.json`
 
 ```json
-{ "format": "capita/cohort-state-3", "turn": 7, "dir": "turn_00007" }
+{ "format": "capita/cohort-state-4", "turn": 7, "dir": "turn_00007" }
 ```
 
 Readers open the directory named by `dir`. Writers replace this file atomically: write
@@ -44,7 +51,7 @@ Readers open the directory named by `dir`. Writers replace this file atomically:
 ## `phase.json`
 
 ```json
-{ "format": "capita/cohort-state-3", "turn": 7, "phase": "resolving", "since": "2026-10-21T20:28:13Z" }
+{ "format": "capita/cohort-state-4", "turn": 7, "phase": "resolving", "since": "2026-10-21T20:28:13Z" }
 ```
 
 Each turn goes through two phases:
@@ -70,7 +77,7 @@ again, which resolves it normally. A step that fails with an error puts its turn
 
 All are NumPy `.npy` files (format version 1.0): a 10-byte prefix, a text header, then raw array data.
 Use little-endian data in C (row-major) order, `fortran_order: False`. `N` is the number of populated
-tiles and `M` is the number of nations + 1.
+tiles, `M` is the number of nations + 1, and `P` is the number of products.
 
 | file | dtype | shape | meaning |
 |------|-------|-------|---------|
@@ -81,6 +88,13 @@ tiles and `M` is the number of nations + 1.
 | `owner.npy` | `<u2` (uint16) | `[259200]` | The id of the nation that **owns** each tile of the whole grid (flat index), 0 = nobody. Unlike the other per-tile arrays it covers every tile, because future rules may let nations own tiles nobody lives on. |
 | `visible.npy` | `<u1` (uint8) | `[M, 32400]` | **Active visibility**: tiles the nation can see this turn. Row `k` is nation id `k`, one bit per tile (below). |
 | `explored.npy` | `<u1` (uint8) | `[M, 32400]` | **Explored** tiles: every tile the nation has ever actively seen, including this turn. A tile that is explored but not visible is **passively** visible: its geography is known, nothing else. |
+| `production.npy` | `<f8` (float64) | `[N, P]` | How much of each product the tile made in the **year that ended with this turn**, in the product's unit. All zeros at turn 0, which follows no year. |
+| `labor.npy` | `<f8` (float64) | `[N, P]` | Person-hours of work that went into each product that year. |
+| `production_max.npy` | `<f8` (float64) | `[N, P]` | The most the tile can produce of each product in a year: production levels off here however much labor goes in. |
+| `decay.npy` | `<f4` (float32) | `[N, P]` | The share of the tile's holdings of each product lost at the end of that year, 0–1. Per tile, so that future rules can change it locally. |
+| `stock.npy` | `<f8` (float64) | `[N, P]` | How much of each product the tile holds at the start of this turn, after decay. |
+
+Products are columns in `manifest.products` order.
 
 Only tiles with people need a row; a tile with no row has no people. `N` may change from turn to turn.
 
@@ -140,12 +154,13 @@ indexed by nation id instead.
 
 ```json
 {
-  "format": "capita/cohort-state-3",
+  "format": "capita/cohort-state-4",
   "turn": 7,
   "grid": { "tile_size_degrees": 0.5, "width": 720, "height": 360 },
   "ages": { "count": 101, "last_is_open_ended": true },
   "activities": ["sleep", "subsistence", "childcare", "other"],
   "hours_unit": "mean hours per person per day, averaged over the year",
+  "products": [{ "name": "food", "unit": "kcal" }],
   "visibility_bits": "row k = nation id k; tile i is bit i % 8 of byte i // 8",
   "arrays": {
     "tiles":    { "file": "tiles.npy",    "dtype": "<u4", "shape": [49910] },
@@ -154,19 +169,30 @@ indexed by nation id instead.
     "nation":   { "file": "nation.npy",   "dtype": "<u2", "shape": [49910] },
     "owner":    { "file": "owner.npy",    "dtype": "<u2", "shape": [259200] },
     "visible":  { "file": "visible.npy",  "dtype": "<u1", "shape": [225, 32400] },
-    "explored": { "file": "explored.npy", "dtype": "<u1", "shape": [225, 32400] }
+    "explored": { "file": "explored.npy", "dtype": "<u1", "shape": [225, 32400] },
+    "production":     { "file": "production.npy",     "dtype": "<f8", "shape": [49910, 1] },
+    "labor":          { "file": "labor.npy",          "dtype": "<f8", "shape": [49910, 1] },
+    "production_max": { "file": "production_max.npy", "dtype": "<f8", "shape": [49910, 1] },
+    "decay":          { "file": "decay.npy",          "dtype": "<f4", "shape": [49910, 1] },
+    "stock":          { "file": "stock.npy",          "dtype": "<f8", "shape": [49910, 1] }
   },
   "populated_tiles": 49910,
   "nations": 224,
   "total_people": 7840952769.0,
   "checksum": { "algorithm": "sha256", "of": "...", "value": "845b2053..." },
   "initial_population_source": "world_population_start.json",
-  "initial_nations_source": "world_population_start_capitals.nations.json"
+  "initial_nations_source": "world_population_start_capitals.nations.json",
+  "economy_rules_source": "engine/economy.json",
+  "economy_rules": { "products": { ... }, "foraging": { ... } }
 }
 ```
 
+- `products` lists each product's `name` and `unit`, in the order of the product columns.
+- `economy_rules` is a copy of the rules the engine used to compute this turn's production and decay
+  (`engine/economy.json` at the time), so a replay can tell whether they changed.
 - `checksum.value` is the SHA-256 of the raw data bytes (not the `.npy` headers) of `tiles`, `people`,
-  `hours`, `nation`, `owner`, `visible` and `explored`, in that order, followed by the `nations` list as
+  `hours`, `nation`, `owner`, `visible`, `explored`, `production`, `labor`, `production_max`, `decay` and
+  `stock`, in that order, followed by the `nations` list as
   canonical JSON: sorted keys, no whitespace (`","` and `":"` separators), UTF-8. It shows whether a
   deterministic replay reproduced a turn exactly. `total_people` is informational only and isn't part
   of the checksum.
@@ -192,6 +218,30 @@ because there are no births or deaths yet. Activity hours move with the people. 
 its starting hours are placeholders in `engine/engine.py` (`starting_hours()`): rough smooth curves by
 age, so that babies sleep more, subsistence work starts around age 10 and peaks in adulthood, and
 childcare peaks around age 30.
+
+**Production, before ageing** (`produce()`): the year that is ending is worked by the current turn's
+people with their current hours, so production is computed before they age, and stored in the new
+turn. The rules and all their values are in `engine/economy.json`, which the engine reads on every
+step. For now the only product is **food**, in kcal, made by **foraging** (hunting and gathering):
+
+- Labor `H` is the year's person-hours of the `subsistence` activity: people × hours a day × 365,
+  summed over ages.
+- Production is `max × (1 − e^(−r·H / max))`. While labor is light, each hour yields about `r` kcal
+  (`return_per_hour`, 1,000). As labor approaches what the tile can sustain, extra hours yield less,
+  and production levels off at `max`.
+- `max` (`production_max.npy`) is the tile's sustainable yearly yield (`foraging_max()`): its land area
+  × the yield per km² of its land cover (from 15,000 kcal for tundra to 400,000 for wetlands, worked back
+  from observed forager densities) × a landform factor (hills 0.8, mountains 0.5) × a climate factor
+  (falling from 1 at 40° latitude to 0.4 at 70°), plus its water area × a near-shore fishing yield, all
+  × 1.2 if a navigable river runs through it.
+
+**Decay, at the end of the year** (`end_of_year()`): each tile's holdings of each product (its stock
+plus the year's production; nobody eats yet) lose that product's decay rate, and the rest is the new
+turn's `stock`. The base rate is each product's `decay` in `economy.json`, and `economy_modifiers()`
+turns it into a rate per tile (`decay.npy`). For now every tile gets the base rate; that function is
+where future products and infrastructure will change it. A product that keeps better, such as
+preserved food, is a separate product with its own rate. Food's rate is 1: food that isn't eaten is all
+lost by the next turn.
 
 **Nations at turn 0** (`make_nations()`) come from a **nation seed**, which `init` requires: `--nations`,
 or the `<population name>.nations.json` / `<population name>_*.nations.json` next to the population file

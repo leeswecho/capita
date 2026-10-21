@@ -13,6 +13,14 @@ placeholder activity hours shaped by age (starting_hours()). It also creates the
 (make_nations()) and their starting visibility.
 
 `step` advances one year per turn. For now the rules are:
+- Production, from the year's people and activity hours before they age (produce()): foraging turns
+  the year's subsistence hours into food (kcal), saturating at what the tile's land cover, landform,
+  climate, water and rivers can sustain (foraging_max()). The rules and their values are in
+  economy.json, read on every step.
+- Decay (end_of_year()): each tile's holdings of each product (its stock plus the year's production;
+  nobody eats yet) lose that product's decay rate, and the rest is carried to the next turn as stock.
+  Base rates come from economy.json; economy_modifiers() is where future products and infrastructure
+  will change them per tile. Food decays completely for now, so none carries over.
 - Ageing: each cohort moves up one year and the 99-year-olds join the open-ended 100-and-over group
   (no births or deaths yet). Activity hours move with the people; in the 100+ group the hours of the
   two merged groups are averaged, weighted by people.
@@ -47,8 +55,11 @@ sys.path.insert(0, SERVER)   # cohort_state.py and grid.py live with the server,
 import cohort_state as cs  # noqa: E402
 import grid  # noqa: E402
 from cohort_state import AGES  # noqa: E402
+from convert_map import read_map  # noqa: E402
 
 KEEP_TURNS = 3
+RULES = os.path.join(HERE, "economy.json")
+MAP = os.path.join(SERVER, "world_map.json")
 
 # Placeholder activities. Replace with the real list; the state files carry the names, so readers adapt.
 ACTIVITIES = ["sleep", "subsistence", "childcare", "other"]
@@ -158,6 +169,93 @@ def find_seed(population_path):
     return os.path.join(folder, found[0]) if found else None
 
 
+def load_rules(path=RULES):
+    """economy.json: {"products": {name: {"unit": ..., "decay": ...}}, "foraging": {...}}."""
+    with open(path, encoding="utf-8") as f:
+        rules = json.load(f)
+    if rules["foraging"]["product"] not in rules["products"]:
+        sys.exit(f"{os.path.basename(path)}: foraging makes {rules['foraging']['product']!r}, which isn't a product")
+    return rules
+
+
+def product_list(rules):
+    return [{"name": name, "unit": p["unit"]} for name, p in rules["products"].items()]
+
+
+def foraging_max(tiles, world, rules):
+    """The most food each row's tile can sustainably yield in a year, float64 [N] (kcal).
+
+    Land: its area x the cover-weighted yield per km2 x the landform factor (plains, hills, mountains)
+    x a climate factor that falls with latitude. Water: its area x a near-shore fishing yield. The total
+    is raised by river_factor when a navigable river runs through the tile. Cover shares cover land and
+    frozen water (world_map_schema.md), so ice on frozen sea simply yields nothing.
+    """
+    f = rules["foraging"]
+    idx = tiles.astype(np.int64)
+    terrain = {t: np.asarray(c, dtype=np.float64)[idx] / 100 for t, c in zip(world.terrain_types, world.terrain)}
+    cover = {t: np.asarray(c, dtype=np.float64)[idx] / 100 for t, c in zip(world.cover_types, world.cover)}
+    rows = idx // grid.WIDTH
+    area = grid.area_km2(rows)
+    landform = sum(terrain[t] * k for t, k in f["landform_factor"].items())   # land share x landform factor
+    cover_yield = sum(cover[t] * f["yield_per_km2"][t] for t in world.cover_types)
+    c = f["climate"]
+    lat = np.abs(90 - (rows + 0.5) * grid.TILE)   # tile centre
+    cold = np.clip((lat - c["full_to_latitude"]) / (c["min_at_latitude"] - c["full_to_latitude"]), 0, 1)
+    climate = 1 - (1 - c["min_factor"]) * cold
+    on_land = area * landform * cover_yield * climate
+    on_water = area * terrain["water"] * f["water_yield_per_km2"]
+    river = np.array([grid.tile_id(*grid.corner(*divmod(int(i), grid.WIDTH))) in world.rivers_at for i in idx], dtype=bool)
+    return (on_land + on_water) * np.where(river, f["river_factor"], 1.0)
+
+
+def production_max(tiles, products, rules):
+    """The most each row's tile can produce of each product in a year, float64 [N, P] in products order."""
+    m = np.zeros((len(tiles), len(products)))
+    m[:, products.index(rules["foraging"]["product"])] = foraging_max(tiles, read_map(MAP), rules)
+    return m
+
+
+def produce(people, hours, activities, prod_max, products, rules):
+    """The year's production and the labor behind it, each float64 [N, P] in products order.
+
+    Foraging: labor H is person-hours a year of the foraging activity (people x hours per day x 365,
+    summed over ages); production is max x (1 - exp(-r H / max)), about r kcal per hour while labor is
+    light, levelling off at the tile's maximum. (A sum over ages and exp() could differ in the last bit
+    between NumPy builds or CPUs; checksums compare replays on the same machine.)
+    """
+    f = rules["foraging"]
+    if f["activity"] not in activities:
+        sys.exit(f"foraging uses the activity {f['activity']!r}, which the state doesn't have: {activities}")
+    col = products.index(f["product"])
+    labor_h = (people * hours[:, :, activities.index(f["activity"])]).sum(axis=1) * 365
+    m = prod_max[:, col]
+    ratio = np.divide(f["return_per_hour"] * labor_h, m, out=np.zeros_like(m), where=m > 0)
+    production, labor = np.zeros_like(prod_max), np.zeros_like(prod_max)
+    production[:, col] = m * -np.expm1(-ratio)
+    labor[:, col] = labor_h
+    return production, labor
+
+
+def economy_modifiers(n, rules):
+    """Each row's decay rate for each product, float32 [N, P] in products order.
+
+    For now every tile gets the base rate from economy.json. This is where products and infrastructure
+    will change it, tile by tile.
+    """
+    base = np.array([p["decay"] for p in rules["products"].values()], dtype=np.float32)
+    return np.tile(base, (n, 1))
+
+
+def end_of_year(stock, production, decay):
+    """What each row holds of each product at the start of the next turn, float64 [N, P]: the year's
+    holdings (last stock plus production; nobody eats yet) less their decay."""
+    return (stock + production) * (1 - decay.astype(np.float64))
+
+
+def economy_extra(rules):
+    return {"economy_rules_source": os.path.relpath(RULES, REPO).replace(os.sep, "/"), "economy_rules": rules}
+
+
 def init(args):
     if cs.read_current(args.state):
         sys.exit(f"{args.state} already has a state; delete it first to start over")
@@ -179,9 +277,16 @@ def init(args):
     nation = tile_nation[tiles]
     tile_owner = update_ownership(np.zeros(grid.COUNT, dtype=np.uint16), tiles, nation, people)
     visible = active_visibility(tiles, nation, people, len(nations) + 1)
-    state = cs.State(tiles, people, hours, ACTIVITIES, nation, tile_owner, nations, visible, visible.copy())
+    rules = load_rules()
+    products = product_list(rules)
+    zeros = np.zeros((len(tiles), len(products)))   # turn 0 follows no year: nothing made or held yet
+    economy = {"production": zeros, "labor": zeros.copy(), "stock": zeros.copy(),
+               "production_max": production_max(tiles, [p["name"] for p in products], rules),
+               "decay": economy_modifiers(len(tiles), rules)}
+    state = cs.State(tiles, people, hours, ACTIVITIES, nation, tile_owner, nations, visible, visible.copy(),
+                     products, economy)
     extra = {"initial_population_source": os.path.basename(args.population),
-             "initial_nations_source": os.path.basename(seed_path)}
+             "initial_nations_source": os.path.basename(seed_path), **economy_extra(rules)}
     m = cs.write_turn(args.state, 0, state, extra=extra)
     cs.write_phase(args.state, 0, cs.ORDERS)
     print(f"turn 0: {m['populated_tiles']} tiles, {m['total_people']:,.1f} people, {m['nations']} nations -> "
@@ -212,19 +317,33 @@ def step(args):
         cs.write_phase(args.state, ptr["turn"], cs.RESOLVING)   # close this turn's commands before reading it
         try:
             cur = cs.Turn(args.state, ptr["dir"], mmap=False)
+            rules = load_rules()
+            products = product_list(rules)
+            if products != cur.products:
+                sys.exit(f"economy.json's products {[p['name'] for p in products]} don't match the state's "
+                         f"{[p['name'] for p in cur.products]}; start a new state to change them")
+            names = [p["name"] for p in products]
+            # Production: the year that is ending, so this turn's people and hours, before they age.
+            prod_max = production_max(cur.tiles, names, rules)
+            production, labor = produce(cur.people, cur.hours, cur.activities, prod_max, names, rules)
+            decay = economy_modifiers(len(cur.tiles), rules)
+            economy = {"production": production, "labor": labor, "production_max": prod_max, "decay": decay,
+                       "stock": end_of_year(cur.stock, production, decay)}
+
             people, hours = age_one_year(cur.people, cur.hours)
             tile_owner = update_ownership(cur.owner, cur.tiles, cur.nation, people)
             visible = active_visibility(cur.tiles, cur.nation, people, len(cur.nations) + 1)
             state = cs.State(cur.tiles, people, hours, cur.activities, cur.nation, tile_owner, cur.nations,
-                             visible, cur.explored | visible)
-            m = cs.write_turn(args.state, cur.turn + 1, state,
-                              extra={k: v for k, v in cur.manifest.items() if k.startswith("initial_")})
+                             visible, cur.explored | visible, products, economy)
+            extra = {k: v for k, v in cur.manifest.items() if k.startswith("initial_")}
+            m = cs.write_turn(args.state, cur.turn + 1, state, extra={**extra, **economy_extra(rules)})
         except BaseException:
             cs.write_phase(args.state, ptr["turn"], cs.ORDERS)   # no new turn was written; reopen this one
             raise
         cs.write_phase(args.state, m["turn"], cs.ORDERS)
         del cur
-        print(f"turn {m['turn']}: {m['total_people']:,.1f} people, checksum {m['checksum']['value'][:12]}")
+        made = ", ".join(f"{production[:, i].sum():,.0f} {p['unit']} of {p['name']}" for i, p in enumerate(products))
+        print(f"turn {m['turn']}: {m['total_people']:,.1f} people, made {made}, checksum {m['checksum']['value'][:12]}")
     gone = cs.prune(args.state, keep=KEEP_TURNS)
     if gone:
         print(f"pruned {', '.join(gone)}")

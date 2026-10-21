@@ -7,6 +7,16 @@
       "about": "decay is the base share of a tile's holdings lost at the end of each year; economy_modifiers() in engine.py turns it into a per-tile rate, which is where future products and infrastructure will change it. A product that keeps better (preserved food, say) is a separate product with its own rate. Food that isn't eaten is all lost by the next turn."
     }
   },
+  "consumption": {
+    "about": "What people consume of each product: per_person_per_day_by_age lists [age, amount per person per day] points, filled in linearly between them (age 100 is the 100-and-over group). A tile's need is its people x these amounts x 365. If the tile holds less than its need (last stock plus the year's production), everyone's consumption is cut by the same share. Products not listed here aren't consumed.",
+    "food": {
+      "about": "kcal a day, averaged over males and females, for an active foraging life; rough figures in the spirit of FAO/WHO/UNU (2004) energy requirements. Infants' figure stands for the extra food their mothers eat to breastfeed them.",
+      "per_person_per_day_by_age": [
+        [0, 700], [1, 1000], [3, 1250], [6, 1500], [10, 1900], [14, 2400], [18, 2700],
+        [30, 2650], [50, 2450], [65, 2200], [80, 1950], [100, 1800]
+      ]
+    }
+  },
   "foraging": {
     "about": "Hunting and gathering. Labor H (person-hours a year of the activity) yields P = max * (1 - exp(-return_per_hour * H / max)): about return_per_hour per hour while labor is light, levelling off at the tile's sustainable maximum. max = (land area x the cover-weighted yield_per_km2 x landform factor x climate factor + water area x water_yield_per_km2) x river_factor if the tile has a navigable river. Yields come from observed forager densities: about 800,000 kcal per person per year.",
     "product": "food",

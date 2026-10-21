@@ -1,4 +1,4 @@
-# Game state format (`capita/cohort-state-4`)
+# Game state format (`capita/cohort-state-5`)
 
 The game state holds, for every populated tile, the people of each single year of age, how many hours
 a day they spend on each activity, and which nation they belong to. It also holds a record for each
@@ -9,7 +9,8 @@ in any language can produce it. `server/cohort_state.py` is the Python implement
 
 Version 2 added nations (`nations.json`, `nation.npy`) and visibility (`visible.npy`, `explored.npy`);
 version 3 added tile ownership (`owner.npy`); version 4 added products and production (`production.npy`,
-`labor.npy`, `production_max.npy`, `decay.npy`, `stock.npy`, and `products` in the manifest). Older states can't be read; delete the state folder and
+`labor.npy`, `production_max.npy`, `decay.npy`, `stock.npy`, and `products` in the manifest); version 5
+added consumption (`need.npy`, `consumed.npy`). Older states can't be read; delete the state folder and
 run `engine.py init` again.
 
 ## Directory layout
@@ -31,6 +32,8 @@ state/
     production.npy
     labor.npy
     production_max.npy
+    need.npy
+    consumed.npy
     decay.npy
     stock.npy
   turn_00008/
@@ -42,7 +45,7 @@ Turn directories are named `turn_` + the turn number as 5 digits, zero-padded.
 ## `current.json`
 
 ```json
-{ "format": "capita/cohort-state-4", "turn": 7, "dir": "turn_00007" }
+{ "format": "capita/cohort-state-5", "turn": 7, "dir": "turn_00007" }
 ```
 
 Readers open the directory named by `dir`. Writers replace this file atomically: write
@@ -51,7 +54,7 @@ Readers open the directory named by `dir`. Writers replace this file atomically:
 ## `phase.json`
 
 ```json
-{ "format": "capita/cohort-state-4", "turn": 7, "phase": "resolving", "since": "2026-10-21T20:28:13Z" }
+{ "format": "capita/cohort-state-5", "turn": 7, "phase": "resolving", "since": "2026-10-21T20:28:13Z" }
 ```
 
 Each turn goes through two phases:
@@ -91,6 +94,8 @@ tiles, `M` is the number of nations + 1, and `P` is the number of products.
 | `production.npy` | `<f8` (float64) | `[N, P]` | How much of each product the tile made in the **year that ended with this turn**, in the product's unit. All zeros at turn 0, which follows no year. |
 | `labor.npy` | `<f8` (float64) | `[N, P]` | Person-hours of work that went into each product that year. |
 | `production_max.npy` | `<f8` (float64) | `[N, P]` | The most the tile can produce of each product in a year: production levels off here however much labor goes in. |
+| `need.npy` | `<f8` (float64) | `[N, P]` | How much of each product the tile's people needed that year: people × the per-person daily amount for their age × 365. 0 for products nobody consumes. |
+| `consumed.npy` | `<f8` (float64) | `[N, P]` | How much they actually consumed: the need, or all the tile held if that was less. A shortfall is shared evenly, so people of every age consumed `consumed / need` of their need. |
 | `decay.npy` | `<f4` (float32) | `[N, P]` | The share of the tile's holdings of each product lost at the end of that year, 0–1. Per tile, so that future rules can change it locally. |
 | `stock.npy` | `<f8` (float64) | `[N, P]` | How much of each product the tile holds at the start of this turn, after decay. |
 
@@ -154,7 +159,7 @@ indexed by nation id instead.
 
 ```json
 {
-  "format": "capita/cohort-state-4",
+  "format": "capita/cohort-state-5",
   "turn": 7,
   "grid": { "tile_size_degrees": 0.5, "width": 720, "height": 360 },
   "ages": { "count": 101, "last_is_open_ended": true },
@@ -173,6 +178,8 @@ indexed by nation id instead.
     "production":     { "file": "production.npy",     "dtype": "<f8", "shape": [49910, 1] },
     "labor":          { "file": "labor.npy",          "dtype": "<f8", "shape": [49910, 1] },
     "production_max": { "file": "production_max.npy", "dtype": "<f8", "shape": [49910, 1] },
+    "need":           { "file": "need.npy",           "dtype": "<f8", "shape": [49910, 1] },
+    "consumed":       { "file": "consumed.npy",       "dtype": "<f8", "shape": [49910, 1] },
     "decay":          { "file": "decay.npy",          "dtype": "<f4", "shape": [49910, 1] },
     "stock":          { "file": "stock.npy",          "dtype": "<f8", "shape": [49910, 1] }
   },
@@ -191,7 +198,7 @@ indexed by nation id instead.
 - `economy_rules` is a copy of the rules the engine used to compute this turn's production and decay
   (`engine/economy.json` at the time), so a replay can tell whether they changed.
 - `checksum.value` is the SHA-256 of the raw data bytes (not the `.npy` headers) of `tiles`, `people`,
-  `hours`, `nation`, `owner`, `visible`, `explored`, `production`, `labor`, `production_max`, `decay` and
+  `hours`, `nation`, `owner`, `visible`, `explored`, `production`, `labor`, `production_max`, `need`, `consumed`, `decay` and
   `stock`, in that order, followed by the `nations` list as
   canonical JSON: sorted keys, no whitespace (`","` and `":"` separators), UTF-8. It shows whether a
   deterministic replay reproduced a turn exactly. `total_people` is informational only and isn't part
@@ -235,9 +242,16 @@ step. For now the only product is **food**, in kcal, made by **foraging** (hunti
   (falling from 1 at 40° latitude to 0.4 at 70°), plus its water area × a near-shore fishing yield, all
   × 1.2 if a navigable river runs through it.
 
-**Decay, at the end of the year** (`end_of_year()`): each tile's holdings of each product (its stock
-plus the year's production; nobody eats yet) lose that product's decay rate, and the rest is the new
-turn's `stock`. The base rate is each product's `decay` in `economy.json`, and `economy_modifiers()`
+**Consumption** (`consume()`): the same people (before ageing) consume each product listed under
+`consumption` in `economy.json`. Each product has a table of `[age, amount per person per day]` points,
+filled in linearly between them; food starts at 700 kcal a day for infants (standing for their mothers'
+extra intake), peaks at 2,700 at 18 and falls to 1,800 at 100, about 2,200 on average across a forager
+age structure. A tile's `need` is its people × those amounts × 365. It consumes its need, or, if it
+holds less (its stock plus the year's production), everything it holds: everyone's consumption is cut
+by the same share. The shortfall, `need − consumed`, is meant to drive mortality.
+
+**Decay, at the end of the year** (`end_of_year()`): what each tile holds of each product after
+consumption loses that product's decay rate, and the rest is the new turn's `stock`. The base rate is each product's `decay` in `economy.json`, and `economy_modifiers()`
 turns it into a rate per tile (`decay.npy`). For now every tile gets the base rate; that function is
 where future products and infrastructure will change it. A product that keeps better, such as
 preserved food, is a separate product with its own rate. Food's rate is 1: food that isn't eaten is all

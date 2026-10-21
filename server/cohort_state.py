@@ -19,7 +19,9 @@ Layout (see reference/cohort_state_schema.md for the full, language-neutral spec
         production.npy        <f8 [N, P]       amount of each product made in the year that ended with this turn
         labor.npy             <f8 [N, P]       person-hours of work that went into each product that year
         production_max.npy    <f8 [N, P]       the most the tile can produce in a year (production saturates here)
-        decay.npy             <f4 [N, P]       share of each product's holdings lost at the end of that year
+        need.npy              <f8 [N, P]       how much of each product the tile's people needed that year
+        consumed.npy          <f8 [N, P]       how much they consumed: the need, or all there was if that fell short
+        decay.npy            <f4 [N, P]       share of each product's holdings lost at the end of that year
         stock.npy             <f8 [N, P]       amount of each product held at the start of this turn, after decay
 
 Products (P columns, in manifest "products" order) are measured in their own units: food in kcal.
@@ -39,15 +41,16 @@ import numpy as np
 
 import grid
 
-FORMAT = "capita/cohort-state-4"
+FORMAT = "capita/cohort-state-5"
 AGES = 101                      # ages 0..99, then 100 = "100 and over"
 HOURS_UNIT = "mean hours per person per day, averaged over the year"
 BITS_BYTES = (grid.COUNT + 7) // 8          # one visibility row: 259,200 tiles -> 32,400 bytes
 DTYPES = {"tiles": "<u4", "people": "<f8", "hours": "<f4", "nation": "<u2", "owner": "<u2",
           "visible": "<u1", "explored": "<u1",
-          "production": "<f8", "labor": "<f8", "production_max": "<f8", "decay": "<f4", "stock": "<f8"}
+          "production": "<f8", "labor": "<f8", "production_max": "<f8", "need": "<f8", "consumed": "<f8",
+          "decay": "<f4", "stock": "<f8"}
 ARRAYS = tuple(DTYPES)                      # file order, which is also checksum order
-ECONOMY = ("production", "labor", "production_max", "decay", "stock")   # [N, P] each
+ECONOMY = ("production", "labor", "production_max", "need", "consumed", "decay", "stock")   # [N, P] each
 PRODUCT_KEYS = ("name", "unit")
 NATION_KEYS = ("id", "code", "capital", "founded_turn", "alive")
 CURRENT = "current.json"
@@ -115,9 +118,11 @@ class State:
         if any(tuple(sorted(p)) != tuple(sorted(PRODUCT_KEYS)) for p in self.products) or \
                 len({p["name"] for p in self.products}) != len(self.products):
             raise ValueError(f"products must have unique names and keys {PRODUCT_KEYS}: {self.products}")
-        for k in ("production", "labor", "production_max", "stock"):
+        for k in ("production", "labor", "production_max", "need", "consumed", "stock"):
             if np.any(getattr(self, k) < 0):
                 raise ValueError(f"{k} must not be negative")
+        if np.any(self.consumed > self.need * (1 + 1e-9)):
+            raise ValueError("consumed must not exceed need")
         if np.any((self.decay < 0) | (self.decay > 1)):
             raise ValueError("decay must be between 0 and 1")
         for i, rec in enumerate(self.nations, 1):

@@ -11,8 +11,8 @@ runs `engine/engine.py step` as its own process, so the engine stays the only wr
 the viewer picks up the new turn by itself within about two seconds.
 
 The player first chooses the nation they control (the page remembers it, and ?nation=AUS in the URL
-chooses one). The page then shows what each tile that nation owns produced in the year that ended
-with the current turn.
+chooses one). The page then shows what each tile that nation owns produced and consumed in the year
+that ended with the current turn.
 
 Each turn has a phase (cohort_state.read_phase()), which the engine records: "orders" while the turn
 accepts commands, and "resolving" while the engine applies them and a year's passage of time to
@@ -26,10 +26,10 @@ Endpoints:
                            that phase began (JSON)
     /api/nations           {"turn": t, "nations": [{"id", "code", "name", "alive"}, ...]}: the current
                            turn's nations (JSON)
-    /api/nation/<id>/production  what each populated tile the nation owns made in the year that ended
-                           with the current turn: per product, the amount, the labor hours behind it and
-                           the tile's yearly maximum, with totals; the PRODUCTION_ROWS most productive
-                           tiles (JSON)
+    /api/nation/<id>/production  what each populated tile the nation owns made and consumed in the year
+                           that ended with the current turn: per product, the amount made, the labor
+                           hours behind it, the tile's yearly maximum, its people's need and what they
+                           consumed, with totals; the PRODUCTION_ROWS most productive tiles (JSON)
     POST /api/commit       commit the turn: advance the engine one step and return
                            {"turn": t, "phase": p, "output": "..."}; 409 if there is no state or the
                            turn is already resolving, 500 with the engine's output if the step fails (JSON)
@@ -112,6 +112,7 @@ class Control:
         rows = np.flatnonzero(t.owner[t.tiles] == nid)   # owned tiles that have people (and so a row)
         people = np.asarray(t.people[rows]).sum(axis=1)
         made, labor, top = t.production[rows], t.labor[rows], t.production_max[rows]
+        need, consumed = t.need[rows], t.consumed[rows]
         order = np.argsort(-made[:, 0], kind="stable")[:PRODUCTION_ROWS] if len(rows) else rows
         tile_ids = [grid.tile_id(*grid.corner(*divmod(int(t.tiles[r]), grid.WIDTH))) for r in rows[order]]
         return json.dumps({
@@ -121,9 +122,12 @@ class Control:
             "owned_tiles": int(np.count_nonzero(t.owner == nid)),
             "populated_tiles": len(rows),
             "totals": {"people": float(people.sum()), "produced": made.sum(axis=0).tolist(),
-                       "labor_hours": labor.sum(axis=0).tolist(), "max": top.sum(axis=0).tolist()},
+                       "labor_hours": labor.sum(axis=0).tolist(), "max": top.sum(axis=0).tolist(),
+                       "need": need.sum(axis=0).tolist(), "consumed": consumed.sum(axis=0).tolist(),
+                       "short_tiles": np.count_nonzero(consumed < need * (1 - 1e-9), axis=0).tolist()},
             "tiles": [{"tile": tid, "people": float(people[i]), "produced": made[i].tolist(),
-                       "labor_hours": labor[i].tolist(), "max": top[i].tolist()}
+                       "labor_hours": labor[i].tolist(), "max": top[i].tolist(),
+                       "need": need[i].tolist(), "consumed": consumed[i].tolist()}
                       for tid, i in zip(tile_ids, order)],
         }).encode()
 

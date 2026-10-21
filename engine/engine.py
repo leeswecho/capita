@@ -17,8 +17,12 @@ placeholder activity hours shaped by age (starting_hours()). It also creates the
   the year's subsistence hours into food (kcal), saturating at what the tile's land cover, landform,
   climate, water and rivers can sustain (foraging_max()). The rules and their values are in
   economy.json, read on every step.
-- Decay (end_of_year()): each tile's holdings of each product (its stock plus the year's production;
-  nobody eats yet) lose that product's decay rate, and the rest is carried to the next turn as stock.
+- Consumption (consume()): the same people consume each product at a rate per person per day that
+  depends on age (economy.json). If a tile holds less than its people need (its stock plus the
+  year's production), everyone's consumption is cut by the same share. The need and what was consumed
+  are stored, so the shortfall can drive mortality.
+- Decay (end_of_year()): whatever each tile holds after consumption loses that product's decay rate,
+  and the rest is carried to the next turn as stock.
   Base rates come from economy.json; economy_modifiers() is where future products and infrastructure
   will change them per tile. Food decays completely for now, so none carries over.
 - Ageing: each cohort moves up one year and the 99-year-olds join the open-ended 100-and-over group
@@ -170,11 +174,20 @@ def find_seed(population_path):
 
 
 def load_rules(path=RULES):
-    """economy.json: {"products": {name: {"unit": ..., "decay": ...}}, "foraging": {...}}."""
+    """economy.json: {"products": {name: {"unit": ..., "decay": ...}}, "consumption": {name: {...}}, "foraging": {...}}."""
     with open(path, encoding="utf-8") as f:
         rules = json.load(f)
+    name = os.path.basename(path)
     if rules["foraging"]["product"] not in rules["products"]:
-        sys.exit(f"{os.path.basename(path)}: foraging makes {rules['foraging']['product']!r}, which isn't a product")
+        sys.exit(f"{name}: foraging makes {rules['foraging']['product']!r}, which isn't a product")
+    for product, c in rules["consumption"].items():
+        if product == "about":
+            continue
+        if product not in rules["products"]:
+            sys.exit(f"{name}: consumption lists {product!r}, which isn't a product")
+        ages = [a for a, _ in c["per_person_per_day_by_age"]]
+        if ages != sorted(set(ages)) or any(v < 0 for _, v in c["per_person_per_day_by_age"]):
+            sys.exit(f"{name}: {product} consumption needs increasing ages and amounts of at least 0")
     return rules
 
 
@@ -246,10 +259,33 @@ def economy_modifiers(n, rules):
     return np.tile(base, (n, 1))
 
 
-def end_of_year(stock, production, decay):
-    """What each row holds of each product at the start of the next turn, float64 [N, P]: the year's
-    holdings (last stock plus production; nobody eats yet) less their decay."""
-    return (stock + production) * (1 - decay.astype(np.float64))
+def consumption_rates(products, rules):
+    """Amount of each product a person of each age consumes a day, float64 [AGES, P] in products order:
+    economy.json's points, filled in linearly between them (0 for products that aren't consumed)."""
+    rates = np.zeros((AGES, len(products)))
+    for k, name in enumerate(products):
+        c = rules["consumption"].get(name)
+        if c:
+            ages, amounts = zip(*c["per_person_per_day_by_age"])
+            rates[:, k] = np.interp(np.arange(AGES), ages, amounts)
+    return rates
+
+
+def consume(people, held, rates):
+    """The year's need and consumption of each product, each float64 [N, P].
+
+    need = people x the age's daily rate x 365, summed over ages. Consumption is the need, or, if the
+    tile holds less (held: its stock plus the year's production), all it holds: everyone's consumption
+    is cut by the same share, so each age eats rate x consumed / need.
+    """
+    need = (people[:, :, None] * rates[None, :, :]).sum(axis=1) * 365   # not people @ rates: BLAS may reorder sums
+    return need, np.minimum(need, held)
+
+
+def end_of_year(held, consumed, decay):
+    """What each row holds of each product at the start of the next turn, float64 [N, P]: what was held
+    (last stock plus the year's production) less what was consumed, less its decay."""
+    return np.maximum(held - consumed, 0) * (1 - decay.astype(np.float64))
 
 
 def economy_extra(rules):
@@ -281,6 +317,7 @@ def init(args):
     products = product_list(rules)
     zeros = np.zeros((len(tiles), len(products)))   # turn 0 follows no year: nothing made or held yet
     economy = {"production": zeros, "labor": zeros.copy(), "stock": zeros.copy(),
+               "need": zeros.copy(), "consumed": zeros.copy(),
                "production_max": production_max(tiles, [p["name"] for p in products], rules),
                "decay": economy_modifiers(len(tiles), rules)}
     state = cs.State(tiles, people, hours, ACTIVITIES, nation, tile_owner, nations, visible, visible.copy(),
@@ -326,9 +363,11 @@ def step(args):
             # Production: the year that is ending, so this turn's people and hours, before they age.
             prod_max = production_max(cur.tiles, names, rules)
             production, labor = produce(cur.people, cur.hours, cur.activities, prod_max, names, rules)
+            held = cur.stock + production
+            need, consumed = consume(cur.people, held, consumption_rates(names, rules))
             decay = economy_modifiers(len(cur.tiles), rules)
-            economy = {"production": production, "labor": labor, "production_max": prod_max, "decay": decay,
-                       "stock": end_of_year(cur.stock, production, decay)}
+            economy = {"production": production, "labor": labor, "production_max": prod_max, "need": need,
+                       "consumed": consumed, "decay": decay, "stock": end_of_year(held, consumed, decay)}
 
             people, hours = age_one_year(cur.people, cur.hours)
             tile_owner = update_ownership(cur.owner, cur.tiles, cur.nation, people)
@@ -343,7 +382,11 @@ def step(args):
         cs.write_phase(args.state, m["turn"], cs.ORDERS)
         del cur
         made = ", ".join(f"{production[:, i].sum():,.0f} {p['unit']} of {p['name']}" for i, p in enumerate(products))
-        print(f"turn {m['turn']}: {m['total_people']:,.1f} people, made {made}, checksum {m['checksum']['value'][:12]}")
+        short = ", ".join(f"{p['name']} {consumed[:, i].sum() / need[:, i].sum():.1%} of need met "
+                          f"({np.count_nonzero(consumed[:, i] < need[:, i] * (1 - 1e-9))} tiles short)"
+                          for i, p in enumerate(products) if need[:, i].sum() > 0)
+        print(f"turn {m['turn']}: {m['total_people']:,.1f} people, made {made}; {short}; "
+              f"checksum {m['checksum']['value'][:12]}")
     gone = cs.prune(args.state, keep=KEEP_TURNS)
     if gone:
         print(f"pruned {', '.join(gone)}")

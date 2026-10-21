@@ -40,6 +40,9 @@
   tfoot td { border-top: 1px solid var(--panel-border); font-weight: 600; }
   .bar { display: inline-block; width: 46px; height: 6px; margin-left: 6px; vertical-align: middle; background: rgba(255, 255, 255, 0.08); border-radius: 3px; overflow: hidden; }
   .bar i { display: block; height: 100%; background: var(--accent); }
+  .bar.short i { background: var(--error); }
+  td.short { color: var(--error); }
+  .summary .short { color: var(--error); }
 </style>
 </head>
 <body>
@@ -56,7 +59,7 @@
     <div id="message"></div>
   </div>
   <div class="panel">
-    <h1>Production <small id="productionWhen"></small></h1>
+    <h1>Production and consumption <small id="productionWhen"></small></h1>
     <div id="production"><div class="none">Choose a nation to see what its tiles produce.</div></div>
   </div>
 </main>
@@ -157,9 +160,10 @@
 
   nationSelect.addEventListener("change", () => { choose(nationSelect.value); loadProduction(); });
 
-  // ---------- production ----------
-  // What each tile the nation owns made in the year that ended with the current turn. The engine
-  // computes it while resolving the previous turn, so turn 0 has none.
+  // ---------- production and consumption ----------
+  // What each tile the nation owns made and consumed in the year that ended with the current turn. The
+  // engine computes it while resolving the previous turn, so turn 0 has none. When a tile holds less
+  // than its people need, everyone's consumption is cut by the same share ("need met").
   const productionEl = document.getElementById("production");
   const whenEl = document.getElementById("productionWhen");
   const num = (x, digits = 0) => x.toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits });
@@ -195,26 +199,37 @@
   function productTable(body, p, k) {
     const t = body.totals;
     const perDay = (made, people) => people > 0 ? num(made / people / 365) : "–";
-    const share = (made, max) => {
-      const s = max > 0 ? made / max : 0;
-      return `${num(100 * s)}%<span class="bar"><i style="width:${(100 * Math.min(s, 1)).toFixed(1)}%"></i></span>`;
+    const consumed = t.need[k] > 0;   // products nobody consumes get no need columns
+    const pct = (s, short = false) =>
+      `${num(100 * s)}%<span class="bar${short ? " short" : ""}"><i style="width:${(100 * Math.min(s, 1)).toFixed(1)}%"></i></span>`;
+    const met = (ate, need) => need > 0 ? ate / need : 1;
+    const row = (label, r) => {
+      const s = met(r.consumed[k], r.need[k]), short = s < 1 - 1e-9;
+      return `<tr>
+        <td>${label}</td><td>${num(r.people)}</td><td>${big(r.labor_hours[k])}</td>
+        <td title="${num(r.produced[k])} ${esc(p.unit)}">${big(r.produced[k])}</td><td>${perDay(r.produced[k], r.people)}</td>
+        <td>${pct(r.max[k] > 0 ? r.produced[k] / r.max[k] : 0)}</td>
+        ${consumed ? `<td title="${num(r.need[k])} ${esc(p.unit)}">${big(r.need[k])}</td>
+        <td class="${short ? "short" : ""}" title="consumed ${num(r.consumed[k])} ${esc(p.unit)}">${pct(s, short)}</td>` : ""}</tr>`;
     };
-    const row = (label, people, made, labor, max, title = "") => `<tr${title ? ` title="${esc(title)}"` : ""}>
-      <td>${label}</td><td>${num(people)}</td><td>${big(labor)}</td>
-      <td title="${num(made)} ${esc(p.unit)}">${big(made)}</td><td>${perDay(made, people)}</td><td>${share(made, max)}</td></tr>`;
     const shown = body.tiles.length < body.populated_tiles
       ? ` Showing the ${body.tiles.length} most productive of ${num(body.populated_tiles)} populated tiles.` : "";
     const empty = body.owned_tiles - body.populated_tiles;
+    const shortTiles = t.short_tiles[k];
+    const eaten = consumed ? ` Consumed <b>${big(t.consumed[k])}</b>: ${num(100 * met(t.consumed[k], t.need[k]), 1)}% of need${
+      shortTiles ? `, <span class="short">${num(shortTiles)} tile${shortTiles === 1 ? "" : "s"} short</span>` : ", no tile short"}.` : "";
     return `
-      <p class="summary"><b>${big(t.produced[k])} ${esc(p.unit)}</b> of ${esc(p.name)} from
+      <p class="summary">Made <b>${big(t.produced[k])} ${esc(p.unit)}</b> of ${esc(p.name)} on
         <b>${num(body.populated_tiles)}</b> populated tile${body.populated_tiles === 1 ? "" : "s"}
-        (${perDay(t.produced[k], t.people)} ${esc(p.unit)} per person per day).${shown}
+        (${perDay(t.produced[k], t.people)} ${esc(p.unit)} per person per day).${eaten}${shown}
         ${empty ? ` ${num(empty)} owned tile${empty === 1 ? " has" : "s have"} nobody living there.` : ""}</p>
       <div class="table-wrap"><table>
-        <thead><tr><th>Tile</th><th>People</th><th>Labor (h)</th><th>${esc(p.name)} (${esc(p.unit)})</th>
-          <th>${esc(p.unit)} / person / day</th><th>Of tile's max</th></tr></thead>
-        <tbody>${body.tiles.map(r => row(esc(r.tile), r.people, r.produced[k], r.labor_hours[k], r.max[k])).join("")}</tbody>
-        <tfoot>${row("Total", t.people, t.produced[k], t.labor_hours[k], t.max[k])}</tfoot>
+        <thead><tr><th>Tile</th><th>People</th><th>Labor (h)</th><th>Made (${esc(p.unit)})</th>
+          <th>${esc(p.unit)} / person / day</th><th>Of tile's max</th>
+          ${consumed ? `<th>Needed (${esc(p.unit)})</th><th>Need met</th>` : ""}</tr></thead>
+        <tbody>${body.tiles.map(r => row(esc(r.tile), r)).join("")}</tbody>
+        <tfoot>${row("Total", { people: t.people, labor_hours: t.labor_hours, produced: t.produced, max: t.max,
+                                need: t.need, consumed: t.consumed })}</tfoot>
       </table></div>`;
   }
 

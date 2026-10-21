@@ -29,6 +29,8 @@
   select.chip { appearance: auto; max-width: 230px; }
   select.chip option { background: #12161f; color: var(--text); }
   #goto::placeholder { color: var(--muted); }
+  #turn { cursor: default; font-weight: 600; font-variant-numeric: tabular-nums; transition: color 0.3s; }
+  #turn.flash { color: var(--accent); }
 
   #status { position: absolute; left: 12px; bottom: 10px; font-size: 12px; color: var(--muted); background: rgba(0,0,0,0.45); padding: 4px 10px; border-radius: 6px; font-variant-numeric: tabular-nums; pointer-events: none; }
   #loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 15px; pointer-events: none; }
@@ -114,6 +116,7 @@
   <div id="view">
     <div id="loading">Loading map…</div>
     <div id="toolbar">
+      <span class="chip" id="turn" title="The engine's current turn (one turn = one year)">Turn –</span>
       <label class="chip"><input type="checkbox" id="optRivers" checked> Rivers</label>
       <label class="chip"><input type="checkbox" id="optHeat" checked> Population heatmap</label>
       <label class="chip"><input type="checkbox" id="optTerrain"> Terrain overlay</label>
@@ -489,6 +492,7 @@ function fetchTile(tid) {
 async function loadData() {
   META = await (await fetch("/api/meta")).json();
   stateTurn = META.turn ?? null;
+  showTurn(false);
   loadGlobeTexture(META.textures);
   TILE = META.map.tile_size_degrees;
   HEAT_LEVELS = HEAT_LEVELS_PER_DEG2.map(x => x * TILE * TILE);
@@ -830,8 +834,19 @@ async function showCohorts(tid) {
   }
 }
 
+// The turn chip at the start of the toolbar; it flashes when the engine advances a turn.
+function showTurn(flash) {
+  const el = document.getElementById("turn");
+  el.textContent = stateTurn == null ? "No game state" : `Turn ${stateTurn}`;
+  if (flash) {
+    el.classList.add("flash");
+    setTimeout(() => el.classList.remove("flash"), 1500);
+  }
+}
+
 async function onTurnChange(turn) {
   stateTurn = turn;
+  showTurn(true);
   cohortCache.clear();
   tileCache.clear();
   await loadNations();

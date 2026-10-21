@@ -113,12 +113,32 @@ class State:
             raise ValueError("every visible tile must also be explored")
 
 
+def _retry(fn, tries: int = 20, wait: float = 0.025):
+    """Call fn(), retrying briefly on PermissionError. On Windows, replacing a file fails while another
+    process has it open, and opening it fails while it is being replaced; both last only milliseconds,
+    and current.json and phase.json are read every second by both servers."""
+    for i in range(tries):
+        try:
+            return fn()
+        except PermissionError:
+            if i == tries - 1:
+                raise
+            time.sleep(wait)
+
+
+def _read_json(path: str):
+    def read():
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    return _retry(read)
+
+
 def _write_json_atomic(path: str, obj, indent=2):
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8", newline="\n") as f:
         json.dump(obj, f, indent=indent, ensure_ascii=False)
         f.write("\n")
-    os.replace(tmp, path)
+    _retry(lambda: os.replace(tmp, path))
 
 
 def write_turn(state_dir: str, turn: int, s: State, extra: dict = None) -> dict:
@@ -163,8 +183,7 @@ def write_turn(state_dir: str, turn: int, s: State, extra: dict = None) -> dict:
 def read_current(state_dir: str):
     """The current.json pointer, or None if there is no state yet."""
     try:
-        with open(os.path.join(state_dir, CURRENT), encoding="utf-8") as f:
-            cur = json.load(f)
+        cur = _read_json(os.path.join(state_dir, CURRENT))
     except FileNotFoundError:
         return None
     if cur.get("format") != FORMAT:
@@ -228,8 +247,7 @@ def read_phase(state_dir: str, cur: dict = None):
     if cur is None:
         return None
     try:
-        with open(os.path.join(state_dir, PHASE), encoding="utf-8") as f:
-            ph = json.load(f)
+        ph = _read_json(os.path.join(state_dir, PHASE))
     except FileNotFoundError:
         ph = {}
     if ph.get("turn") != cur["turn"] or ph.get("phase") not in (ORDERS, RESOLVING):

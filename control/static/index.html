@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Capita control</title>
+<style>
+  :root {
+    --bg: #05070d;
+    --panel: rgba(18, 22, 32, 0.92);
+    --panel-border: rgba(255, 255, 255, 0.08);
+    --text: #e6e9ef;
+    --muted: #8b93a7;
+    --accent: #ffd34d;
+    --error: #ff7a6b;
+    --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font: 14px/1.45 var(--font); }
+  main { max-width: 420px; margin: 0 auto; padding: 48px 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 10px; padding: 18px; }
+  h1 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 14px; font-weight: 600; }
+  #turn { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; margin-bottom: 18px; }
+  #commit { width: 100%; padding: 12px; border: 0; border-radius: 8px; background: var(--accent); color: #000; font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; }
+  #commit:disabled { opacity: 0.45; cursor: default; }
+  #message { margin-top: 12px; min-height: 1.45em; color: var(--muted); font-size: 13px; white-space: pre-wrap; }
+  #message.error { color: var(--error); }
+</style>
+</head>
+<body>
+<main>
+  <div class="panel">
+    <h1>Control</h1>
+    <div id="turn">Turn …</div>
+    <button id="commit" disabled>Commit Turn</button>
+    <div id="message"></div>
+  </div>
+</main>
+<script>
+  const turnEl = document.getElementById("turn");
+  const button = document.getElementById("commit");
+  const message = document.getElementById("message");
+  let committing = false;
+
+  function show(text, isError = false) {
+    message.textContent = text;
+    message.classList.toggle("error", isError);
+  }
+
+  function render(status) {
+    turnEl.textContent = status.turn === null ? "No game state" : `Turn ${status.turn}`;
+    button.disabled = committing || status.busy || status.turn === null;
+    if (status.turn === null && !committing) show("Run: python engine/engine.py init", true);
+  }
+
+  async function poll() {
+    try {
+      const r = await fetch("/api/status");
+      render(await r.json());
+    } catch {
+      turnEl.textContent = "Server offline";
+      button.disabled = true;
+    }
+  }
+
+  button.addEventListener("click", async () => {
+    committing = true;
+    button.disabled = true;
+    show("Committing…");
+    try {
+      const r = await fetch("/api/commit", { method: "POST" });
+      const body = await r.json();
+      if (r.ok) show(`Committed. Now turn ${body.turn}.`);
+      else show(body.output ? `${body.error}\n${body.output}` : body.error, true);
+    } catch {
+      show("Couldn't reach the control server.", true);
+    }
+    committing = false;
+    poll();
+  });
+
+  poll();
+  setInterval(poll, 1000);   // picks up turns advanced elsewhere, such as engine.py step from a terminal
+</script>
+</body>
+</html>

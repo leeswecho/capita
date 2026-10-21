@@ -53,6 +53,7 @@ The server does no rendering. It hands the browser compact data, and the browser
 | `convert_map.py` | Converts `world_map.yaml` → `world_map.json`, and verifies the result. Also defines the JSON format id and the `MapColumns` reader the server uses. |
 | `convert_population.py` | Converts `world_population.yaml` → `world_population_current.json` (the full modern world, prototype data), and verifies the result. Also defines the columnar format id the server checks and the loader other scripts use. |
 | `../engine/engine.py` | The turn engine, in its own directory and run as its own process: `init` writes turn 0 of the cohort state, `step` advances it a year at a time, `verify` checks the current turn's checksum (§4.6). It imports `cohort_state.py` and `grid.py` from `server/`, and by default uses the top-level `state/` folder and `server/world_population_start.json` with its nation seed. |
+| `../control/control.py`, `../control/static/index.html` | The player's control page, a separate server on port 8001 so control stays apart from the view. **Commit Turn** (`POST /api/commit`) runs `engine/engine.py step` as its own process, one commit at a time (a second one while a step runs gets 409); `/api/status` gives the current turn. It reads only `current.json` and never writes the state itself. |
 | `cohort_state.py` | Reads and writes the cohort state (`../state/`): the format id, atomic turn writing, memory-mapped reading, checksums and pruning. Shared by `engine/engine.py` and the server. |
 | `../state/` | The cohort state written by `engine/engine.py`, in its own top-level folder next to `server/` and `engine/`: `current.json` plus one `turn_NNNNN/` directory per recent turn (see `cohort_state_schema.md`). Generated; not committed. |
 | `gen_start_capitals.py` | Writes the game's starting scenario: `world_population_start.json` (200 people in each of 38 start tiles, 0 elsewhere; the start tiles are placeholder locations at present-day capitals; country and area copied from `world_population_current.json`), `../reference/world_population_capitals.yaml` (the same as YAML) and `world_population_start_capitals.nations.json`, the nation seed (one nation per start tile, with that tile as its capital) that `engine.py init` picks up automatically. |
@@ -462,6 +463,14 @@ python ../engine/engine.py verify    # recheck the current turn's checksum
 
 The running server and any open page pick up each new turn within about two seconds. To start over,
 delete the top-level `state/` folder and run `init` again.
+
+**Commit turns from the control page**
+
+```
+python ../control/control.py         # then open http://localhost:8001/ and press Commit Turn
+```
+
+Each commit runs `engine.py step` once, exactly as above.
 
 **After changing the starting scenario**
 

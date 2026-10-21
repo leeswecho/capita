@@ -11,6 +11,7 @@ and visibility one year at a time. A local web server shows it all on an interac
 |------|------------|
 | `server/` | The globe viewer: `server.py` (Python HTTP server), `static/index.html` (Three.js page), the shared tile grid (`grid.py`), the cohort-state reader/writer (`cohort_state.py`), data converters and generators, and the JSON data and globe images the server loads. |
 | `engine/` | `engine.py`, the turn engine. It runs as its own process and writes the game state to `state/`. |
+| `control/` | The player's control page, served separately from the viewer: `control.py` (Python HTTP server) and `static/index.html`. For now it has only a **Commit Turn** button, which advances the engine one turn. |
 | `state/` | The game state, one directory per turn. The engine generates it and it isn't committed. |
 | `reference/` | Documentation, plus the full-size YAML source data (`world_map.yaml`, `world_population.yaml`, `world_population_capitals.yaml`). |
 
@@ -38,6 +39,16 @@ python ../engine/engine.py verify     # recheck the current turn's checksum
 
 The running server and any open page pick up each new turn within about two seconds. To start over,
 delete `state/` and run `init` again.
+
+To play turns from a browser instead, start the control server (from the repository root):
+
+```sh
+python control/control.py             # then open http://localhost:8001/
+```
+
+**Commit Turn** means the player has entered all their commands for the turn. It runs
+`engine.py step` as its own process, and the viewer on port 8000 shows the new turn by itself. The
+control page and the viewer are kept separate on purpose for now.
 
 Useful server options: `--port` (default `8000`), `--host` (default `127.0.0.1`, local only, no
 authentication), and `--population <file>`. For example, `--population world_population_current.json`

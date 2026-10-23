@@ -1,0 +1,12 @@
+[Unit]
+Description=capita view server (port 8000)
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/capita/server
+ExecStart=/usr/bin/python3 server.py --host 0.0.0.0 --port 8000
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

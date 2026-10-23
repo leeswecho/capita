@@ -12,6 +12,7 @@ and visibility one year at a time. A local web server shows it all on an interac
 | `server/` | The globe viewer: `server.py` (Python HTTP server), `static/index.html` (Three.js page), the shared tile grid (`grid.py`), the cohort-state reader/writer (`cohort_state.py`), data converters and generators, and the JSON data and globe images the server loads. |
 | `engine/` | `engine.py`, the turn engine. It runs as its own process and writes the game state to `state/`. |
 | `control/` | The player's control page, served separately from the viewer: `control.py` (Python HTTP server) and `static/index.html`. For now it has only a **Commit Turn** button, which advances the engine one turn. |
+| `deploy/` | How the public server at `capita.leeswecho.net` is set up: systemd services for both servers, and the Caddy config that serves them over HTTPS. |
 | `state/` | The game state, one directory per turn. The engine generates it and it isn't committed. |
 | `reference/` | Documentation, plus the full-size YAML source data (`world_map.yaml`, `world_population.yaml`, `world_population_capitals.yaml`). |
 

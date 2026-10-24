@@ -5,6 +5,14 @@ into a **0.5° × 0.5° grid (720 × 360 = 259,200 tiles)**. Each tile records i
 cover, rivers and population. A turn engine advances age cohorts of people, nations, tile ownership
 and visibility one year at a time. A local web server shows it all on an interactive 3D globe.
 
+A civilization is its people. People are organised under **leaders** (chieftain, mayor,
+superintendent, admiral, general, king), each of whom marshals a **segment**: the people directly
+under them. A leader's **following** is their segment plus the segments of every leader below them,
+and the player is the nation's root leader. Units and cities are the same idea: an army is a segment
+under a general, a town is a segment under a mayor that has stopped moving, and a settling party is a
+new leader given part of a segment. Each segment has a position on the map: a tile, or partway between
+two neighbouring tiles.
+
 ## Repository layout
 
 | Path | What it is |
@@ -50,8 +58,9 @@ python control/control.py             # then open http://localhost:8001/
 First choose the nation you're playing (or open `http://localhost:8001/?nation=AUS`). **Commit Turn**
 means the player has entered all their commands for the turn. It runs `engine.py step` as its own
 process, and the viewer on port 8000 shows the new turn by itself. The control page and the viewer are
-kept separate on purpose for now. Below it, the page lists the food each of the nation's tiles produced
-in the past year, how much of its people's need that met, and how many people died of each cause.
+kept separate on purpose for now. Below it, the page lists the food each of the nation's segments
+produced in the past year, how much of its people's need that met, and how many people died of each
+cause.
 
 Each turn has two phases, which the engine records in `state/phase.json` and both pages show:
 **orders** (the turn accepts commands) and then **resolving** (commands are closed while the engine
@@ -82,14 +91,18 @@ engine.py init / step ─────────────┘
 - **The engine** writes each turn as NumPy `.npy` arrays plus a `manifest.json` with a SHA-256
   checksum. Turns are written atomically and never changed afterwards, so the server can read one turn
   while the engine writes the next.
-- **Current turn rules** (placeholders): each tile's people forage for food (kcal), with returns that
-  level off at what the tile's terrain can sustain. People eat according to their age, everyone
-  eating less when there isn't enough, and food that isn't eaten decays completely. The rules and their
+- **Current turn rules** (placeholders): turn 0 has one segment per populated tile, each under its
+  own chieftain, reporting to the chieftain on the nation's capital. Segments don't move yet, and
+  there are no commands yet. Each segment's people forage for food (kcal), with returns that level off
+  at what their tile's terrain can sustain, shared among the segments there. People eat according to
+  their age, everyone in a segment eating less when it hasn't enough, and food that isn't eaten decays
+  completely. The rules and their
   values are in `engine/economy.json`. Children are born at a placeholder rate by age
   (`engine/demography.json`), and people die of starvation, predation and accidents, cancer,
   other age-related causes, infection and child mortality, each with its own rule in the same file.
-  Then every cohort ages one year. Ownership is first come, first served. Each nation actively sees every tile where it has people,
-  plus the 8 tiles around each one.
+  Then every cohort ages one year. Ownership is first come, first served, claimed by segments that
+  aren't moving. Each nation actively sees every tile where its segments have people, plus the 8 tiles
+  around each one. Leader types are in `engine/leaders.json`.
 
 ## Data
 
@@ -117,7 +130,7 @@ All in `reference/`:
 - [ARCHITECTURE.md](reference/ARCHITECTURE.md): how the server, page and engine work, the HTTP API,
   workflows, and limits.
 - [cohort_state_schema.md](reference/cohort_state_schema.md): the game-state format
-  (`capita/cohort-state-3`), written so an engine in any language can produce it.
+  (`capita/cohort-state-7`), written so an engine in any language can produce it.
 - [world_map_schema.md](reference/world_map_schema.md): the `world_map.yaml` and `world_map.json`
   formats, tile ids, grid order and guaranteed properties.
 - [world_map_generation.md](reference/world_map_generation.md): how the map was built, including

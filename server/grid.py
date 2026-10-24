@@ -76,6 +76,23 @@ def neighbors(row, col):
     return out
 
 
+def adjacent(a, b):
+    """Whether flat indices a and b (numbers or NumPy arrays) are different tiles sharing an edge or a
+    corner, the same 8 neighbours as neighbors(): east-west wraps, the poles don't."""
+    import numpy as np
+    ra, ca = np.divmod(np.asarray(a, dtype=np.int64), WIDTH)
+    rb, cb = np.divmod(np.asarray(b, dtype=np.int64), WIDTH)
+    dc = np.abs(ca - cb)
+    return (np.abs(ra - rb) <= 1) & (np.minimum(dc, WIDTH - dc) <= 1) & (np.asarray(a) != np.asarray(b))
+
+
+def centre(index):
+    """(lat, lon) of the centre of the tile at flat index `index` (a number or a NumPy array)."""
+    import numpy as np
+    r, c = np.divmod(np.asarray(index, dtype=np.int64), WIDTH)
+    return 90 - (r + 0.5) * TILE, (c + 0.5) * TILE - 180
+
+
 def fmt(v):
     """Coordinate as YAML text: always one decimal place (39.5, -105.0)."""
     return f'{v:.1f}'

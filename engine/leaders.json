@@ -1,0 +1,12 @@
+{
+  "about": "Leader rules read by engine.py. A leader marshals the people of their segment toward some purpose; the player is their nation's root leader. Types will decide which commands a leader can be given and their limits; for now they are names. start_type is the type of every leader at turn 0.",
+  "types": {
+    "chieftain": {"about": "Leads a band; the player starts as their nation's chieftain."},
+    "mayor": {"about": "Leads a settled town or city."},
+    "superintendent": {"about": "Leads a district."},
+    "admiral": {"about": "Leads a fleet."},
+    "general": {"about": "Leads an army."},
+    "king": {"about": "Leads a nation."}
+  },
+  "start_type": "chieftain"
+}

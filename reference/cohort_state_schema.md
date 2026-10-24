@@ -1,18 +1,27 @@
-# Game state format (`capita/cohort-state-6`)
+# Game state format (`capita/cohort-state-7`)
 
-The game state holds, for every populated tile, the people of each single year of age, how many hours
-a day they spend on each activity, and which nation they belong to. It also holds a record for each
-nation, which nation owns each tile, and what each nation can see, and for every populated tile what
-it produced in the past year and what it holds of each product. The turn engine (`engine/engine.py`) writes it, and the web server
-(`server/server.py`) reads it. This document is the contract between the two, written so that an engine
-in any language can produce it. `server/cohort_state.py` is the Python implementation.
+People belong to **segments**. A segment is the people directly under one **leader**: a leader marshals
+their segment toward some purpose, whether as a band, a town, an army or a settling party. Leaders form
+a tree within their nation; a leader's **following** is their own segment plus the segments of every
+leader below them, and the player is their nation's root leader. Every person is in exactly one
+segment, and every segment has a position on the map.
+
+The game state holds, for every segment, its leader, its position, the people of each single year of
+age, and how many hours a day they spend on each activity, what it produced in the past year and what
+it holds of each product. It also holds a record for each nation, which nation owns each tile, and what
+each nation can see. The turn engine (`engine/engine.py`) writes it, and the web server
+(`server/server.py`) and control server (`control/control.py`) read it. This document is the contract
+between them, written so that an engine in any language can produce it. `server/cohort_state.py` is the
+Python implementation.
 
 Version 2 added nations (`nations.json`, `nation.npy`) and visibility (`visible.npy`, `explored.npy`);
 version 3 added tile ownership (`owner.npy`); version 4 added products and production (`production.npy`,
 `labor.npy`, `production_max.npy`, `decay.npy`, `stock.npy`, and `products` in the manifest); version 5
 added consumption (`need.npy`, `consumed.npy`); version 6 added deaths (`deaths.npy`, and `causes` in
-the manifest). Older states can't be read; delete the state folder and
-run `engine.py init` again.
+the manifest); version 7 made rows segments instead of tiles (`leaders.json`, `leader.npy`, `tile.npy`,
+`at.npy`, `toward.npy`, `progress.npy`, and `leader_types` and `next_leader_id` in the manifest, replacing
+`tiles.npy` and `nation.npy`; nations gained `leader`). Older states can't be read; delete the state
+folder and run `engine.py init` again.
 
 ## Directory layout
 
@@ -23,10 +32,14 @@ state/
   turn_00007/           one directory per turn; never changed once current.json has named it
     manifest.json
     nations.json
-    tiles.npy
+    leaders.json
+    leader.npy
+    tile.npy
+    at.npy
+    toward.npy
+    progress.npy
     people.npy
     hours.npy
-    nation.npy
     owner.npy
     visible.npy
     explored.npy
@@ -47,7 +60,7 @@ Turn directories are named `turn_` + the turn number as 5 digits, zero-padded.
 ## `current.json`
 
 ```json
-{ "format": "capita/cohort-state-6", "turn": 7, "dir": "turn_00007" }
+{ "format": "capita/cohort-state-7", "turn": 7, "dir": "turn_00007" }
 ```
 
 Readers open the directory named by `dir`. Writers replace this file atomically: write
@@ -56,7 +69,7 @@ Readers open the directory named by `dir`. Writers replace this file atomically:
 ## `phase.json`
 
 ```json
-{ "format": "capita/cohort-state-6", "turn": 7, "phase": "resolving", "since": "2026-10-21T20:28:13Z" }
+{ "format": "capita/cohort-state-7", "turn": 7, "phase": "resolving", "since": "2026-10-21T20:28:13Z" }
 ```
 
 Each turn goes through two phases:
@@ -81,30 +94,49 @@ again, which resolves it normally. A step that fails with an error puts its turn
 ## Arrays
 
 All are NumPy `.npy` files (format version 1.0): a 10-byte prefix, a text header, then raw array data.
-Use little-endian data in C (row-major) order, `fortran_order: False`. `N` is the number of populated
-tiles, `M` is the number of nations + 1, and `P` is the number of products.
+Use little-endian data in C (row-major) order, `fortran_order: False`. Each row is one segment, in
+the order of `leaders.json`. `S` is the number of segments, `M` is the number of nations + 1, and `P`
+is the number of products. A tile is named by its flat grid index: `row * 720 + col`, with row 0 =
+89.5–90°N and col 0 = 180–179.5°W (see `server/grid.py`).
 
 | file | dtype | shape | meaning |
 |------|-------|-------|---------|
-| `tiles.npy` | `<u4` (uint32) | `[N]` | The flat grid index of each row's tile: `row * 720 + col`, with row 0 = 89.5–90°N and col 0 = 180–179.5°W (see `server/grid.py`). **Strictly increasing**, so readers can binary-search it. |
-| `people.npy` | `<f8` (float64) | `[N, 101]` | People in the tile by single year of age. Column `a` holds age `a` for `a` = 0..99; **column 100 is "100 and over"**. Fractions are allowed and are rounded only for display. |
-| `hours.npy` | `<f4` (float32) | `[N, 101, A]` | For each tile, age and activity: the mean hours per person per day spent on that activity, averaged over the year. Activities are in `manifest.activities` order. They needn't sum to 24; any remainder is unassigned time. |
-| `nation.npy` | `<u2` (uint16) | `[N]` | The id of the nation the row's people belong to; 0 = no nation. |
-| `owner.npy` | `<u2` (uint16) | `[259200]` | The id of the nation that **owns** each tile of the whole grid (flat index), 0 = nobody. Unlike the other per-tile arrays it covers every tile, because future rules may let nations own tiles nobody lives on. |
+| `leader.npy` | `<u4` (uint32) | `[S]` | The id of each row's leader, the same as `leaders.json`'s ids. **Strictly increasing**, so readers can binary-search it. |
+| `tile.npy` | `<u4` (uint32) | `[S]` | The tile each segment **counts as being in**, derived from its position (below). Stored so that readers needn't derive it. Several segments can be in the same tile. |
+| `at.npy` | `<u4` (uint32) | `[S]` | The tile the segment is at, or is leaving. |
+| `toward.npy` | `<u4` (uint32) | `[S]` | The tile it is moving toward, one of the 8 neighbours of `at`; **equal to `at` when it isn't moving**. |
+| `progress.npy` | `<f8` (float64) | `[S]` | How far it has gone from the centre of `at` to the centre of `toward`, as a share of that distance: at least 0 and below 1, and 0 when it isn't moving. |
+| `people.npy` | `<f8` (float64) | `[S, 101]` | People in the segment by single year of age. Column `a` holds age `a` for `a` = 0..99; **column 100 is "100 and over"**. Fractions are allowed and are rounded only for display. |
+| `hours.npy` | `<f4` (float32) | `[S, 101, A]` | For each segment, age and activity: the mean hours per person per day spent on that activity, averaged over the year. Activities are in `manifest.activities` order. They needn't sum to 24; any remainder is unassigned time. |
+| `owner.npy` | `<u2` (uint16) | `[259200]` | The id of the nation that **owns** each tile of the whole grid (flat index), 0 = nobody. Ownership belongs to tiles, not segments, and nations can own tiles nobody is on. |
 | `visible.npy` | `<u1` (uint8) | `[M, 32400]` | **Active visibility**: tiles the nation can see this turn. Row `k` is nation id `k`, one bit per tile (below). |
 | `explored.npy` | `<u1` (uint8) | `[M, 32400]` | **Explored** tiles: every tile the nation has ever actively seen, including this turn. A tile that is explored but not visible is **passively** visible: its geography is known, nothing else. |
-| `production.npy` | `<f8` (float64) | `[N, P]` | How much of each product the tile made in the **year that ended with this turn**, in the product's unit. All zeros at turn 0, which follows no year. |
-| `labor.npy` | `<f8` (float64) | `[N, P]` | Person-hours of work that went into each product that year. |
-| `production_max.npy` | `<f8` (float64) | `[N, P]` | The most the tile can produce of each product in a year: production levels off here however much labor goes in. |
-| `need.npy` | `<f8` (float64) | `[N, P]` | How much of each product the tile's people needed that year: people × the per-person daily amount for their age × 365. 0 for products nobody consumes. |
-| `consumed.npy` | `<f8` (float64) | `[N, P]` | How much they actually consumed: the need, or all the tile held if that was less. A shortfall is shared evenly, so people of every age consumed `consumed / need` of their need. |
-| `decay.npy` | `<f4` (float32) | `[N, P]` | The share of the tile's holdings of each product lost at the end of that year, 0–1. Per tile, so that future rules can change it locally. |
-| `stock.npy` | `<f8` (float64) | `[N, P]` | How much of each product the tile holds at the start of this turn, after decay. |
-| `deaths.npy` | `<f8` (float64) | `[N, C]` | How many people died of each cause on the tile in the **year that ended with this turn**, newborns included; `C` is the number of causes, in `manifest.causes` order. Fractions are allowed: people die in fractions, even below one. All zeros at turn 0. |
+| `production.npy` | `<f8` (float64) | `[S, P]` | How much of each product the segment made in the **year that ended with this turn**, in the product's unit. All zeros at turn 0, which follows no year. |
+| `labor.npy` | `<f8` (float64) | `[S, P]` | Person-hours of work that went into each product that year. |
+| `production_max.npy` | `<f8` (float64) | `[S, P]` | The most the segment's tile can produce of each product in a year: production levels off here however much labor goes in. **Shared** by every segment on the tile, so add it up once per tile, not per segment. |
+| `need.npy` | `<f8` (float64) | `[S, P]` | How much of each product the segment's people needed that year: people × the per-person daily amount for their age × 365. 0 for products nobody consumes. |
+| `consumed.npy` | `<f8` (float64) | `[S, P]` | How much they actually consumed: the need, or all the segment held if that was less. A shortfall is shared evenly, so people of every age consumed `consumed / need` of their need. |
+| `decay.npy` | `<f4` (float32) | `[S, P]` | The share of the segment's holdings of each product lost at the end of that year, 0–1. Per segment, so that future rules can change it locally. |
+| `stock.npy` | `<f8` (float64) | `[S, P]` | How much of each product the segment holds at the start of this turn, after decay. Holdings belong to the segment and travel with it. |
+| `deaths.npy` | `<f8` (float64) | `[S, C]` | How many people of the segment died of each cause in the **year that ended with this turn**, newborns included; `C` is the number of causes, in `manifest.causes` order. Fractions are allowed: people die in fractions, even below one. All zeros at turn 0. |
 
 Products are columns in `manifest.products` order.
 
-Only tiles with people need a row; a tile with no row has no people. `N` may change from turn to turn.
+`S` may change from turn to turn, as leaders are created and removed. A tile's people, production and
+deaths are the sums over the segments in it (`tile.npy`).
+
+### Positions
+
+A segment is either **on a tile** (`toward = at`, `progress = 0`) or **between two neighbouring tiles**,
+`progress` of the way from the centre of `at` to the centre of `toward`. Neighbours share an edge or a
+corner; east–west wraps around, and nothing is past the poles. Progress is a share of the actual
+distance between the two centres, which varies with latitude and is longer for diagonal steps.
+
+- **The tile it counts as being in** (`tile.npy`) is `at` while `progress < 0.5`, and `toward` from
+  `progress >= 0.5` (exactly halfway counts as `toward`). `cohort_state.segment_tile()` applies this.
+- **Its latitude and longitude**, when needed, are the point `progress` of the way along the straight
+  line between the two centres, taking the short way across the 180th meridian
+  (`cohort_state.segment_latlon()`). The format never stores them.
 
 ### Visibility bits
 
@@ -141,8 +173,8 @@ transpose before writing, or write `fortran_order: True` with the reversed memor
 
 ```json
 { "nations": [
-  { "id": 1, "code": "AUS", "capital": 180658, "founded_turn": 0, "alive": true },
-  { "id": 2, "code": "AUT", "capital": 60152,  "founded_turn": 0, "alive": true }
+  { "id": 1, "code": "AUS", "capital": 180658, "leader": 37, "founded_turn": 0, "alive": true },
+  { "id": 2, "code": "AUT", "capital": 60152,  "leader": 10, "founded_turn": 0, "alive": true }
 ] }
 ```
 
@@ -151,6 +183,7 @@ transpose before writing, or write `fortran_order: True` with the reversed memor
 | `id` | The nation's number, 1, 2, 3... in list order. Ids are never reused: a nation that disappears keeps its record with `alive: false`, so old references (such as player decisions in a replay log) stay valid. |
 | `code` | A short identifier. At turn 0 it's the ISO 3166-1 alpha-3 code the nation was seeded from. The server shows the country name for it. |
 | `capital` | The flat grid index of the capital tile, or `null`. |
+| `leader` | The id of the nation's **root leader**, the player, or `null` if it has no leaders. The root leader belongs to the nation and has no parent. |
 | `founded_turn` | The turn the nation came into being. |
 | `alive` | Whether the nation still exists. |
 
@@ -158,11 +191,33 @@ Every record has exactly these keys. Add new per-nation fields here when they ar
 the engine computes over all nations at once (stores, technology levels...) should become arrays
 indexed by nation id instead.
 
+## `leaders.json`
+
+```json
+{ "leaders": [
+  { "id": 1, "name": "Chieftain of ISL", "type": "chieftain", "nation": 20, "parent": 0, "founded_turn": 0 },
+  { "id": 2, "name": "Chieftain of FIN", "type": "chieftain", "nation": 14, "parent": 0, "founded_turn": 0 }
+] }
+```
+
+One record per row of the arrays, in the same order. A leader is an abstraction, not a person: leaders
+don't age or die.
+
+| key | meaning |
+|-----|---------|
+| `id` | The leader's number. **Strictly increasing** down the list, and never reused: `manifest.next_leader_id` is the next one to hand out, so a leader that is removed (say, merged back into another segment) leaves a gap. |
+| `name` | What the leader is called. |
+| `type` | One of `manifest.leader_types`: `chieftain`, `mayor`, `superintendent`, `admiral`, `general` or `king`. |
+| `nation` | The id of the leader's nation, and so of their segment's people; 0 = no nation. |
+| `parent` | The id of the leader they report to, of the same nation, or 0 for none. Following parents never loops. A nation's root leader has none; so may leaders with no nation. |
+| `founded_turn` | The turn the leader was created. |
+
+Every record has exactly these keys.
 ## `manifest.json`
 
 ```json
 {
-  "format": "capita/cohort-state-6",
+  "format": "capita/cohort-state-7",
   "turn": 7,
   "grid": { "tile_size_degrees": 0.5, "width": 720, "height": 360 },
   "ages": { "count": 101, "last_is_open_ended": true },
@@ -170,12 +225,17 @@ indexed by nation id instead.
   "hours_unit": "mean hours per person per day, averaged over the year",
   "products": [{ "name": "food", "unit": "kcal" }],
   "causes": ["starvation", "predation_and_accidents", "cancer", "other_age_related", "infection", "child_mortality"],
+  "leader_types": ["chieftain", "mayor", "superintendent", "admiral", "general", "king"],
+  "next_leader_id": 49911,
   "visibility_bits": "row k = nation id k; tile i is bit i % 8 of byte i // 8",
   "arrays": {
-    "tiles":    { "file": "tiles.npy",    "dtype": "<u4", "shape": [49910] },
+    "leader":   { "file": "leader.npy",   "dtype": "<u4", "shape": [49910] },
+    "tile":     { "file": "tile.npy",     "dtype": "<u4", "shape": [49910] },
+    "at":       { "file": "at.npy",       "dtype": "<u4", "shape": [49910] },
+    "toward":   { "file": "toward.npy",   "dtype": "<u4", "shape": [49910] },
+    "progress": { "file": "progress.npy", "dtype": "<f8", "shape": [49910] },
     "people":   { "file": "people.npy",   "dtype": "<f8", "shape": [49910, 101] },
     "hours":    { "file": "hours.npy",    "dtype": "<f4", "shape": [49910, 101, 4] },
-    "nation":   { "file": "nation.npy",   "dtype": "<u2", "shape": [49910] },
     "owner":    { "file": "owner.npy",    "dtype": "<u2", "shape": [259200] },
     "visible":  { "file": "visible.npy",  "dtype": "<u1", "shape": [225, 32400] },
     "explored": { "file": "explored.npy", "dtype": "<u1", "shape": [225, 32400] },
@@ -188,6 +248,7 @@ indexed by nation id instead.
     "stock":          { "file": "stock.npy",          "dtype": "<f8", "shape": [49910, 1] },
     "deaths":         { "file": "deaths.npy",         "dtype": "<f8", "shape": [49910, 6] }
   },
+  "segments": 49910,
   "populated_tiles": 49910,
   "nations": 224,
   "total_people": 7840952769.0,
@@ -197,21 +258,27 @@ indexed by nation id instead.
   "economy_rules_source": "engine/economy.json",
   "economy_rules": { "products": { ... }, "foraging": { ... } },
   "demography_rules_source": "engine/demography.json",
-  "demography_rules": { "births": { ... }, "deaths": { ... } }
+  "demography_rules": { "births": { ... }, "deaths": { ... } },
+  "leader_rules_source": "engine/leaders.json",
+  "leader_rules": { "types": { ... }, "start_type": "chieftain" }
 }
 ```
 
 - `products` lists each product's `name` and `unit`, in the order of the product columns.
 - `economy_rules` is a copy of the rules the engine used to compute this turn's production and decay
   (`engine/economy.json` at the time), so a replay can tell whether they changed. `demography_rules`
-  is the same for births and deaths (`engine/demography.json`).
+  is the same for births and deaths (`engine/demography.json`), and `leader_rules` for leaders
+  (`engine/leaders.json`).
+- `leader_types` lists the types a leader can have; `next_leader_id` is the id the next new leader
+  gets.
 - `causes` lists the causes of death, in the order of the `deaths.npy` columns.
-- `checksum.value` is the SHA-256 of the raw data bytes (not the `.npy` headers) of `tiles`, `people`,
-  `hours`, `nation`, `owner`, `visible`, `explored`, `production`, `labor`, `production_max`, `need`, `consumed`, `decay`,
-  `stock` and `deaths`, in that order, followed by the `nations` list as
-  canonical JSON: sorted keys, no whitespace (`","` and `":"` separators), UTF-8. It shows whether a
-  deterministic replay reproduced a turn exactly. `total_people` is informational only and isn't part
-  of the checksum.
+- `checksum.value` is the SHA-256 of the raw data bytes (not the `.npy` headers) of `leader`, `tile`,
+  `at`, `toward`, `progress`, `people`, `hours`, `owner`, `visible`, `explored`, `production`, `labor`,
+  `production_max`, `need`, `consumed`, `decay`, `stock` and `deaths`, in that order, followed by the
+  `nations` list and then the `leaders` list, each as canonical JSON: sorted keys, no whitespace (`","`
+  and `":"` separators), UTF-8. It shows whether a deterministic replay reproduced a turn exactly.
+  `segments`, `populated_tiles` (tiles that segments with people count as being in) and `total_people`
+  are informational only and aren't part of the checksum.
 - Readers must check `format` and `grid`, and must ignore keys they don't know. Writers may add keys,
   such as `initial_population_source` and `initial_nations_source`.
 
@@ -228,7 +295,9 @@ indexed by nation id instead.
 
 ## Turn rules (`engine/engine.py`, for now)
 
-One turn is one year. Each turn every surviving cohort moves up one year of age, and the 99-year-olds
+One turn is one year. Each segment lives the year on the tile it counts as being in; segments don't
+move yet, and no commands exist yet to create, move or merge them. Each turn every surviving cohort
+moves up one year of age, and the 99-year-olds
 join the 100+ group. Age 0 holds the children born during the year who survived it (below). Activity
 hours belong to the age, not the cohort: people take on the hours of their new age, so that people
 born in the game work as adults once they grow up. The activity list and
@@ -243,9 +312,10 @@ step. For now the only product is **food**, in kcal, made by **foraging** (hunti
 
 - Labor `H` is the year's person-hours of the `subsistence` activity: people × hours a day × 365,
   summed over ages.
-- Production is `max × (1 − e^(−r·H / max))`. While labor is light, each hour yields about `r` kcal
-  (`return_per_hour`, 1,000). As labor approaches what the tile can sustain, extra hours yield less,
-  and production levels off at `max`.
+- A tile's production is `max × (1 − e^(−r·H / max))`, where `H` is the labor of every segment on the
+  tile. While labor is light, each hour yields about `r` kcal (`return_per_hour`, 1,000). As labor
+  approaches what the tile can sustain, extra hours yield less, and production levels off at `max`.
+  Each segment on the tile gets a share in proportion to its own labor.
 - `max` (`production_max.npy`) is the tile's sustainable yearly yield (`foraging_max()`): its land area
   × the yield per km² of its land cover (from 15,000 kcal for tundra to 400,000 for wetlands, worked back
   from observed forager densities) × a landform factor (hills 0.8, mountains 0.5) × a climate factor
@@ -256,20 +326,22 @@ step. For now the only product is **food**, in kcal, made by **foraging** (hunti
 `consumption` in `economy.json`. Each product has a table of `[age, amount per person per day]` points,
 filled in linearly between them; food starts at 700 kcal a day for infants (standing for their mothers'
 extra intake), peaks at 2,700 at 18 and falls to 1,800 at 100, about 2,200 on average across a forager
-age structure. A tile's `need` is its people × those amounts × 365. It consumes its need, or, if it
-holds less (its stock plus the year's production), everything it holds: everyone's consumption is cut
-by the same share. The shortfall, `need − consumed`, is meant to drive mortality.
+age structure. A segment's `need` is its people × those amounts × 365. It consumes its need, or, if
+it holds less (its stock plus the year's production), everything it holds: everyone's consumption is
+cut by the same share. Segments don't share food with each other, even on the same tile. The
+shortfall, `need − consumed`, drives starvation.
 
-**Decay, at the end of the year** (`end_of_year()`): what each tile holds of each product after
-consumption loses that product's decay rate, and the rest is the new turn's `stock`. The base rate is each product's `decay` in `economy.json`, and `economy_modifiers()`
-turns it into a rate per tile (`decay.npy`). For now every tile gets the base rate; that function is
+**Decay, at the end of the year** (`end_of_year()`): what each segment holds of each product after
+consumption loses that product's decay rate, and the rest is the new turn's `stock`. The base rate is
+each product's `decay` in `economy.json`, and `economy_modifiers()` turns it into a rate per segment
+(`decay.npy`). For now every segment gets the base rate; that function is
 where future products and infrastructure will change it. A product that keeps better, such as
 preserved food, is a separate product with its own rate. Food's rate is 1: food that isn't eaten is all
 lost by the next turn.
 
 **Demographics, after production and consumption** (so that they can respond to the year's food):
-for now, births. Each tile's births are its people × a birth rate per person per year for their age,
-summed over ages (`births()`), and become age 0 of the new turn, in the tile's nation. The rate
+first births. Each segment's births are its people × a birth rate per person per year for their age,
+summed over ages (`births()`), and become age 0 of the same segment in the new turn. The rate
 (`birth_rates()`) is a placeholder from `engine/demography.json`, read on every step: one table of
 `[age, rate]` points, filled in linearly, that counts men and women alike, with each birth counting
 half to each parent at their own ages. Over a lifetime it adds up to half the children per woman,
@@ -277,27 +349,27 @@ about 5.8 for foragers, and gives about 38 births per 1,000 people a year at the
 `birth_rates()` is where a decision model will choose instead.
 
 Then **deaths** (`mortality()`), among the same people. Each cause is a yearly hazard (deaths per
-person-year) for every tile and age (`death_hazards()`), and the causes add: a cohort's share dying in
+person-year) for every segment and age (`death_hazards()`), and the causes add: a cohort's share dying in
 the year is `1 − e^(−total)`, and its deaths are split among the causes in proportion to their
 hazards. Each cohort lives the year at its mid-year age; children born during the year face half a
-year at age 0.25. People die in fractions. `mortality_modifiers()` multiplies each cause per tile; all
+year at age 0.25. People die in fractions. `mortality_modifiers()` multiplies each cause per segment; all
 1 for now, it is where future infrastructure will reduce them. The causes, with their rules and values
 in the `deaths` section of `engine/demography.json`:
 
 | cause | depends on | rule |
 |---|---|---|
-| `starvation` | the year's food | Hazard by the tile's share of food need met (`consumed / need`): none at 90% or more, about 20% dying a year at half the need, about 60% at a quarter, filled in linearly. Doubled for children under 5 and people 65 and older. Includes infections that kill people because they are starving. |
+| `starvation` | the year's food | Hazard by the segment's share of food need met (`consumed / need`): none at 90% or more, about 20% dying a year at half the need, about 60% at a quarter, filled in linearly. Doubled for children under 5 and people 65 and older. Includes infections that kill people because they are starving. |
 | `predation_and_accidents` | hours of work | Animal attacks, snakebite, falls, drowning: 1.3 × 10⁻⁶ per hour of the `subsistence` activity, about 0.4% a year for an adult foraging 8.5 hours a day. |
 | `cancer` | age | `a × e^(b × age)`: a fifth of the Siler ageing term. |
 | `other_age_related` | age | Heart disease, organ failure, frailty...: the other four fifths of it. |
-| `infection` | terrain | Infections that kill otherwise healthy people: 0.009 × a climate factor (1 in the tropics, falling to 0.6 at 60° latitude and beyond) × (1 + 0.5 × the tile's wetland share). |
-| `child_mortality` | age, childcare | The Siler infant term `0.422 × e^(−1.131 × age)` × (1 + 2 × the tile's childcare shortfall). The shortfall is `1 − hours of childcare given / hours needed`, at least 0, with the hours each child needs by age (6 a day for a newborn, none by 10). The turn-0 hours give about 1.8 times the need. |
+| `infection` | terrain | Infections that kill otherwise healthy people: 0.009 × a climate factor (1 in the tropics, falling to 0.6 at 60° latitude and beyond) × (1 + 0.5 × the wetland share of the segment's tile). |
+| `child_mortality` | age, childcare | The Siler infant term `0.422 × e^(−1.131 × age)` × (1 + 2 × the segment's childcare shortfall). The shortfall is `1 − hours of childcare given / hours needed`, at least 0, with the hours each child needs by age (6 a day for a newborn, none by 10). The turn-0 hours give about 1.8 times the need. |
 
 Well fed, the causes together reproduce the Siler forager curve that turn 0's age structure comes from
 (Gurven & Kaplan 2007; life expectancy at birth about 34): about 27 deaths per 1,000 a year at that
 structure against 38 births, so a well-fed population grows about 1% a year until food runs short. In
 the starting scenario the population settles after about 150 years at about 1.8 times its start, with
-births and deaths at about 39 per 1,000 and each tile meeting about 88% of its food need.
+births and deaths at about 39 per 1,000 and each segment meeting about 88% of its food need.
 
 **Nations at turn 0** (`make_nations()`) come from a **nation seed**, which `init` requires: `--nations`,
 or the `<population name>.nations.json` / `<population name>_*.nations.json` next to the population file
@@ -307,14 +379,22 @@ lists the nations in id order with their capital tiles:
 ignored. A capital's tile belongs to its nation; every other populated tile goes to the nation whose
 code is the tile's country code, and codes not in the seed get no nation.
 
-**Ownership, recomputed every turn** (`update_ownership()`): first come, first served. A nation owns a
-tile from the turn it is the first to have people living there, and keeps it while any of its people
-live there. When the owner's last inhabitants are gone (for example, they all died), the tile passes to
-a nation that has people there now, or to nobody. At turn 0 every populated tile belongs to the nation
-living on it. The rule is expected to change (treaties, contested areas...); readers only use
+**Leaders at turn 0** (`make_leaders()`): every populated tile becomes one segment, standing on it, with
+leader ids 1, 2, 3... in grid order. Every leader has `start_type` from `engine/leaders.json`
+(`chieftain`). Each nation's root leader leads the segment on its capital (or its most populous segment
+if nobody lives on the capital) and is named after the nation, such as `Chieftain of AUS`; the nation's
+other leaders report to the root and are named after their tile. Leaders of segments with no nation
+have no parent.
+
+**Ownership, recomputed every turn** (`update_ownership()`): first come, first served, and only
+segments that aren't moving claim tiles (a passing army or settling party doesn't). A nation owns a tile
+from the turn it is the first to have such a segment with people there, and keeps it while it has one
+there. When it has none left (for example, they all died, or moved on), the tile passes to the nation
+with the most people in such segments there (the lowest id on a tie), or to nobody. Segments with no
+nation never claim. At turn 0 every populated tile belongs to the nation living on it. The rule is expected to change (treaties, contested areas...); readers only use
 `owner.npy`.
 
-**Visibility, recomputed every turn** (`active_visibility()`): a nation actively sees every tile where
-it has people, plus the 8 tiles around each one (east–west wraps around; nothing past the poles). Then
+**Visibility, recomputed every turn** (`active_visibility()`): a nation actively sees every tile one
+of its segments with people counts as being in, plus the 8 tiles around each one (east–west wraps around; nothing past the poles). Then
 `explored = explored OR visible`. The rule is expected to change as the game develops; readers only
 use the stored bits.

@@ -697,6 +697,9 @@ function renderPopulation(t) {
     <div class="bignum">${fmtInt(p.population)} <small>people</small></div>
     <dl class="kv">
       ${t.nation && t.nation.id !== t.owner?.id ? `<dt>Inhabitants</dt><dd>${nationText(t.nation)}</dd>` : ""}
+      ${(t.segments || []).map(g => `<dt>${g.parent ? "Leader" : "Root leader"}</dt>
+        <dd>${esc(g.name)} <span class="none">${fmtInt(g.people)} people${g.nation ? ` · ${esc(g.nation.code)}` : ""}${
+          g.moving ? " · moving" : ""}</span></dd>`).join("")}
       ${viewNation && nationsById.has(viewNation) ? `<dt>Seen by ${esc(nationsById.get(viewNation).code)}</dt><dd>${{
         active: "Active (can see it now)", passive: "Passive (explored, not seen now)", unknown: "Unknown (never seen)"
       }[tileVisibility(t.id)] || "—"}</dd>` : ""}

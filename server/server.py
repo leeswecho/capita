@@ -33,11 +33,13 @@ The population file (--population; default world_population_start.json, the game
 scenario) is reread once per second, so edits to it show up in open pages
 without restarting the server. It always supplies each tile's country and area; its people counts are
 shown only while there is no game state. The cohort state's current.json (cohort_state.py) is checked
-just as often; a new turn is memory-mapped, and its people are summed per tile (refresh_people()) for
-the heatmap and the side panel.
-    /api/tile/<id>         one tile record merged with its population record (JSON)
+just as often; a new turn is memory-mapped, and its segments' people are summed per tile
+(refresh_people()) for the heatmap and the side panel.
+    /api/tile/<id>         one tile record merged with its population record, plus the segments on
+                           the tile at the current turn: each one's leader, nation and people (JSON)
     /api/tile/<id>/cohorts the tile's people and activity hours by single year of age, from the
-                           engine's current turn (JSON); read on request from memory-mapped files
+                           engine's current turn, summed over the segments there (hours averaged,
+                           weighted by people) (JSON); read on request from memory-mapped files
     /api/nations           the current turn's nations: id, code, name, capital tile, people, and
                            owned, visible and explored tile counts (JSON)
     /api/nation/<id>/visibility  one nation's visibility at the current turn: 32,400 bytes of
@@ -235,8 +237,8 @@ class World:
         check_grid(self.pop.meta, os.path.basename(pop_path))
         self.country_names = load_country_names(countries_path)
 
-        # Cohort state written by engine/engine.py. Only the pointer, manifest and row list are read here;
-        # people/hours are memory-mapped and read a tile at a time by cohorts_json().
+        # Cohort state written by engine/engine.py. The pointer, manifest, leaders and small arrays are read
+        # here; people/hours are memory-mapped and read a tile at a time by cohorts_json().
         self.state_dir = state_dir
         self.turn = None
         self.phase = None
@@ -249,7 +251,8 @@ class World:
         if self.people is None:
             self.refresh_people()
         if self.turn:
-            print(f"  cohort state: turn {self.turn.turn}, {self.turn.manifest['populated_tiles']} tiles", flush=True)
+            print(f"  cohort state: turn {self.turn.turn}, {self.turn.manifest['segments']} segments on "
+                  f"{self.turn.manifest['populated_tiles']} tiles", flush=True)
         else:
             print("  cohort state: none (run: python ../engine/engine.py init)", flush=True)
 
@@ -294,12 +297,11 @@ class World:
 
     def refresh_people(self):
         """Rebuild the people the viewer shows, from the current turn if there is one (summing each
-        populated tile's ages; reads the turn's people array once), else from the population file."""
+        segment's ages onto its tile; reads the turn's people array once), else from the population file."""
         with self.people_lock:
             st, pop = self.turn, self.pop
-            if st is not None:
-                counts = np.zeros(WIDTH * HEIGHT)
-                counts[st.tiles] = np.asarray(st.people).sum(axis=1)
+            if st is not None:   # every segment's people, added up on the tile it counts as being in
+                counts = np.bincount(st.tile, weights=np.asarray(st.people).sum(axis=1), minlength=WIDTH * HEIGHT)
                 source, turn = "turn", st.turn
             else:
                 counts, source, turn = np.asarray(pop.population, dtype=np.float64), "population file", None
@@ -342,9 +344,12 @@ class World:
             people = np.bincount(st.nation, weights=np.asarray(st.people).sum(axis=1), minlength=len(st.nations) + 1)
             owned = np.bincount(st.owner, minlength=len(st.nations) + 1)
             out = []
+            rows = st.row_of()
             for n in st.nations:
                 i = n["id"]
+                lead = st.leaders[rows[n["leader"]]] if n["leader"] is not None else None
                 out.append({**self.nation_ref(st, i), "founded_turn": n["founded_turn"],
+                            "leader": {"id": lead["id"], "name": lead["name"], "type": lead["type"]} if lead else None,
                             "people": round(float(people[i]), 2), "owned_tiles": int(owned[i]),
                             "visible_tiles": int(vis[i]), "explored_tiles": int(exp[i])})
             cached = st.nations_cache = json.dumps({"turn": st.turn, "nations": out}, separators=(",", ":")).encode()
@@ -368,10 +373,17 @@ class World:
         body = {"tile": tid, "turn": st.turn, "activities": st.activities,
                 "hours_unit": st.manifest["hours_unit"], "ages": cohort_state.AGES,
                 "last_age_open_ended": True, "people": None, "hours": None}
-        r = st.row(i)
-        if r is not None:
-            body["people"] = st.people[r].tolist()
-            body["hours"] = [[round(h, 4) for h in row] for row in st.hours[r].tolist()]
+        rows = st.rows_at(i)
+        body["segments"] = len(rows)
+        if len(rows):
+            people = np.asarray(st.people[rows])                       # [k, AGES]
+            hours = np.asarray(st.hours[rows], dtype=np.float64)        # [k, AGES, A]
+            total = people.sum(axis=0)
+            # Each age's hours averaged over the segments, weighted by their people at that age.
+            mean = np.divide((people[:, :, None] * hours).sum(axis=0), total[:, None],
+                             out=hours.mean(axis=0), where=total[:, None] > 0)
+            body["people"] = total.tolist()
+            body["hours"] = [[round(h, 4) for h in row] for row in mean.tolist()]
         return json.dumps(body, separators=(",", ":")).encode()
 
     def meta_json(self):
@@ -404,11 +416,20 @@ class World:
             "source": view.source,
             "turn": view.turn,
         }
-        # The nation whose people live here, and the nation that owns the tile (they can differ once
-        # ownership rules go beyond first come, first served).
+        # The segments here, the nation with the most people here, and the nation that owns the tile
+        # (they can differ: ownership is first come, first served, and moving segments don't claim).
         st = self.turn
-        r = st.row(i) if st is not None else None
-        body["nation"] = self.nation_ref(st, int(st.nation[r])) if r is not None else None
+        rows = st.rows_at(i) if st is not None else []
+        segs = []
+        for r in rows:
+            lead = st.leaders[r]
+            segs.append({"leader": lead["id"], "name": lead["name"], "type": lead["type"],
+                         "nation": self.nation_ref(st, lead["nation"]), "parent": lead["parent"] or None,
+                         "people": round(float(np.asarray(st.people[r]).sum()), 2),
+                         "moving": bool(st.at[r] != st.toward[r])})
+        body["segments"] = segs if st is not None else None
+        top = max(segs, key=lambda g: g["people"], default=None)
+        body["nation"] = top["nation"] if top else None
         body["owner"] = self.nation_ref(st, int(st.owner[i])) if st is not None else None
         for ref in (body["nation"], body["owner"]):
             if ref:

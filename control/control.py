@@ -11,8 +11,9 @@ runs `engine/engine.py step` as its own process, so the engine stays the only wr
 the viewer picks up the new turn by itself within about two seconds.
 
 The player first chooses the nation they control (the page remembers it, and ?nation=AUS in the URL
-chooses one). The page then shows what each tile that nation owns produced and consumed in the year
-that ended with the current turn.
+chooses one); the player is that nation's root leader. The page then shows what each of the nation's
+segments (the people directly under one of its leaders) produced and consumed in the year that ended
+with the current turn, and how many of their people died.
 
 Each turn has a phase (cohort_state.read_phase()), which the engine records: "orders" while the turn
 accepts commands, and "resolving" while the engine applies them and a year's passage of time to
@@ -24,15 +25,16 @@ Endpoints:
     /api/status            {"turn": t, "phase": p, "since": s}: the state's current turn and its
                            phase, "orders" or "resolving" (both null if there is no state), and when
                            that phase began (JSON)
-    /api/nations           {"turn": t, "nations": [{"id", "code", "name", "alive"}, ...]}: the current
-                           turn's nations (JSON)
-    /api/nation/<id>/production  what each populated tile the nation owns made and consumed in the year
-                           that ended with the current turn: per product, the amount made, the labor
-                           hours behind it, the tile's yearly maximum, its people's need and what they
-                           consumed, with totals; the PRODUCTION_ROWS most productive tiles (JSON)
-    /api/nation/<id>/deaths  how many people died of each cause on each populated tile the nation owns
-                           in the year that ended with the current turn, with totals; the PRODUCTION_ROWS
-                           tiles with the most deaths (JSON)
+    /api/nations           {"turn": t, "nations": [{"id", "code", "name", "alive", "leader"}, ...]}: the
+                           current turn's nations, each with its root leader {"id", "name", "type"} (JSON)
+    /api/nation/<id>/production  what each of the nation's segments made and consumed in the year that
+                           ended with the current turn: per product, the amount made, the labor hours
+                           behind it, the yearly maximum of its tile (shared by every segment there),
+                           its people's need and what they consumed, with totals; the REPORT_ROWS most
+                           productive segments (JSON)
+    /api/nation/<id>/deaths  how many people died of each cause in each of the nation's segments in the
+                           year that ended with the current turn, with totals; the REPORT_ROWS segments
+                           with the most deaths (JSON)
     POST /api/commit       commit the turn: advance the engine one step and return
                            {"turn": t, "phase": p, "output": "..."}; 409 if there is no state or the
                            turn is already resolving, 500 with the engine's output if the step fails (JSON)
@@ -59,7 +61,7 @@ import cohort_state as cs  # noqa: E402
 import grid  # noqa: E402
 
 COUNTRIES = os.path.join(REPO, "server", "ne_10m_admin_0_countries.geojson")
-PRODUCTION_ROWS = 100   # tiles listed per nation; a full-world nation can own thousands
+REPORT_ROWS = 100   # segments listed per nation; a full-world nation can have thousands
 
 
 def load_country_names(path: str) -> dict:
@@ -102,9 +104,20 @@ class Control:
         t = self.current_turn()
         if t is None:
             return json.dumps({"turn": None, "nations": []}).encode()
-        return json.dumps({"turn": t.turn, "nations": [
-            {"id": n["id"], "code": n["code"], "name": self.country_names.get(n["code"]) or n["code"], "alive": n["alive"]}
-            for n in t.nations]}).encode()
+        rows = t.row_of()
+        out = []
+        for n in t.nations:
+            lead = t.leaders[rows[n["leader"]]] if n["leader"] is not None else None
+            out.append({"id": n["id"], "code": n["code"], "name": self.country_names.get(n["code"]) or n["code"],
+                        "alive": n["alive"],
+                        "leader": {"id": lead["id"], "name": lead["name"], "type": lead["type"]} if lead else None})
+        return json.dumps({"turn": t.turn, "nations": out}).encode()
+
+    def segment_refs(self, t, rows):
+        """{"leader", "name", "type", "tile", "moving"} for each row, as the reports list segments."""
+        return [{"leader": t.leaders[r]["id"], "name": t.leaders[r]["name"], "type": t.leaders[r]["type"],
+                 "tile": grid.tile_id(*grid.corner(*divmod(int(t.tile[r]), grid.WIDTH))),
+                 "moving": bool(t.at[r] != t.toward[r])} for r in rows]
 
     def deaths_json(self, nid: int):
         """JSON for /api/nation/<id>/deaths, or None if there is no such nation."""
@@ -112,19 +125,18 @@ class Control:
         if t is None or not 1 <= nid <= len(t.nations):
             return None
         n = t.nations[nid - 1]
-        rows = np.flatnonzero(t.owner[t.tiles] == nid)
+        rows = np.flatnonzero(t.nation == nid)   # the nation's segments
         people = np.asarray(t.people[rows]).sum(axis=1)
         deaths = t.deaths[rows]
-        order = np.argsort(-deaths.sum(axis=1), kind="stable")[:PRODUCTION_ROWS] if len(rows) else rows
-        tile_ids = [grid.tile_id(*grid.corner(*divmod(int(t.tiles[r]), grid.WIDTH))) for r in rows[order]]
+        order = np.argsort(-deaths.sum(axis=1), kind="stable")[:REPORT_ROWS] if len(rows) else rows
         return json.dumps({
             "turn": t.turn,
             "nation": {"id": nid, "code": n["code"], "name": self.country_names.get(n["code"]) or n["code"]},
             "causes": t.causes,
-            "populated_tiles": len(rows),
+            "segment_count": len(rows),
             "totals": {"people": float(people.sum()), "deaths": deaths.sum(axis=0).tolist()},
-            "tiles": [{"tile": tid, "people": float(people[i]), "deaths": deaths[i].tolist()}
-                      for tid, i in zip(tile_ids, order)],
+            "segments": [{**ref, "people": float(people[i]), "deaths": deaths[i].tolist()}
+                         for ref, i in zip(self.segment_refs(t, rows[order]), order)],
         }).encode()
 
     def production_json(self, nid: int):
@@ -133,26 +145,28 @@ class Control:
         if t is None or not 1 <= nid <= len(t.nations):
             return None
         n = t.nations[nid - 1]
-        rows = np.flatnonzero(t.owner[t.tiles] == nid)   # owned tiles that have people (and so a row)
+        rows = np.flatnonzero(t.nation == nid)   # the nation's segments
         people = np.asarray(t.people[rows]).sum(axis=1)
         made, labor, top = t.production[rows], t.labor[rows], t.production_max[rows]
         need, consumed = t.need[rows], t.consumed[rows]
-        order = np.argsort(-made[:, 0], kind="stable")[:PRODUCTION_ROWS] if len(rows) else rows
-        tile_ids = [grid.tile_id(*grid.corner(*divmod(int(t.tiles[r]), grid.WIDTH))) for r in rows[order]]
+        order = np.argsort(-made[:, 0], kind="stable")[:REPORT_ROWS] if len(rows) else rows
+        # A tile's maximum is shared by every segment on it, so the total counts each tile once.
+        _, first = np.unique(t.tile[rows], return_index=True)
         return json.dumps({
             "turn": t.turn,
             "nation": {"id": nid, "code": n["code"], "name": self.country_names.get(n["code"]) or n["code"]},
             "products": t.products,
             "owned_tiles": int(np.count_nonzero(t.owner == nid)),
-            "populated_tiles": len(rows),
+            "segment_count": len(rows),
+            "tile_count": len(first),
             "totals": {"people": float(people.sum()), "produced": made.sum(axis=0).tolist(),
-                       "labor_hours": labor.sum(axis=0).tolist(), "max": top.sum(axis=0).tolist(),
+                       "labor_hours": labor.sum(axis=0).tolist(), "max": top[first].sum(axis=0).tolist(),
                        "need": need.sum(axis=0).tolist(), "consumed": consumed.sum(axis=0).tolist(),
-                       "short_tiles": np.count_nonzero(consumed < need * (1 - 1e-9), axis=0).tolist()},
-            "tiles": [{"tile": tid, "people": float(people[i]), "produced": made[i].tolist(),
-                       "labor_hours": labor[i].tolist(), "max": top[i].tolist(),
-                       "need": need[i].tolist(), "consumed": consumed[i].tolist()}
-                      for tid, i in zip(tile_ids, order)],
+                       "short_segments": np.count_nonzero(consumed < need * (1 - 1e-9), axis=0).tolist()},
+            "segments": [{**ref, "people": float(people[i]), "produced": made[i].tolist(),
+                          "labor_hours": labor[i].tolist(), "max": top[i].tolist(),
+                          "need": need[i].tolist(), "consumed": consumed[i].tolist()}
+                         for ref, i in zip(self.segment_refs(t, rows[order]), order)],
         }).encode()
 
     def status(self) -> dict:

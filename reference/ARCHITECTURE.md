@@ -54,7 +54,9 @@ The server does no rendering. It hands the browser compact data, and the browser
 | `convert_population.py` | Converts `world_population.yaml` → `world_population_current.json` (the full modern world, prototype data), and verifies the result. Also defines the columnar format id the server checks and the loader other scripts use. |
 | `../engine/engine.py` | The turn engine, in its own directory and run as its own process: `init` writes turn 0 of the cohort state, `step` advances it a year at a time, `verify` checks the current turn's checksum (§4.6). It imports `cohort_state.py`, `grid.py` and `convert_map.py` from `server/` (it reads `world_map.json` for production), and by default uses the top-level `state/` folder and `server/world_population_start.json` with its nation seed. |
 | `../engine/economy.json` | The economy rules the engine reads on every step: the products (food, in kcal) with their decay rates, and the foraging model's yields and factors. |
-| `../control/control.py`, `../control/static/index.html` | The player's control page, a separate server on port 8001 so control stays apart from the view. **Commit Turn** (`POST /api/commit`) runs `engine/engine.py step` as its own process. Commits are accepted only while the turn's phase is `orders`; one sent while it is `resolving`, however the step was started, gets 409. `/api/status` gives the current turn and phase. The player first chooses the nation they control (remembered by the browser, or `?nation=AUS` in the URL); Commit Turn stays disabled until they do. The page then lists what each populated tile that nation owns produced and consumed in the year that ended with the current turn, and how much of its need was met (`/api/nation/<id>/production`: the 100 most productive tiles, with totals), and how many died of each cause (`/api/nation/<id>/deaths`). It reads the state and never writes it. |
+| `../engine/demography.json` | The demography rules the engine reads on every step: birth rates by age, and each cause of death's rule and values. |
+| `../engine/leaders.json` | The leader types (chieftain, mayor, superintendent, admiral, general, king) and the type every turn-0 leader gets. Types will decide which commands a leader can be given. |
+| `../control/control.py`, `../control/static/index.html` | The player's control page, a separate server on port 8001 so control stays apart from the view. **Commit Turn** (`POST /api/commit`) runs `engine/engine.py step` as its own process. Commits are accepted only while the turn's phase is `orders`; one sent while it is `resolving`, however the step was started, gets 409. `/api/status` gives the current turn and phase. The player first chooses the nation they control (remembered by the browser, or `?nation=AUS` in the URL); Commit Turn stays disabled until they do. The player is that nation's root leader, which the page names. It then lists what each of the nation's segments produced and consumed in the year that ended with the current turn, and how much of its need was met (`/api/nation/<id>/production`: the 100 most productive segments, with totals), and how many died of each cause (`/api/nation/<id>/deaths`). It reads the state and never writes it. |
 | `cohort_state.py` | Reads and writes the cohort state (`../state/`): the format id, atomic turn writing, memory-mapped reading, checksums and pruning. Shared by `engine/engine.py` and the server. |
 | `../state/` | The cohort state written by `engine/engine.py`, in its own top-level folder next to `server/` and `engine/`: `current.json` plus one `turn_NNNNN/` directory per recent turn (see `cohort_state_schema.md`). Generated; not committed. |
 | `gen_start_capitals.py` | Writes the game's starting scenario: `world_population_start.json` (200 people in each of 38 start tiles, 0 elsewhere; the start tiles are placeholder locations at present-day capitals; country and area copied from `world_population_current.json`), `../reference/world_population_capitals.yaml` (the same as YAML) and `world_population_start_capitals.nations.json`, the nation seed (one nation per start tile, with that tile as its capital) that `engine.py init` picks up automatically. |
@@ -200,8 +202,8 @@ just keeps serving the last good data and tries again a second later.
 | `/api/population` | 259,200 `uint32` people counts (rounded): the current turn's, or the population file's when there is no game state; headers `X-Population-Version`, `X-People-Source` (`turn` or `population file`) and `X-Turn` | heatmap; the legend's "People at turn n" |
 | `/api/population/version` | `{"version": n, "turn": t, "phase": p}`: the version of the people shown (up by one on each new turn, or on each edit to the population file while there is no game state), the cohort state's current turn, and its phase (`orders` or `resolving`) | the page's once-a-second poll; the turn chip |
 | `/api/owners` | 259,200 little-endian `uint16`: the nation that owns each tile at the current turn, in grid order, 0 = unowned (518 KB); header `X-Turn` | ownership tint |
-| `/api/tile/<id>` | JSON: the tile record merged with its population fields (people, rank and density from the current turn, or from the population file when there is no game state; country and area from the file) and country name, plus `nation` (the nation whose people live there at the current turn) and `owner` (the nation that owns the tile), each with `is_capital` and `null` if none | side panel, on hover |
-| `/api/tile/<id>/cohorts` | JSON: the tile's `people` (101 values) and `hours` (101 × activities) at the current turn, plus `turn`, `activities`, `hours_unit`; `people`/`hours` are `null` if nobody lives there | the Cohorts section, only after "Show age cohorts" |
+| `/api/tile/<id>` | JSON: the tile record merged with its population fields (people, rank and density from the current turn, or from the population file when there is no game state; country and area from the file) and country name, plus `segments` (each segment on the tile at the current turn: its leader's id, name and type, nation, parent leader, people and whether it is moving), `nation` (the nation with the most people there) and `owner` (the nation that owns the tile), each nation with `is_capital` and `null` if none | side panel, on hover |
+| `/api/tile/<id>/cohorts` | JSON: the tile's `people` (101 values, summed over its segments) and `hours` (101 × activities, averaged over its segments weighted by their people) at the current turn, plus `turn`, `segments` (how many), `activities`, `hours_unit`; `people`/`hours` are `null` if nobody is there | the Cohorts section, only after "Show age cohorts" |
 | `/api/nations` | JSON: the current turn's nations (`id`, `code`, `name`, `capital` tile id, `alive`, `founded_turn`, `people`, `owned_tiles`, `visible_tiles`, `explored_tiles`); built once per turn | the "View as" list |
 | `/api/nation/<id>/visibility` | 64,800 bytes: the nation's active-visibility bits, then its explored bits (tile i = bit i % 8 of byte i // 8); header `X-Turn` | the fog of war for "View as" |
 | `/api/tile_at?lat=&lon=` | same as above, for the tile containing a point | convenience for scripts; the page doesn't use it |
@@ -226,7 +228,15 @@ A `/api/tile/N285E0770` response looks like:
 ### 4.6 The game state and the engine
 
 The game state below the tile totals is kept by a separate process, `engine/engine.py`, which writes it to
-the top-level `state/` folder as NumPy `.npy` arrays plus a `manifest.json` per turn (format: `cohort_state_schema.md`):
+the top-level `state/` folder as NumPy `.npy` arrays plus a `manifest.json` per turn (format: `cohort_state_schema.md`).
+
+People belong to **segments**: a segment is the people directly under one **leader**, and each row of
+the state is one segment. A leader's **following** is their segment plus the segments of every leader
+below them; the player is their nation's root leader. Leaders are an abstraction, not people, and come
+in types (`engine/leaders.json`: chieftain, mayor, superintendent, admiral, general, king). Each segment
+has a position: a tile, or partway between two neighbouring tiles, and it counts as being in the
+nearer one. A tile can hold several segments; per-tile figures are sums over them. Units and cities
+are meant to be the same thing: segments under leaders of different types, doing different things.
 
 ```
 engine.py step ──► state/.tmp_turn_00008/ ──rename──► state/turn_00008/ ──► state/current.json (atomic replace)
@@ -234,9 +244,10 @@ engine.py step ──► state/.tmp_turn_00008/ ──rename──► state/turn
 server.py ◄── memory-maps the arrays of the turn current.json names ◄──────────────┘
 ```
 
-- **The server reads almost nothing.** Switching turns reads only `current.json`, the manifest and
-  `tiles.npy` (the populated-tile list). The big arrays are memory-mapped, so a cohort request reads just
-  that tile's rows from disk (about 25 KB). A full-world state is about 120 MB per turn.
+- **The server reads almost nothing.** Switching turns reads only `current.json`, the manifest,
+  `leaders.json` and the small per-segment arrays (positions and economy). The big arrays are
+  memory-mapped, so a cohort request reads just the rows of the segments on that tile from disk (about
+  25 KB each). A full-world state (49,910 segments at turn 0) is about 120 MB per turn.
 - **Turns are never changed after they are written**, so the server can read one while the engine
   writes the next. The engine keeps the newest 3 turn directories and deletes older ones. Windows won't
   delete a file another process has mapped, so a turn the server still has open is skipped and removed
@@ -249,36 +260,40 @@ server.py ◄── memory-maps the arrays of the turn current.json names ◄─
 - **Production.** Each step first works out what the year produced, from the current people and their
   activity hours before they age. Foraging turns `subsistence` hours into food (kcal), at about 1,000
   kcal an hour while labor is light, levelling off at what the tile's land cover, landform, latitude,
-  water and rivers can sustain. People then consume each product at a daily rate per person that
-  depends on age; a tile with less than its people need cuts everyone's consumption by the same share,
-  and the need and what was consumed are stored (the shortfall is for mortality, still to come). What
-  is left loses its decay rate (food: all of it) and the rest carries over as stock. The rules and their values are in
+  water and rivers can sustain; segments on the same tile share that limit in proportion to their
+  hours. People then consume each product at a daily rate per person that depends on age; a segment
+  with less than its people need cuts everyone's consumption by the same share, and the need and what
+  was consumed are stored. What is left loses its decay rate (food: all of it) and the rest carries
+  over as the segment's stock. The rules and their values are in
   `engine/economy.json`, read on every step; `cohort_state_schema.md` gives the formulas.
-- **Demographics.** Next come births: each tile's people × a placeholder birth rate per person per
-  year by age (`engine/demography.json`, averaged over men and women), to be replaced by a decision
-  model in `birth_rates()`. Then deaths, from six causes whose yearly hazards add: starvation (the
+- **Demographics.** Next come births: each segment's people × a placeholder birth rate per person per
+  year by age (`engine/demography.json`, averaged over men and women), joining that segment, to be
+  replaced by a decision model in `birth_rates()`. Then deaths, from six causes whose yearly hazards add: starvation (the
   food shortfall), predation and accidents (hours of work), cancer and other age-related causes (age),
   infection (terrain) and child mortality (age and the childcare shortfall). People die in fractions,
-  and each turn stores the deaths by tile and cause (`deaths.npy`). The rules are in the `deaths`
+  and each turn stores the deaths by segment and cause (`deaths.npy`). The rules are in the `deaths`
   section of `engine/demography.json`; `mortality_modifiers()` is where infrastructure will reduce them.
 - **One turn = one year.** `engine/engine.py step` then applies ageing: every cohort moves up a
   year, the 99-year-olds join the open-ended 100+ group, and the year's surviving newborns become age 0.
   Activity hours belong to the age, not the cohort, so people take on the hours of their new age. The activity list and the starting hours
   for each age (rough curves in `starting_hours()`) are placeholders in `engine/engine.py`.
-- **Nations.** Each turn holds a record per nation (`nations.json`: id, code, capital tile, founded
-  turn, alive), the nation of each populated tile (`nation.npy`), the owner of every tile
-  (`owner.npy`) and two bit grids per nation:
+- **Leaders and nations.** Each turn holds a record per leader (`leaders.json`: id, name, type,
+  nation, parent, founded turn; one per segment, in row order) and per nation (`nations.json`: id,
+  code, capital tile, root leader, founded turn, alive), the owner of every tile (`owner.npy`) and two
+  bit grids per nation:
   `visible.npy` (active visibility) and `explored.npy` (every tile ever seen; explored but not visible
   = passive visibility). Ids are never reused. The turn-0 nations and their capitals come from the
-  population file's nation seed, which `init` requires. Each turn the
-  engine recomputes ownership (first come, first served: the first nation to live on a tile owns it
-  until its last inhabitants there are gone) and active visibility (tiles where the nation has people,
-  plus the 8 around each). A
+  population file's nation seed, which `init` requires; `init` makes one segment per populated tile,
+  each under its own chieftain, with the one on the nation's capital as its root leader and the rest
+  reporting to them. Segments don't move yet. Each turn the engine recomputes ownership (first come,
+  first served, claimed only by segments that aren't moving: the first nation with such a segment on a
+  tile owns it until it has none there) and active visibility (tiles where the nation's segments have
+  people, plus the 8 around each). A
   full world (224 nations) adds 14 MB per turn.
 - **Determinism.** Each manifest carries a SHA-256 checksum of the arrays; `engine/engine.py verify` rechecks
   it. The yearly step uses only elementwise arithmetic, so it doesn't depend on how NumPy orders sums.
 - **The people the viewer shows come from the game state** whenever there is one: on each new turn the
-  server sums each tile's ages (`World.refresh_people()`, a `PeopleView`) for the heatmap, the side panel's
+  server adds up each segment's ages on its tile (`World.refresh_people()`, a `PeopleView`) for the heatmap, the side panel's
   people count, rank and density, and the world total. The population file still supplies each tile's
   country and area, and its people are shown only when there is no game state (or after it is deleted).
   Initialise the state from the same population file the server is given (`engine/engine.py init
@@ -419,8 +434,9 @@ Details:
 
 The side panel shows, top to bottom: tile id and bounds with cursor position; a summary with no
 heading: the tile's owner (the nation that owns it, marked "capital" on its capital tile; "unclaimed" if nobody
-does), people, **Inhabitants** (only when the people living there belong to a different nation than
-the owner), while viewing as a nation how that nation sees the tile (active, passive or unknown), tile
+does), people, **Inhabitants** (only when the nation with the most people there isn't the owner), a
+line per segment on the tile (its leader's name, "Root leader" for a nation's root, with its people,
+nation and whether it is moving), while viewing as a nation how that nation sees the tile (active, passive or unknown), tile
 area, and a note for tiles outside the population data's coverage. The heat-level legend is shown only
 on the map, not in the panel;
 **Cohorts** (see below); **Terrain** (the landform) and **Cover** (what is on the land and frozen water; "Open water only" when

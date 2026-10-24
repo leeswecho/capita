@@ -20,6 +20,8 @@
   .panel { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 10px; padding: 18px; }
   h1 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 14px; font-weight: 600; }
   h1 small { text-transform: none; letter-spacing: 0; font-weight: 400; }
+  #leader { margin-top: 8px; font-size: 13px; }
+  td .tile { color: var(--muted); margin-left: 6px; font-size: 12px; }
   #nation { width: 100%; padding: 9px 10px; border: 1px solid var(--panel-border); border-radius: 8px; background: #12161f; color: var(--text); font: inherit; font-size: 15px; }
   #turn { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
   #phase { color: var(--muted); margin: 2px 0 18px; }
@@ -50,6 +52,7 @@
   <div class="panel">
     <h1>Playing as</h1>
     <select id="nation"><option value="">Choose a nation…</option></select>
+    <div id="leader" class="none"></div>
   </div>
   <div class="panel">
     <h1>Control</h1>
@@ -60,7 +63,7 @@
   </div>
   <div class="panel">
     <h1>Production and consumption <small id="productionWhen"></small></h1>
-    <div id="production"><div class="none">Choose a nation to see what its tiles produce.</div></div>
+    <div id="production"><div class="none">Choose a nation to see what its segments produce.</div></div>
   </div>
   <div class="panel">
     <h1>Deaths <small id="deathsWhen"></small></h1>
@@ -75,6 +78,7 @@
   const button = document.getElementById("commit");
   const message = document.getElementById("message");
   const nationSelect = document.getElementById("nation");
+  const leaderEl = document.getElementById("leader");
   let committing = false, lastStatus = { turn: null, phase: null };
   let nations = [], nationId = null, shownTurn = null;   // the controlled nation; the turn the panels show
   const CHOOSE_HINT = "Choose the nation you're playing to issue commands.";
@@ -143,6 +147,7 @@
     const n = nations.find(n => n.code === code && n.alive);
     nationId = n ? n.id : null;
     nationSelect.value = n ? n.code : "";
+    leaderEl.textContent = n && n.leader ? `You lead as ${n.leader.name}.` : "";
     const url = new URL(location.href);
     if (n) url.searchParams.set("nation", n.code); else url.searchParams.delete("nation");
     history.replaceState(null, "", url);
@@ -166,9 +171,10 @@
   function loadReports() { loadProduction(); loadDeaths(); }
 
   // ---------- production and consumption ----------
-  // What each tile the nation owns made and consumed in the year that ended with the current turn. The
-  // engine computes it while resolving the previous turn, so turn 0 has none. When a tile holds less
-  // than its people need, everyone's consumption is cut by the same share ("need met").
+  // What each of the nation's segments (the people directly under one leader) made and consumed in the
+  // year that ended with the current turn. The engine computes it while resolving the previous turn, so
+  // turn 0 has none. When a segment holds less than its people need, everyone's consumption is cut by
+  // the same share ("need met"). Segments on the same tile share its maximum.
   const productionEl = document.getElementById("production");
   const whenEl = document.getElementById("productionWhen");
   const num = (x, digits = 0) => x.toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits });
@@ -180,7 +186,7 @@
   async function loadProduction() {
     if (nationId === null) {
       whenEl.textContent = "";
-      productionEl.innerHTML = '<div class="none">Choose a nation to see what its tiles produce.</div>';
+      productionEl.innerHTML = '<div class="none">Choose a nation to see what its segments produce.</div>';
       return;
     }
     const id = nationId;
@@ -194,8 +200,8 @@
       productionEl.innerHTML = '<div class="none">Nothing yet. Each turn shows what was made in the year before it, so the first figures appear after the first commit.</div>';
       return;
     }
-    if (!body.populated_tiles) {
-      productionEl.innerHTML = `<div class="none">${esc(body.nation.name)} has no populated tiles.</div>`;
+    if (!body.segment_count) {
+      productionEl.innerHTML = `<div class="none">${esc(body.nation.name)} has no segments.</div>`;
       return;
     }
     productionEl.innerHTML = body.products.map((p, k) => productTable(body, p, k)).join("");
@@ -217,29 +223,31 @@
         ${consumed ? `<td title="${num(r.need[k])} ${esc(p.unit)}">${big(r.need[k])}</td>
         <td class="${short ? "short" : ""}" title="consumed ${num(r.consumed[k])} ${esc(p.unit)}">${pct(s, short)}</td>` : ""}</tr>`;
     };
-    const shown = body.tiles.length < body.populated_tiles
-      ? ` Showing the ${body.tiles.length} most productive of ${num(body.populated_tiles)} populated tiles.` : "";
-    const empty = body.owned_tiles - body.populated_tiles;
-    const shortTiles = t.short_tiles[k];
+    const n = body.segment_count, plural = (x, word) => `${num(x)} ${word}${x === 1 ? "" : "s"}`;
+    const shown = body.segments.length < n ? ` Showing the ${body.segments.length} most productive of ${num(n)} segments.` : "";
+    const shortSegs = t.short_segments[k];
     const eaten = consumed ? ` Consumed <b>${big(t.consumed[k])}</b>: ${num(100 * met(t.consumed[k], t.need[k]), 1)}% of need${
-      shortTiles ? `, <span class="short">${num(shortTiles)} tile${shortTiles === 1 ? "" : "s"} short</span>` : ", no tile short"}.` : "";
+      shortSegs ? `, <span class="short">${plural(shortSegs, "segment")} short</span>` : ", no segment short"}.` : "";
     return `
-      <p class="summary">Made <b>${big(t.produced[k])} ${esc(p.unit)}</b> of ${esc(p.name)} on
-        <b>${num(body.populated_tiles)}</b> populated tile${body.populated_tiles === 1 ? "" : "s"}
+      <p class="summary">Made <b>${big(t.produced[k])} ${esc(p.unit)}</b> of ${esc(p.name)} in
+        <b>${plural(n, "segment")}</b> on ${plural(body.tile_count, "tile")}
         (${perDay(t.produced[k], t.people)} ${esc(p.unit)} per person per day).${eaten}${shown}
-        ${empty ? ` ${num(empty)} owned tile${empty === 1 ? " has" : "s have"} nobody living there.` : ""}</p>
+        The nation owns ${plural(body.owned_tiles, "tile")}.</p>
       <div class="table-wrap"><table>
-        <thead><tr><th>Tile</th><th>People</th><th>Labor (h)</th><th>Made (${esc(p.unit)})</th>
+        <thead><tr><th>Segment</th><th>People</th><th>Labor (h)</th><th>Made (${esc(p.unit)})</th>
           <th>${esc(p.unit)} / person / day</th><th>Of tile's max</th>
           ${consumed ? `<th>Needed (${esc(p.unit)})</th><th>Need met</th>` : ""}</tr></thead>
-        <tbody>${body.tiles.map(r => row(esc(r.tile), r)).join("")}</tbody>
+        <tbody>${body.segments.map(r => row(segLabel(r), r)).join("")}</tbody>
         <tfoot>${row("Total", { people: t.people, labor_hours: t.labor_hours, produced: t.produced, max: t.max,
                                 need: t.need, consumed: t.consumed })}</tfoot>
       </table></div>`;
   }
 
+  // A segment as its leader's name and the tile it counts as being in.
+  const segLabel = r => `${esc(r.name)}<span class="tile">${esc(r.tile)}${r.moving ? " · moving" : ""}</span>`;
+
   // ---------- deaths ----------
-  // How many people died of each cause on each tile the nation owns in the year that ended with the
+  // How many people died of each cause in each of the nation's segments in the year that ended with the
   // current turn. People die in fractions, so small numbers are shown with a decimal.
   const deathsEl = document.getElementById("deaths");
   const deathsWhenEl = document.getElementById("deathsWhen");
@@ -263,8 +271,8 @@
       deathsEl.innerHTML = '<div class="none">Nothing yet: the first figures appear after the first commit.</div>';
       return;
     }
-    if (!body.populated_tiles) {
-      deathsEl.innerHTML = `<div class="none">${esc(body.nation.name)} has no populated tiles.</div>`;
+    if (!body.segment_count) {
+      deathsEl.innerHTML = `<div class="none">${esc(body.nation.name)} has no segments.</div>`;
       return;
     }
     const t = body.totals, sum = a => a.reduce((x, y) => x + y, 0);
@@ -274,14 +282,14 @@
       <td>${perK(sum(r.deaths), r.people)}</td>${r.deaths.map(d => `<td>${few(d)}</td>`).join("")}</tr>`;
     const causes = body.causes.map((c, k) => [c, t.deaths[k]]).sort((a, b) => b[1] - a[1])
       .map(([c, d]) => `${esc(causeLabel(c).toLowerCase())} ${few(d)}`).join(", ");
-    const shown = body.tiles.length < body.populated_tiles
-      ? ` Showing the ${body.tiles.length} tiles with the most deaths of ${num(body.populated_tiles)}.` : "";
+    const shown = body.segments.length < body.segment_count
+      ? ` Showing the ${body.segments.length} segments with the most deaths of ${num(body.segment_count)}.` : "";
     deathsEl.innerHTML = `
       <p class="summary"><b>${few(died)}</b> died (${perK(died, t.people)} per 1,000): ${causes}.${shown}</p>
       <div class="table-wrap"><table>
-        <thead><tr><th>Tile</th><th>People now</th><th>Died</th><th>Per 1,000</th>
+        <thead><tr><th>Segment</th><th>People now</th><th>Died</th><th>Per 1,000</th>
           ${body.causes.map(c => `<th>${esc(causeLabel(c))}</th>`).join("")}</tr></thead>
-        <tbody>${body.tiles.map(r => row(esc(r.tile), r)).join("")}</tbody>
+        <tbody>${body.segments.map(r => row(segLabel(r), r)).join("")}</tbody>
         <tfoot>${row("Total", { people: t.people, deaths: t.deaths })}</tfoot>
       </table></div>`;
   }

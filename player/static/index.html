@@ -622,10 +622,75 @@ async function loadView(follow) {
   renderStatus();
 }
 
+// The fog. Far from what the nation knows, a layer with one pixel per tile is simply black. Around the
+// explored tiles (FOG_PAD tiles past them on every side) that layer is clear, and a finer patch, FOG_PX
+// pixels per tile, draws the fog with soft, slightly ragged edges: each pixel blends the darkness of
+// the nearest tiles (clear where the nation sees, FOG_DIM where it only remembers, black where it has
+// never been), easing from one to the next over about 2 x FOG_SOFT of a tile around each tile edge, at
+// a point nudged by up to FOG_JITTER of a tile with smooth noise fixed to the map.
+const FOG_PX = 12, FOG_PAD = 4, FOG_SOFT = 0.3, FOG_JITTER = 0.14, FOG_DIM = 150 / 255;
+let fogPatch = null;
+
+function hash2(x, y) {   // a fixed pseudo-random value in [0, 1) for integer lattice points
+  let h = Math.imul(x, 374761393) + Math.imul(y, 668265263) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function noise2(x, y, period) {   // smooth value noise; x repeats every `period` (the world wraps east-west)
+  const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
+  const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+  const h = (i, j) => hash2(((x0 + i) % period + period) % period, y0 + j);
+  const a = h(0, 0), b = h(1, 0), c = h(0, 1), d = h(1, 1);
+  return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+}
+const smooth = (e0, e1, x) => { const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0))); return t * t * (3 - 2 * t); };
+
 function paintFog() {
   const d = fogImg.data;
   for (let i = 0; i < COLS * ROWS; i++) d[i * 4 + 3] = 255;    // black wherever nothing is known
-  for (const t of known.values()) d[tileIndex(t.id) * 4 + 3] = t.seen ? 0 : 150;
+  if (fogPatch) { scene.remove(fogPatch); fogPatch.geometry.dispose(); fogPatch.material.map.dispose(); fogPatch.material.dispose(); fogPatch = null; }
+  if (known.size) {
+    // The patch's tiles: rows r0.., columns c0 + dc0.. (columns counted from the home tile's, so it
+    // can cross the 180th meridian).
+    const home = tileIndex(VIEW.home || known.keys().next().value), cHome = home % COLS;
+    let r0 = ROWS, r1 = -1, dc0 = COLS, dc1 = -COLS;
+    for (const id of known.keys()) {
+      const i = tileIndex(id), r = Math.floor(i / COLS), dc = ((i % COLS - cHome + COLS * 1.5) % COLS) - COLS / 2;
+      r0 = Math.min(r0, r); r1 = Math.max(r1, r); dc0 = Math.min(dc0, dc); dc1 = Math.max(dc1, dc);
+    }
+    r0 = Math.max(0, r0 - FOG_PAD); r1 = Math.min(ROWS - 1, r1 + FOG_PAD); dc0 -= FOG_PAD; dc1 += FOG_PAD;
+    const W = Math.min(COLS, dc1 - dc0 + 1), H = r1 - r0 + 1, cWest = cHome + dc0;
+    const dark = new Float32Array(W * H).fill(1);
+    for (const t of known.values()) {
+      const i = tileIndex(t.id), r = Math.floor(i / COLS), dc = ((i % COLS - cWest) % COLS + COLS) % COLS;
+      if (dc < W) dark[(r - r0) * W + dc] = t.seen ? 0 : FOG_DIM;
+    }
+    for (let r = r0; r <= r1; r++) for (let k = 0; k < W; k++) d[(r * COLS + ((cWest + k) % COLS + COLS) % COLS) * 4 + 3] = 0;
+    const P = Math.max(2, Math.min(FOG_PX, Math.floor(2048 / Math.max(W, H))));
+    const cv = document.createElement("canvas");
+    cv.width = W * P; cv.height = H * P;
+    const ctx = cv.getContext("2d"), img = ctx.createImageData(cv.width, cv.height);
+    const at = (k, j) => k < 0 || j < 0 || k >= W || j >= H ? 1 : dark[j * W + k];
+    for (let py = 0; py < cv.height; py++) for (let px = 0; px < cv.width; px++) {
+      const X = (px + 0.5) / P, Y = (py + 0.5) / P;             // in tiles from the patch's north-west corner
+      const gx = (cWest + X) * 2, gy = (r0 + Y) * 2;              // map-fixed noise, two bumps per tile
+      const sx = X - 0.5 + (noise2(gx, gy, COLS * 2) - 0.5) * 2 * FOG_JITTER;
+      const sy = Y - 0.5 + (noise2(gx + 57.3, gy + 91.7, COLS * 2) - 0.5) * 2 * FOG_JITTER;
+      const k = Math.floor(sx), j = Math.floor(sy);
+      const u = smooth(0.5 - FOG_SOFT, 0.5 + FOG_SOFT, sx - k), v = smooth(0.5 - FOG_SOFT, 0.5 + FOG_SOFT, sy - j);
+      const top = at(k, j) + (at(k + 1, j) - at(k, j)) * u, bottom = at(k, j + 1) + (at(k + 1, j + 1) - at(k, j + 1)) * u;
+      img.data[(py * cv.width + px) * 4 + 3] = Math.round(255 * (top + (bottom - top) * v));
+    }
+    ctx.putImageData(img, 0, 0);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.magFilter = THREE.LinearFilter; tex.minFilter = THREE.LinearFilter; tex.generateMipmaps = false;
+    // A piece of sphere over exactly those tiles (longitude from 180 W, colatitude from the north pole).
+    const geo = new THREE.SphereGeometry(R_FOG + 0.00001, Math.max(2, W * 2), Math.max(2, H * 2),
+      cWest * TILE * D2R, W * TILE * D2R, r0 * TILE * D2R, H * TILE * D2R);
+    fogPatch = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false }));
+    fogPatch.renderOrder = 3;
+    scene.add(fogPatch);
+  }
   fogCanvas.getContext("2d").putImageData(fogImg, 0, 0);
   fogTex.needsUpdate = true;
 }

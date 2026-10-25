@@ -7,7 +7,7 @@ works from any directory.)
 
 A player starts out knowing almost nothing about the world, or even about their own people, so the
 server sends only what their nation knows: the tiles it has explored (cohort_state.py's explored bits),
-each with just the names of its landforms, largest first; which of them it can see now (visible bits);
+each with just the names of its landforms and of what covers its land, largest first; which of them it can see now (visible bits);
 and the segments on the tiles it can see. Of its own segments it knows the people and how they seem
 (descriptions.json); of other nations' segments only roughly how big they look. Tile ids and
 coordinates are in the data, since the page has to draw the map, but the page never shows them.
@@ -103,6 +103,8 @@ class Player(Game):
         self.meta = world.meta
         self.terrain_types = world.terrain_types
         self.terrain = np.stack([np.asarray(c, dtype=np.uint8) for c in world.terrain])   # [types, tiles]
+        self.cover_types = world.cover_types
+        self.cover = np.stack([np.asarray(c, dtype=np.uint8) for c in world.cover])         # [types, tiles]
         self.textures = find_textures(self.meta["source_image"])
         try:
             with open(os.path.join(GLOBE_TILES, "tiles.json"), encoding="utf-8") as f:
@@ -174,9 +176,10 @@ class Player(Game):
     def view_json(self, nid: int):
         """What nation `nid` knows at the current turn, or None if there is no such nation:
         {"turn", "phase", "nation": {"id", "name"}, "home": the tile of its root leader's segment,
-         "terrain_types": [...],
-         "tiles": [{"id", "seen": whether it can see the tile now, "terrain": indices into terrain_types,
-                    largest share first}] for every tile it has explored,
+         "terrain_types": [...], "cover_types": [...],
+         "tiles": [{"id", "seen": whether it can see the tile now, "terrain": its landforms and "cover":
+                    what covers its land (and frozen water), each as indices into terrain_types or
+                    cover_types, largest share first}] for every tile it has explored,
          "segments": [...] on the tiles it can see now: its own with "people", "situation", "order" and
                     "moves"; other nations' with what it knows of them}."""
         t = self.current_turn()
@@ -186,10 +189,11 @@ class Player(Game):
         visible = cs.unpack_tiles(np.asarray(t.visible[nid]))
         explored = np.flatnonzero(cs.unpack_tiles(np.asarray(t.explored[nid])))
         tiles = []
+        def largest_first(share):
+            return sorted((k for k in range(len(share)) if share[k] > 0), key=lambda k: (-share[k], k))
         for i in explored.tolist():
-            share = self.terrain[:, i]
-            kinds = sorted((k for k in range(len(share)) if share[k] > 0), key=lambda k: (-share[k], k))
-            tiles.append({"id": orders.tile_name(i), "seen": bool(visible[i]), "terrain": kinds})
+            tiles.append({"id": orders.tile_name(i), "seen": bool(visible[i]),
+                          "terrain": largest_first(self.terrain[:, i]), "cover": largest_first(self.cover[:, i])})
         commands = {c["leader"]: c for c in orders.read_nation(self.state_dir, t.turn, nid)}
         rows = np.flatnonzero(visible[t.tile])
         rows = sorted(rows.tolist(), key=lambda r: (t.leaders[r]["nation"] != nid, r))   # own first
@@ -201,7 +205,7 @@ class Player(Game):
         return json.dumps({"turn": t.turn, "phase": self.status()["phase"],
                            "nation": {"id": nid, "name": self.nation_name(t, nid)},
                            "home": orders.tile_name(home) if home is not None else None,
-                           "terrain_types": self.terrain_types, "tiles": tiles,
+                           "terrain_types": self.terrain_types, "cover_types": self.cover_types, "tiles": tiles,
                            "segments": segments}, separators=(",", ":")).encode()
 
     def order(self, nid: int, body: dict):

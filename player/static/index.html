@@ -272,17 +272,19 @@ function vecToLatLon(v) {
 // ---------- the map ----------
 // Underneath it is the same globe as the developer view, but the camera hangs low over it looking
 // straight down, with north up, so only a handful of tiles fill the screen and the surface looks flat.
-// There is no shading, no sky and no globe edge. The player can zoom only between SPAN_MIN and
-// SPAN_MAX tiles top to bottom, and can't move the centre more than MARGIN tiles past what they have
-// explored. Tiles never explored are black; explored tiles they can't see now are dimmed.
-const SPAN_MIN = 3, SPAN_MAX = 8, SPAN_START = 6, MARGIN = 1;
+// There is no shading, no sky and no globe edge. Tiles never explored are black; explored tiles they
+// can't see now are dimmed. The player can zoom only between SPAN_MIN and SPAN_MAX tiles top to
+// bottom, and the edges of the screen stay within about MARGIN tiles of what they have explored: they
+// can't zoom out or pan further than that (clampCamera()), except that the screen never gets smaller
+// than SPAN_MIN tiles, so a narrow strip can show a little more darkness on its sides.
+const SPAN_MIN = 3, SPAN_MAX = 8, SPAN_START = 6, MARGIN = 2.5;
 const FOV = 30;
 const R_FOG = 1.0003, R_GRID = 1.00025, R_MARK = 1.0004;
 let renderer, scene, camera, globe, fogTex, fogImg, gridLines = null, hoverLine = null, selectLine = null;
 const markers = new THREE.Group();
 const fogCanvas = document.createElement("canvas");
 const cam = { lat: 0, lon: 0, span: SPAN_START, goal: null };   // the point at the middle of the screen
-let bounds = null;      // { lat0, lat1, ref, d0, d1 }: where the middle may go, in degrees (d = lon - ref)
+let bounds = null;      // { lat0, lat1, ref, d0, d1 }: where the screen may show, in degrees (d = lon - ref)
 let META = null;
 
 async function initMap() {
@@ -455,22 +457,31 @@ function placeCamera() {
   camera.near = h * 0.05; camera.far = h + 1;
   camera.updateProjectionMatrix();
 }
+// Keep the screen inside `bounds`: zoom out no further than it fits, and keep its middle far enough
+// from the edges. Where the screen is wider than the bounds, it is centred on them. (Rough: the screen
+// is treated as a rectangle of latitude and longitude.)
 function clampCamera() {
-  cam.span = THREE.MathUtils.clamp(cam.span, SPAN_MIN, SPAN_MAX);
-  if (!bounds) return;
-  cam.lat = THREE.MathUtils.clamp(cam.lat, bounds.lat0, bounds.lat1);
-  const d = THREE.MathUtils.clamp(wrapLon(cam.lon - bounds.ref), bounds.d0, bounds.d1);
-  cam.lon = wrapLon(bounds.ref + d);
+  const clamp = THREE.MathUtils.clamp;
+  if (!bounds) { cam.span = clamp(cam.span, SPAN_MIN, SPAN_MAX); return; }
+  const aspect = camera.aspect || 1, cos = Math.max(0.05, Math.cos(cam.lat * D2R));
+  const fit = Math.min(bounds.lat1 - bounds.lat0, (bounds.d1 - bounds.d0) * cos / aspect) / TILE;
+  cam.span = clamp(cam.span, SPAN_MIN, clamp(fit, SPAN_MIN, SPAN_MAX));
+  const hLat = cam.span * TILE / 2, hLon = hLat * aspect / cos;   // half the screen, in degrees
+  const inside = (v, lo, hi, h) => lo + h <= hi - h ? clamp(v, lo + h, hi - h) : (lo + hi) / 2;
+  cam.lat = inside(cam.lat, bounds.lat0, bounds.lat1, hLat);
+  cam.lon = wrapLon(bounds.ref + inside(wrapLon(cam.lon - bounds.ref), bounds.d0, bounds.d1, hLon));
 }
 function flyTo(lat, lon) { cam.goal = { lat, lon }; }
 
 function frame() {
+  const before = { lat: cam.lat, lon: cam.lon };
   if (cam.goal) {   // ease toward a point the page chose (a new turn's leader)
     const dl = wrapLon(cam.goal.lon - cam.lon), dla = cam.goal.lat - cam.lat;
     if (Math.abs(dl) + Math.abs(dla) < 1e-4) { cam.lat = cam.goal.lat; cam.lon = cam.goal.lon; cam.goal = null; }
     else { cam.lat += dla * 0.15; cam.lon = wrapLon(cam.lon + dl * 0.15); }
   }
   clampCamera();
+  if (cam.goal && Math.abs(cam.lat - before.lat) + Math.abs(wrapLon(cam.lon - before.lon)) < 1e-7) cam.goal = null;   // held at the edge
   placeCamera();
   updateDetail();
   renderer.render(scene, camera);
@@ -584,7 +595,7 @@ function findBounds() {
     const c = tileCentre(id), d = wrapLon(c.lon - ref);
     lat0 = Math.min(lat0, c.lat); lat1 = Math.max(lat1, c.lat); d0 = Math.min(d0, d); d1 = Math.max(d1, d);
   }
-  const m = MARGIN * TILE;
+  const m = (MARGIN + 0.5) * TILE;   // from the explored tiles' centres to MARGIN tiles past their edges
   bounds = { lat0: lat0 - m, lat1: lat1 + m, ref, d0: d0 - m, d1: d1 + m };
 }
 
@@ -669,7 +680,9 @@ function drawMarkers() {
 const DIR_LABEL = { n: "N", ne: "NE", e: "E", se: "SE", s: "S", sw: "SW", w: "W", nw: "NW" };
 function renderSide() {
   const t = selected ? known.get(selected) : null;
-  $("terrain").textContent = t ? t.terrain.map(k => VIEW.terrain_types[k]).join(", ") : "";
+  // Landforms, then what covers the land, each largest first, as plain lists without the shares.
+  $("terrain").innerHTML = t ? [t.terrain.map(k => VIEW.terrain_types[k]), t.cover.map(k => VIEW.cover_types[k])]
+    .filter(list => list.length).map(list => `<div>${esc(list.join(", "))}</div>`).join("") : "";
   const segs = t && t.seen ? segsByTile.get(t.id) || [] : [];
   $("segments").innerHTML = segs.map(s => `<button class="btn seg" data-leader="${s.leader}">
       ${esc(s.title)}${s.own ? `<span class="people">${s.people.toLocaleString()} ${s.people === 1 ? "person" : "people"}</span>` : ""}

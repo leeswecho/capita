@@ -59,9 +59,10 @@ python player/player.py               # then open http://localhost:8000/
 
 The page starts black, with only a menu to choose the nation you will lead, and rename it if you like
 (`state/names.json`; every page shows the new name). Then you see the land around your people and
-nothing else: the map is locked to a handful of tiles, and you can't move more than a tile past what
-your nation has explored. Tiles you have seen before but can't see now are dimmed, and the rest are
-black. Choose a tile to see its landforms (largest first) and the leaders there. Your own leader shows
+nothing else: the map is locked to a handful of tiles, and you can't zoom or pan to see more than a
+couple of tiles past what your nation has explored. Tiles you have seen before but can't see now are dimmed, and the rest are
+black. Choose a tile to see its landforms and what covers its land (each largest first) and the leaders
+there. Your own leader shows
 their title and people; choosing them offers **Orders** (for now only **Move**, to one of the eight
 directions around) and **Info** (their people and how they seem, from `player/descriptions.json`).
 Another nation's leader offers only Info: roughly how big their group looks. **Commit Turn** resolves
@@ -125,8 +126,8 @@ engine.py init / step ─────────────┘
   (`engine/demography.json`), and people die of starvation, predation and accidents, cancer,
   other age-related causes, infection and child mortality, each with its own rule in the same file.
   Then every cohort ages one year. Ownership is first come, first served, claimed by segments that
-  aren't moving. Each nation actively sees every tile within 2 tiles of one where its segments have
-  people (`engine/visibility.json`). Leader types are in `engine/leaders.json`.
+  aren't moving. Each nation actively sees every tile where its segments have people, plus the 8 around
+  each (`engine/visibility.json`). Leader types are in `engine/leaders.json`.
 
 ## Data
 

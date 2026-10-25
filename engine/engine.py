@@ -54,7 +54,7 @@ starting visibility.
   segments that aren't moving. A nation owns a tile from the turn it is the first to have such a
   segment with people there, and loses it when it has none there any more.
 - Visibility, recomputed every turn (active_visibility()): a nation actively sees every tile within
-  visibility.json's radius_tiles (2: the 5 x 5 block) of a tile where one of its segments has people.
+  visibility.json's radius_tiles (1: the tile and the 8 around it) of a tile where one of its segments has people.
   Tiles it has ever seen stay explored (passive visibility).
 
 Each step reads the current turn, computes the next one in memory and writes it as a new turn directory

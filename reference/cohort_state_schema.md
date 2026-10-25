@@ -271,7 +271,7 @@ Every record has exactly these keys.
   "movement_rules_source": "engine/movement.json",
   "movement_rules": { "km_per_hour": 2.5, "not_travel_activities": ["sleep", "subsistence"] },
   "visibility_rules_source": "engine/visibility.json",
-  "visibility_rules": { "radius_tiles": 2 },
+  "visibility_rules": { "radius_tiles": 1 },
   "orders": { "turn": 6, "applied": [ { "nation": 1, "leader": 37, "type": "move", "to": "S355E1495" } ],
               "rejected": [ { "nation": 23, "leader": 31, "type": "move", "to": "N100E0100",
                               "reason": "N100E0100 isn't next to N355E1395" } ] }
@@ -463,7 +463,7 @@ nation never claim. At turn 0 every populated tile belongs to the nation living 
 `owner.npy`.
 
 **Visibility, recomputed every turn** (`active_visibility()`): a nation actively sees every tile within
-`radius_tiles` rows and columns (`engine/visibility.json`; 2, so the 5 × 5 block) of a tile one of its
+`radius_tiles` rows and columns (`engine/visibility.json`; 1, so the tile and the 8 around it) of a tile one of its
 segments with people counts as being in (east–west wraps around; nothing past the poles). Then
 `explored = explored OR visible`. The rule is expected to change as the game develops; readers only
 use the stored bits.

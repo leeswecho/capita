@@ -56,7 +56,7 @@ The server does no rendering. It hands the browser compact data, and the browser
 | `../engine/economy.json` | The economy rules the engine reads on every step: the products (food, in kcal) with their decay rates, and the foraging model's yields and factors. |
 | `../engine/demography.json` | The demography rules the engine reads on every step: birth rates by age, and each cause of death's rule and values. |
 | `../engine/movement.json` | The movement rules the engine reads on every step: walking pace, and which activities' hours aren't free for travel. |
-| `../engine/visibility.json` | The visibility rules the engine reads on every step: how many tiles around its people a nation sees (2, a 5 × 5 block). |
+| `../engine/visibility.json` | The visibility rules the engine reads on every step: how many tiles around its people a nation sees (1: the tile and the 8 around it). |
 | `orders.py` | The players' orders (`../state/orders/turn_NNNNN/nation_KKK.json`): reading and writing them, the command types (for now `move`), and `check()`, the one validation used by both servers and the engine. |
 | `game.py` | What the control and player servers share: the current turn (memory-mapped), its phase, giving orders (under the state's lock, so never during a step) and Commit Turn (runs `engine.py step --expect-turn T` as its own process, so a commit for a turn that has already resolved doesn't advance the next one; 409 if another step is running). Nation names come from here too. |
 | `names.py` | The names players give their nations (`../state/names.json`), written by the player server under the state's lock and shown by every server. The engine never reads them. |
@@ -309,7 +309,7 @@ server.py ◄── memory-maps the arrays of the turn current.json names ◄─
   each under its own chieftain, with the one on the nation's capital as its root leader and the rest
   reporting to them. Each turn the engine recomputes ownership (first come,
   first served, claimed only by segments that aren't moving: the first nation with such a segment on a
-  tile owns it until it has none there) and active visibility (every tile within `radius_tiles`, 2, of
+  tile owns it until it has none there) and active visibility (every tile within `radius_tiles`, 1, of
   one where the nation's segments have people: `engine/visibility.json`). A
   full world (224 nations) adds 14 MB per turn.
 - **Determinism.** Each manifest carries a SHA-256 checksum of the arrays; `engine/engine.py verify` rechecks
@@ -331,7 +331,7 @@ deliberately spartan, and `player.py` sends only what the nation knows.
   (`POST /api/nation/<id>/name`, saved in `state/names.json` by `names.py`; every server shows it).
   The browser remembers the last choice.
 - **What the nation knows** (`/api/nation/<id>/view`): every tile it has explored, with whether it can
-  see it now and its landforms largest first (names only, no shares), and the segments on the tiles it
+  see it now, its landforms and what covers its land (each largest first, names only, no shares), and the segments on the tiles it
   can see. Its own segments come with their people, how they seem (`situation()`, worded by the rules in
   `descriptions.json`: hunger from the share of food need met, then unusual deaths by cause, else "They
   look fine."), their order and which of the 8 directions they can move. Other nations' segments come
@@ -340,13 +340,14 @@ deliberately spartan, and `player.py` sends only what the nation knows.
   coordinates, and error messages that would name a tile are replaced.
 - **The map.** The same globe and detail tiles as the developer view, but the camera hangs low over the
   surface looking straight down with north up, and draws with no shading, sky or atmosphere, so it
-  looks like a flat map. Zoom is limited to 3–8 tiles top to bottom, and the middle of the screen can't
-  move more than a tile past the explored tiles. Unexplored tiles are black (a fog layer, one pixel per
+  looks like a flat map. Zoom is limited to 3–8 tiles top to bottom, and the edges of the screen stay
+  within about 2½ tiles of the explored tiles: the page won't zoom out or pan further (roughly, treating
+  the screen as a rectangle of latitude and longitude; a screen can't be smaller than 3 tiles). Unexplored tiles are black (a fog layer, one pixel per
   tile), explored tiles not seen now are dimmed, and the grid is drawn only on explored tiles. Each
   segment is a small token (own ochre, others rust red), with a line for an ordered move. Only the globe
   image and the grid are shown: no rivers, heatmap, terrain or cover overlays.
 - **The side bar** shows the chosen tile (clicking a tile chooses it; it starts on the nation's root
-  leader): its landforms as a comma-separated list, then a button per leader there ("Iceland Chieftain,
+  leader): its landforms and then its cover as comma-separated lists, then a button per leader there ("Iceland Chieftain,
   206 people"). A leader's menu offers **Orders** (for now only **Move**: a 3 × 3 compass of directions,
   all-water ones disabled, plus Cancel) and **Info** (people and situation); another nation's leader
   offers only Info. `POST /api/nation/<id>/orders` takes a direction and turns it into a move command for

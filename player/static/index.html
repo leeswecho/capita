@@ -53,6 +53,11 @@
   .ticon { display: inline-block; width: 24px; height: 24px; border: 1px solid rgba(0, 0, 0, 0.6); }
   .ticon svg { display: block; width: 100%; height: 100%; }
   #segments { display: flex; flex-direction: column; gap: 5px; }
+  .seg.shown { outline: 2px solid var(--ink); outline-offset: -5px; }
+  #info { padding: 6px 8px; font-size: 14px; display: flex; flex-direction: column; gap: 4px; }
+  #info:empty { display: none; }
+  #info .title { font-weight: bold; }
+  #info p { margin: 0; }
   .seg { width: 100%; }
   .seg .people { display: flex; align-items: center; gap: 3px; font-size: 13px; }
   .glyph { display: inline-block; width: 1em; height: 1em; vertical-align: -0.12em; }
@@ -122,6 +127,7 @@
     <div id="tile">
       <div id="terrain" class="hole"></div>
       <div id="segments"></div>
+      <div id="info" class="hole"></div>
     </div>
   </aside>
 </div>
@@ -755,6 +761,7 @@ function setHover(tid) {
   drawOutlines();
 }
 function selectTile(tid) {
+  if (tid !== selected) pinnedLeader = null;
   selected = tid;
   closeMenu();
   drawOutlines();
@@ -822,7 +829,31 @@ function renderSide() {
   $("segments").innerHTML = segs.map(s => `<button class="btn seg" data-leader="${s.leader}">
       ${leaderLabel(s)}${s.own ? `<span class="people">${s.people.toLocaleString()} ${glyph("people", s.people === 1 ? "person" : "people")}</span>` : ""}
       ${s.order ? `<span class="order">Orders: move ${DIR_LABEL[s.order.direction] || ""}</span>` : ""}</button>`).join("");
+  renderInfo();
 }
+
+// The info box under the tile's leaders: what is known about one of their segments. It shows the
+// leader under the pointer, else the one last clicked on this tile, else the player's own leader
+// with the most people here (else the first listed).
+let pinnedLeader = null, hoverLeader = null;
+function shownSegment() {
+  const t = selected ? known.get(selected) : null;
+  const segs = t && t.seen ? segsByTile.get(t.id) || [] : [];
+  const own = segs.filter(s => s.own).sort((a, b) => b.people - a.people);
+  return segs.find(s => s.leader === hoverLeader) || segs.find(s => s.leader === pinnedLeader) || own[0] || segs[0] || null;
+}
+function renderInfo() {
+  const s = shownSegment();
+  $("segments").querySelectorAll(".seg").forEach(b => b.classList.toggle("shown", !!s && +b.dataset.leader === s.leader));
+  $("info").innerHTML = !s ? "" : `<div class="title">${leaderLabel(s)}</div>` + (s.own
+    ? `<p>${s.people.toLocaleString()} ${glyph("people", s.people === 1 ? "person" : "people")}</p><p>${esc(s.situation)}</p>`
+    : `<p>They appear to be ${esc(s.known.size)}.</p>`);
+}
+$("segments").addEventListener("mouseover", e => {
+  const b = e.target.closest("button[data-leader]");
+  if (b && +b.dataset.leader !== hoverLeader) { hoverLeader = +b.dataset.leader; renderInfo(); }
+});
+$("segments").addEventListener("mouseleave", () => { hoverLeader = null; renderInfo(); });
 // The orders box: every order given to the nation's leaders this turn, one per leader. Choosing a
 // leader there chooses their tile; the cross cancels the order.
 function renderOrders() {
@@ -850,17 +881,19 @@ $("segments").addEventListener("click", e => {
   const b = e.target.closest("button[data-leader]");
   if (!b) return;
   const s = VIEW.segments.find(s => s.leader === +b.dataset.leader);
-  if (s.own) focusLeader = s.leader;
-  openMenu(s, b);
+  pinnedLeader = s.leader;
+  renderInfo();
+  if (s.own) { focusLeader = s.leader; openMenu(s, b); }
+  else closeMenu();
 });
 
 // ---------- a leader's menus ----------
-// Own leaders: Orders (for now only Move, to one of the 8 tiles around) and Info (their people and how
-// they seem). Another nation's: only Info, with what can be told about them from here.
+// Clicking one of the player's own leaders opens their orders: for now only Move, to one of the 8
+// tiles around, and cancelling an order. (What is known about a leader is in the info box.)
 let menuFor = null, menuAnchor = null;
 function openMenu(s, anchor) {
   menuFor = s; menuAnchor = anchor;
-  showMenu(s.own ? "main" : "info");
+  showMenu("orders");
 }
 function closeMenu() { $("menu").hidden = true; menuFor = null; }
 const canOrder = () => VIEW && VIEW.phase === "orders" && status.phase === "orders" && status.turn === VIEW.turn && !committing;
@@ -868,9 +901,7 @@ const canOrder = () => VIEW && VIEW.phase === "orders" && status.phase === "orde
 function showMenu(page) {
   const s = menuFor, m = $("menu");
   let html = `<div class="title">${leaderLabel(s)}</div>`;
-  if (page === "main") {
-    html += `<button class="btn" data-go="orders">Orders</button><button class="btn" data-go="info">Info</button>`;
-  } else if (page === "orders") {
+  if (page === "orders") {
     html += `<button class="btn" data-go="move"${canOrder() ? "" : " disabled"}>Move</button>`;
     if (s.order) html += `<button class="btn" data-cancel${canOrder() ? "" : " disabled"}>Cancel order (move ${DIR_LABEL[s.order.direction] || ""})</button>`;
     if (!canOrder()) html += `<p>Orders can't be given while the turn is resolving.</p>`;
@@ -878,11 +909,8 @@ function showMenu(page) {
     const ok = Object.fromEntries(s.moves.map(mv => [mv.direction, mv.ok]));
     const cell = d => `<button class="btn${s.order?.direction === d ? " on" : ""}" data-move="${d}"${ok[d] ? "" : " disabled"}>${DIR_LABEL[d]}</button>`;
     html += `<p>Which way?</p><div class="compass">${cell("nw")}${cell("n")}${cell("ne")}${cell("w")}<span class="here">·</span>${cell("e")}${cell("sw")}${cell("s")}${cell("se")}</div>`;
-  } else if (page === "info") {
-    html += s.own ? `<p>${s.people.toLocaleString()} ${glyph("people", s.people === 1 ? "person" : "people")}</p><p>${esc(s.situation)}</p>`
-                  : `<p>They appear to be ${esc(s.known.size)}.</p>`;
   }
-  if (page !== "main" && s.own) html += `<button class="btn" data-go="${page === "move" ? "orders" : "main"}">Back</button>`;
+  if (page === "move") html += `<button class="btn" data-go="orders">Back</button>`;
   m.innerHTML = html;
   m.hidden = false;
   const a = menuAnchor.getBoundingClientRect(), w = m.offsetWidth, h = m.offsetHeight;

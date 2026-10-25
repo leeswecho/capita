@@ -63,9 +63,11 @@ nothing else: the map is locked to a handful of tiles, and you can't zoom or pan
 couple of tiles past what your nation has explored. Tiles you have seen before but can't see now are dimmed, and the rest are
 black. Choose a tile to see its landforms and what covers its land (each largest first) and the leaders
 there. Nations are shown by their flags, and landforms and cover by small icons; hover over one for its name. Your own leader shows
-their title and people; choosing them offers **Orders** (for now only **Move**, to one of the eight
-directions around) and **Info** (their people and how they seem, from `player/descriptions.json`).
-Another nation's leader offers only Info: roughly how big their group looks. The side bar is only
+their title and people; choosing them offers their orders (for now only **Move**, to one of the eight
+directions around). A box under the leaders tells what is known about one of them: for your own,
+their people and how they seem (from `player/descriptions.json`); for another nation's, roughly how
+big their group looks. It shows your leader with the most people there, or whichever leader you
+point at or last clicked. The side bar is only
 about the chosen tile. A small **Orders** box at the top left of the map lists the orders given this
 turn, and **Commit Turn**, at the bottom left, resolves the turn for the whole world. The panels are stone, for the stone age; the page is built to change its
 look as society advances.

@@ -350,9 +350,11 @@ deliberately spartan, and `player.py` sends only what the nation knows.
 - **The side bar** is a tile explorer: it shows only the chosen tile (clicking a tile chooses it; it starts on the nation's root
   leader): its landforms and then its cover as rows of small drawn icons (largest
   first; the name is the icon's tooltip), then a button per leader there (Iceland's flag, "Chieftain",
-  206 and a person symbol; the words are the tooltips). A leader's menu offers **Orders** (for now only **Move**: a 3 × 3 compass of directions,
-  all-water ones disabled, plus Cancel) and **Info** (people and situation); another nation's leader
-  offers only Info. `POST /api/nation/<id>/orders` takes a direction and turns it into a move command for
+  206 and a person symbol; the words are the tooltips). Under them, an info box tells what is known about one leader's segment (people and
+  situation for the player's own, rough size for another nation's): the leader under the pointer, else
+  the one last clicked on this tile, else the player's leader with the most people there. Clicking one
+  of the player's own leaders opens their orders (for now only **Move**: a 3 × 3 compass of
+  directions, all-water ones disabled, plus Cancel). `POST /api/nation/<id>/orders` takes a direction and turns it into a move command for
   that neighbour (`orders.py`, through `game.py`). A small **Orders** box at the top left of the map
   lists every order the nation has given this turn (choosing one goes to that leader's tile; ✕ cancels
   it), and a box at the bottom left holds the turn number and **Commit Turn**, a play symbol (an hourglass

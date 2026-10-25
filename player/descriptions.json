@@ -1,0 +1,28 @@
+{
+  "about": "How the player page puts what the state holds about a segment into words, read by player.py on every request. A player knows little about their own people at first: only how many there are and how they seem. 'situation' describes one of the player's own segments from the year that ended with this turn: the first 'food' rule whose share of food need met is below its value, then the 'deaths' rules whose cause killed more than its share of the people alive at the start of that year (at most max_sentences sentences in all, food first), else 'fine'; 'moving' is added while the segment is between tiles. Shares of deaths are of people at the start of the year. At turn 0 no year has passed, so everyone looks fine. 'foreign_size' describes another nation's segment by roughly how many people are in it: the first entry whose 'below' is more than its people (null = no limit). As technology advances, intelligence will tell a player more about other nations' segments.",
+  "situation": {
+    "food_product": "food",
+    "food": [
+      {"met_below": 0.6, "text": "They are starving."},
+      {"met_below": 0.85, "text": "They look hungry."},
+      {"met_below": 0.97, "text": "They look thin."}
+    ],
+    "deaths": [
+      {"cause": "all", "share_above": 0.1, "text": "Many of them have died this past year."},
+      {"cause": "child_mortality", "share_above": 0.025, "text": "Many of their children have died."},
+      {"cause": "infection", "share_above": 0.02, "text": "Sickness has been among them."},
+      {"cause": "predation_and_accidents", "share_above": 0.01, "text": "Some have been lost to beasts and mishaps."}
+    ],
+    "max_sentences": 2,
+    "fine": "They look fine.",
+    "moving": "They are on the move."
+  },
+  "foreign_size": [
+    {"below": 10, "text": "a handful of people"},
+    {"below": 40, "text": "a small band"},
+    {"below": 150, "text": "a band"},
+    {"below": 500, "text": "a large band"},
+    {"below": 2000, "text": "a tribe"},
+    {"below": null, "text": "a great multitude"}
+  ]
+}

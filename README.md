@@ -3,7 +3,8 @@
 A turn-based world simulation on a Civilization-style map of the real Earth. The planet is divided
 into a **0.5° × 0.5° grid (720 × 360 = 259,200 tiles)**. Each tile records its landform, land
 cover, rivers and population. A turn engine advances age cohorts of people, nations, tile ownership
-and visibility one year at a time. A local web server shows it all on an interactive 3D globe.
+and visibility one year at a time. Players play from the player page, which shows only what their
+nation knows; a developer view shows everything on an interactive 3D globe.
 
 A civilization is its people. People are organised under **leaders** (chieftain, mayor,
 superintendent, admiral, general, king), each of whom marshals a **segment**: the people directly
@@ -18,9 +19,10 @@ two neighbouring tiles.
 | Path | What it is |
 |------|------------|
 | `server/` | The developer view, a globe that shows the whole game state and its mechanics: `server.py` (Python HTTP server), `static/index.html` (Three.js page), the shared tile grid (`grid.py`), the cohort-state reader/writer (`cohort_state.py`), data converters and generators, and the JSON data and globe images the server loads. |
+| `player/` | The player page: `player.py` (Python HTTP server), `static/index.html` and `descriptions.json` (how the page puts a segment's state into words). A player sees only what their nation knows, on a map locked to a handful of tiles. |
 | `engine/` | `engine.py`, the turn engine. It runs as its own process and writes the game state to `state/`. |
-| `control/` | The player's control page, served separately from the viewer: `control.py` (Python HTTP server) and `static/index.html`. It lists the nation's leaders, each of whom can be ordered to move, and has a **Commit Turn** button, which advances the engine one turn. |
-| `deploy/` | How the public server at `capita.leeswecho.net` is set up: systemd services for both servers, and the Caddy config that serves them over HTTPS. |
+| `control/` | The developer's control page, served separately from the developer view: `control.py` (Python HTTP server) and `static/index.html`. It lists the nation's leaders, each of whom can be ordered to move, and has a **Commit Turn** button, which advances the engine one turn. |
+| `deploy/` | How the public server at `capita.leeswecho.net` is set up: systemd services for the three servers, and the Caddy config that serves them over HTTPS. |
 | `state/` | The game state, one directory per turn. The engine generates it and it isn't committed. |
 | `reference/` | Documentation, plus the full-size YAML source data (`world_map.yaml`, `world_population.yaml`, `world_population_capitals.yaml`). |
 
@@ -49,7 +51,24 @@ python ../engine/engine.py verify     # recheck the current turn's checksum
 The running server and any open page pick up each new turn within about two seconds. To start over,
 delete `state/` and run `init` again.
 
-To play turns from a browser instead, start the control server (from the repository root):
+To play, start the player server (from the repository root):
+
+```sh
+python player/player.py               # then open http://localhost:8000/
+```
+
+The page starts black, with only a menu to choose the nation you will lead, and rename it if you like
+(`state/names.json`; every page shows the new name). Then you see the land around your people and
+nothing else: the map is locked to a handful of tiles, and you can't move more than a tile past what
+your nation has explored. Tiles you have seen before but can't see now are dimmed, and the rest are
+black. Choose a tile to see its landforms (largest first) and the leaders there. Your own leader shows
+their title and people; choosing them offers **Orders** (for now only **Move**, to one of the eight
+directions around) and **Info** (their people and how they seem, from `player/descriptions.json`).
+Another nation's leader offers only Info: roughly how big their group looks. **Commit Turn** resolves
+the turn for the whole world. The panels are stone, for the stone age; the page is built to change its
+look as society advances.
+
+To drive turns from the developer's side, start the control server (from the repository root):
 
 ```sh
 python control/control.py             # then open http://localhost:8001/
@@ -106,8 +125,8 @@ engine.py init / step ─────────────┘
   (`engine/demography.json`), and people die of starvation, predation and accidents, cancer,
   other age-related causes, infection and child mortality, each with its own rule in the same file.
   Then every cohort ages one year. Ownership is first come, first served, claimed by segments that
-  aren't moving. Each nation actively sees every tile where its segments have people, plus the 8 tiles
-  around each one. Leader types are in `engine/leaders.json`.
+  aren't moving. Each nation actively sees every tile within 2 tiles of one where its segments have
+  people (`engine/visibility.json`). Leader types are in `engine/leaders.json`.
 
 ## Data
 

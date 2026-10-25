@@ -6,6 +6,7 @@ Layout (see reference/cohort_state_schema.md for the full, language-neutral spec
       current.json            {"format": ..., "turn": 7, "dir": "turn_00007"}; replaced atomically
       phase.json              {"format": ..., "turn": 7, "phase": "resolving", "since": ...}: what is
                               happening to the current turn (see read_phase()); replaced atomically
+      .lock                   empty; locked (state_lock()) by whoever is changing the state
       turn_00007/
         manifest.json         turn number, activity names, units, leader types, array shapes/dtypes, checksum
         nations.json          one record per nation: id, code, capital tile, root leader, founded turn, alive
@@ -45,6 +46,7 @@ complete before current.json names it and is never changed afterwards, so reader
 safely. Windows won't delete a file another process has mapped, so old turns are pruned on a
 best-effort basis (see prune()).
 """
+import contextlib
 import hashlib
 import json
 import os
@@ -70,6 +72,7 @@ NATION_KEYS = ("id", "code", "capital", "leader", "founded_turn", "alive")
 LEADER_KEYS = ("id", "name", "type", "nation", "parent", "founded_turn")
 CURRENT = "current.json"
 PHASE = "phase.json"
+LOCK = ".lock"
 ORDERS, RESOLVING = "orders", "resolving"   # the phases of a turn; see read_phase()
 
 
@@ -244,6 +247,50 @@ class State:
         last = self.destination == self.toward
         if not np.all(last | grid.adjacent(self.toward, self.destination)):
             raise ValueError("a destination must be toward or a neighbour of toward")
+
+
+class Busy(Exception):
+    """state_lock(blocking=False) found the state locked by someone else."""
+
+
+@contextlib.contextmanager
+def state_lock(state_dir: str, blocking: bool = True):
+    """Hold the state's lock (an OS lock on state/.lock) for the duration of a `with`.
+
+    Whoever changes the state holds it: the engine for a whole step (or init), and the servers while
+    they write orders or names. So a server waits out a step, then sees the turn it has moved to, and
+    two steps can't run at once. The OS releases it if the holder dies. blocking=False raises Busy
+    instead of waiting."""
+    os.makedirs(state_dir, exist_ok=True)
+    f = open(os.path.join(state_dir, LOCK), "a+b")
+    try:
+        if os.name == "nt":
+            import msvcrt
+            while True:
+                try:
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    if not blocking:
+                        raise Busy(state_dir) from None
+                    time.sleep(0.05)
+        else:
+            import fcntl
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+            except BlockingIOError:
+                raise Busy(state_dir) from None
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(f, fcntl.LOCK_UN)
+    finally:
+        f.close()
 
 
 def _retry(fn, tries: int = 20, wait: float = 0.025):

@@ -56,10 +56,14 @@ The server does no rendering. It hands the browser compact data, and the browser
 | `../engine/economy.json` | The economy rules the engine reads on every step: the products (food, in kcal) with their decay rates, and the foraging model's yields and factors. |
 | `../engine/demography.json` | The demography rules the engine reads on every step: birth rates by age, and each cause of death's rule and values. |
 | `../engine/movement.json` | The movement rules the engine reads on every step: walking pace, and which activities' hours aren't free for travel. |
-| `orders.py` | The players' orders (`../state/orders/turn_NNNNN/nation_KKK.json`): reading and writing them, the command types (for now `move`), and `check()`, the one validation used by both the control server and the engine. |
+| `../engine/visibility.json` | The visibility rules the engine reads on every step: how many tiles around its people a nation sees (2, a 5 × 5 block). |
+| `orders.py` | The players' orders (`../state/orders/turn_NNNNN/nation_KKK.json`): reading and writing them, the command types (for now `move`), and `check()`, the one validation used by both servers and the engine. |
+| `game.py` | What the control and player servers share: the current turn (memory-mapped), its phase, giving orders (under the state's lock, so never during a step) and Commit Turn (runs `engine.py step --expect-turn T` as its own process, so a commit for a turn that has already resolved doesn't advance the next one; 409 if another step is running). Nation names come from here too. |
+| `names.py` | The names players give their nations (`../state/names.json`), written by the player server under the state's lock and shown by every server. The engine never reads them. |
+| `../player/player.py`, `../player/static/index.html`, `../player/descriptions.json` | The player page (§4.7), a separate server on port 8000. It sends a player only what their nation knows. |
 | `../engine/leaders.json` | The leader types (chieftain, mayor, superintendent, admiral, general, king) and the type every turn-0 leader gets. Types will decide which commands a leader can be given. |
-| `../control/control.py`, `../control/static/index.html` | The player's control page, a separate server on port 8001 so control stays apart from the view. **Commit Turn** (`POST /api/commit`) runs `engine/engine.py step` as its own process. Commits are accepted only while the turn's phase is `orders`; one sent while it is `resolving`, however the step was started, gets 409. `/api/status` gives the current turn and phase. The player first chooses the nation they control (remembered by the browser, or `?nation=AUS` in the URL); Commit Turn stays disabled until they do. The player is that nation's root leader, which the page names. The page lists the nation's leaders, root first (`/api/nation/<id>/leaders`); **Move** lists where a leader's segment can go (`/api/leader/<id>/moves`: the 8 neighbouring tiles, all-water ones disabled; for a segment already moving, the tiles around both ends of its step, each with the way there and its length), and choosing one saves a move command (`POST /api/nation/<id>/orders`, checked by `orders.check()`, refused unless the turn is in `orders`). The nation's orders for the turn are listed above Commit Turn, one per leader (a new command replaces the leader's old one), each with Cancel. It then lists what each of the nation's segments produced and consumed in the year that ended with the current turn, and how much of its need was met (`/api/nation/<id>/production`: the 100 most productive segments, with totals), and how many died of each cause (`/api/nation/<id>/deaths`). It reads the state and never writes it; the only files it writes are the orders. |
-| `cohort_state.py` | Reads and writes the cohort state (`../state/`): the format id, atomic turn writing, memory-mapped reading, checksums and pruning. Shared by `engine/engine.py` and the server. |
+| `../control/control.py`, `../control/static/index.html` | The developer's control page, a separate server on port 8001 so control stays apart from the view. **Commit Turn** (`POST /api/commit`) runs `engine/engine.py step` as its own process. Commits are accepted only while the turn's phase is `orders`; one sent while it is `resolving`, however the step was started, gets 409. `/api/status` gives the current turn and phase. The player first chooses the nation they control (remembered by the browser, or `?nation=AUS` in the URL); Commit Turn stays disabled until they do. The player is that nation's root leader, which the page names. The page lists the nation's leaders, root first (`/api/nation/<id>/leaders`); **Move** lists where a leader's segment can go (`/api/leader/<id>/moves`: the 8 neighbouring tiles, all-water ones disabled; for a segment already moving, the tiles around both ends of its step, each with the way there and its length), and choosing one saves a move command (`POST /api/nation/<id>/orders`, checked by `orders.check()`, refused unless the turn is in `orders`). The nation's orders for the turn are listed above Commit Turn, one per leader (a new command replaces the leader's old one), each with Cancel. It then lists what each of the nation's segments produced and consumed in the year that ended with the current turn, and how much of its need was met (`/api/nation/<id>/production`: the 100 most productive segments, with totals), and how many died of each cause (`/api/nation/<id>/deaths`). It reads the state and never writes it; the only files it writes are the orders. |
+| `cohort_state.py` | Reads and writes the cohort state (`../state/`): the format id, atomic turn writing, memory-mapped reading, checksums, pruning, and the state's lock (`state_lock()`: an OS lock on `state/.lock`, held by the engine for a whole step and by the servers while they write orders or names). Shared by `engine/engine.py` and the server. |
 | `../state/` | The cohort state written by `engine/engine.py`, in its own top-level folder next to `server/` and `engine/`: `current.json` plus one `turn_NNNNN/` directory per recent turn (see `cohort_state_schema.md`). Generated; not committed. |
 | `gen_start_capitals.py` | Writes the game's starting scenario: `world_population_start.json` (200 people in each of 38 start tiles, 0 elsewhere; the start tiles are placeholder locations at present-day capitals; country and area copied from `world_population_current.json`), `../reference/world_population_capitals.yaml` (the same as YAML) and `world_population_start_capitals.nations.json`, the nation seed (one nation per start tile, with that tile as its capital) that `engine.py init` picks up automatically. |
 | `demo_delhi.py` | Prototype demo (not in the repo): rewrites the full-world population file every second with a random population for the Delhi tile, to show live updating. Restores the original value on Ctrl+C. |
@@ -257,10 +261,12 @@ server.py ◄── memory-maps the arrays of the turn current.json names ◄─
 - **Phases.** Each turn is first open for **orders** (players enter commands, then commit), then
   **resolving** (commands closed; the engine computes the next turn). The engine records this in
   `state/phase.json`, beside the turns rather than inside them, because a turn never changes once
-  written. The control page refuses commits and commands while a turn is resolving, and the viewer's
-  turn chip shows the phase.
+  written. The control and player pages refuse commits and commands while a turn is resolving, and the
+  viewer's turn chip shows the phase. The engine also holds the state's lock (`state/.lock`) for the
+  whole step, and the servers take it to write orders, so an order can never land mid-step, and two
+  steps (from two servers, say) can't run at once: the second exits with status 3 and its commit gets 409.
 - **Orders and movement.** Players' commands for a turn are saved beside the turns in
-  `state/orders/turn_NNNNN/`, one file per nation (`server/orders.py`), by the control server; the
+  `state/orders/turn_NNNNN/`, one file per nation (`server/orders.py`), by the control or player server; the
   engine reads them when it resolves that turn, checks each again and applies the valid ones, and
   records what it applied and rejected (with reasons) in the new turn's manifest (`orders`). A move
   sends a segment toward a neighbouring tile that isn't all water. A segment already partway from A to
@@ -303,8 +309,8 @@ server.py ◄── memory-maps the arrays of the turn current.json names ◄─
   each under its own chieftain, with the one on the nation's capital as its root leader and the rest
   reporting to them. Each turn the engine recomputes ownership (first come,
   first served, claimed only by segments that aren't moving: the first nation with such a segment on a
-  tile owns it until it has none there) and active visibility (tiles where the nation's segments have
-  people, plus the 8 around each). A
+  tile owns it until it has none there) and active visibility (every tile within `radius_tiles`, 2, of
+  one where the nation's segments have people: `engine/visibility.json`). A
   full world (224 nations) adds 14 MB per turn.
 - **Determinism.** Each manifest carries a SHA-256 checksum of the arrays; `engine/engine.py verify` rechecks
   it. The yearly step uses only elementwise arithmetic, so it doesn't depend on how NumPy orders sums.
@@ -314,6 +320,44 @@ server.py ◄── memory-maps the arrays of the turn current.json names ◄─
   country and area, and its people are shown only when there is no game state (or after it is deleted).
   Initialise the state from the same population file the server is given (`engine/engine.py init
   --population ...`) so that countries and areas match the people.
+
+### 4.7 The player page (`player/`)
+
+The player starts out knowing almost nothing about the world or even their own people, so the page is
+deliberately spartan, and `player.py` sends only what the nation knows.
+
+- **Choosing a nation.** The page opens black, with one menu in the middle: the nations a player can
+  choose (`/api/nations`: alive, with a leader), and a box to rename the chosen one
+  (`POST /api/nation/<id>/name`, saved in `state/names.json` by `names.py`; every server shows it).
+  The browser remembers the last choice.
+- **What the nation knows** (`/api/nation/<id>/view`): every tile it has explored, with whether it can
+  see it now and its landforms largest first (names only, no shares), and the segments on the tiles it
+  can see. Its own segments come with their people, how they seem (`situation()`, worded by the rules in
+  `descriptions.json`: hunger from the share of food need met, then unusual deaths by cause, else "They
+  look fine."), their order and which of the 8 directions they can move. Other nations' segments come
+  with only a rough size ("a large band"), in `known`, where intelligence will add more as technology
+  advances. The data names tiles by id, since the page draws the map, but the page never shows ids or
+  coordinates, and error messages that would name a tile are replaced.
+- **The map.** The same globe and detail tiles as the developer view, but the camera hangs low over the
+  surface looking straight down with north up, and draws with no shading, sky or atmosphere, so it
+  looks like a flat map. Zoom is limited to 3–8 tiles top to bottom, and the middle of the screen can't
+  move more than a tile past the explored tiles. Unexplored tiles are black (a fog layer, one pixel per
+  tile), explored tiles not seen now are dimmed, and the grid is drawn only on explored tiles. Each
+  segment is a small token (own ochre, others rust red), with a line for an ordered move. Only the globe
+  image and the grid are shown: no rivers, heatmap, terrain or cover overlays.
+- **The side bar** shows the chosen tile (clicking a tile chooses it; it starts on the nation's root
+  leader): its landforms as a comma-separated list, then a button per leader there ("Iceland Chieftain,
+  206 people"). A leader's menu offers **Orders** (for now only **Move**: a 3 × 3 compass of directions,
+  all-water ones disabled, plus Cancel) and **Info** (people and situation); another nation's leader
+  offers only Info. `POST /api/nation/<id>/orders` takes a direction and turns it into a move command for
+  that neighbour (`orders.py`, through `game.py`). **Commit Turn** (`POST /api/commit` with the turn)
+  resolves the turn for the whole world; afterwards the page follows the leader last chosen. The page
+  polls `/api/status` every 2 s, so a turn committed elsewhere shows up too.
+- **Eras.** The panels and menus are stone (a texture generated in the page, with bevelled edges like
+  Civilization's), in a plain sans-serif font. Everything that changes with the era is a CSS variable
+  set by `applyEra()`, so a later era adds its own texture and colours.
+
+---
 
 ## 5. The page (`static/index.html`)
 
@@ -520,6 +564,12 @@ python ../engine/engine.py verify    # recheck the current turn's checksum
 
 The running server and any open page pick up each new turn within about two seconds. To start over,
 delete the top-level `state/` folder and run `init` again.
+
+**Play from the player page**
+
+```
+python ../player/player.py           # then open http://localhost:8000/
+```
 
 **Commit turns from the control page**
 

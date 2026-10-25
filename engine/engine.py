@@ -1,7 +1,7 @@
 """Turn engine: creates and advances the game state that server.py displays.
 
     python engine/engine.py init [--population server/world_population_start.json] [--nations SEED] [--state state]
-    python engine/engine.py step [--turns 1] [--state state]
+    python engine/engine.py step [--turns 1] [--expect-turn T] [--state state]
     python engine/engine.py verify [--state state]
 
 (paths shown from the repository root; the script works from any directory). By default it uses the
@@ -53,13 +53,19 @@ starting visibility.
 - Ownership, recomputed every turn (update_ownership()): first come, first served, claimed only by
   segments that aren't moving. A nation owns a tile from the turn it is the first to have such a
   segment with people there, and loses it when it has none there any more.
-- Visibility, recomputed every turn (active_visibility()): a nation actively sees every tile where one
-  of its segments has people, plus the 8 tiles around each. Tiles it has ever seen stay explored
-  (passive visibility).
+- Visibility, recomputed every turn (active_visibility()): a nation actively sees every tile within
+  visibility.json's radius_tiles (2: the 5 x 5 block) of a tile where one of its segments has people.
+  Tiles it has ever seen stay explored (passive visibility).
 
 Each step reads the current turn, computes the next one in memory and writes it as a new turn directory
 (cohort_state.py), so the web server can keep reading the old turn until the new one is complete. The
 engine is the only writer; it can run while the server is running.
+
+The engine holds the state's lock (cohort_state.state_lock()) for a whole step or init, so two steps
+can't run at once and the servers don't write orders in the middle of one. If another step holds it,
+`step` exits with status 3 at once; it does the same if --expect-turn names a turn that isn't the
+current one (so a player who clicked Commit Turn on a turn that has since resolved doesn't advance the
+next one too).
 
 The engine also records each turn's phase (cohort_state.write_phase()): a turn is in "orders" while it
 accepts the players' commands, and in "resolving" while the engine computes the next turn from it.
@@ -90,6 +96,7 @@ RULES = os.path.join(HERE, "economy.json")
 DEMOGRAPHY = os.path.join(HERE, "demography.json")
 LEADERS = os.path.join(HERE, "leaders.json")
 MOVEMENT = os.path.join(HERE, "movement.json")
+VISIBILITY = os.path.join(HERE, "visibility.json")
 MAP = os.path.join(SERVER, "world_map.json")
 
 # Placeholder activities. Replace with the real list; the state files carry the names, so readers adapt.
@@ -297,17 +304,28 @@ def update_ownership(prev_owner, tiles, nation, people, stationary):
     return np.where(keep, prev_owner, present).astype(np.uint16)
 
 
-def active_visibility(tiles, nation, people, n_rows):
-    """Packed bits [n_rows, BITS_BYTES]: each nation sees the tiles where its segments have people and
-    the 8 tiles around each (east-west wraps; nothing past the poles)."""
+def load_visibility(path=VISIBILITY):
+    """visibility.json: {"radius_tiles": ...}."""
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def visibility_extra(rules):
+    return {"visibility_rules_source": os.path.relpath(VISIBILITY, REPO).replace(os.sep, "/"), "visibility_rules": rules}
+
+
+def active_visibility(tiles, nation, people, n_rows, radius):
+    """Packed bits [n_rows, BITS_BYTES]: each nation sees every tile within `radius` tiles (rows and
+    columns, so a square) of a tile where one of its segments has people (east-west wraps; nothing past
+    the poles)."""
     flags = np.zeros((n_rows, grid.HEIGHT, grid.WIDTH), dtype=bool)
     live = (nation > 0) & (people > 0).any(axis=1)
     r, c = np.divmod(tiles[live].astype(np.int64), grid.WIDTH)
     k = nation[live].astype(np.int64)
-    for dr in (-1, 0, 1):
+    for dr in range(-radius, radius + 1):
         rr = r + dr
         ok = (rr >= 0) & (rr < grid.HEIGHT)
-        for dc in (-1, 0, 1):
+        for dc in range(-radius, radius + 1):
             flags[k[ok], rr[ok], (c[ok] + dc) % grid.WIDTH] = True
     return cs.pack_tiles(flags.reshape(n_rows, grid.COUNT))
 
@@ -578,6 +596,11 @@ def demography_extra(demo):
 
 
 def init(args):
+    with cs.state_lock(args.state):
+        init_locked(args)
+
+
+def init_locked(args):
     if cs.read_current(args.state):
         sys.exit(f"{args.state} already has a state; delete it first to start over")
     with open(args.population, encoding="utf-8") as f:
@@ -601,7 +624,8 @@ def init(args):
     leaders = make_leaders(tiles, nation, people, nations, lrules["start_type"])
     stationary = np.ones(len(tiles), dtype=bool)
     tile_owner = update_ownership(np.zeros(grid.COUNT, dtype=np.uint16), tiles, nation, people, stationary)
-    visible = active_visibility(tiles, nation, people, len(nations) + 1)
+    vrules = load_visibility()
+    visible = active_visibility(tiles, nation, people, len(nations) + 1, vrules["radius_tiles"])
     rules = load_rules()
     products = product_list(rules)
     zeros = np.zeros((len(tiles), len(products)))   # turn 0 follows no year: nothing made or held yet
@@ -616,7 +640,7 @@ def init(args):
                      leader_types(lrules), len(leaders) + 1)
     extra = {"initial_population_source": os.path.basename(args.population),
              "initial_nations_source": os.path.basename(seed_path), **economy_extra(rules),
-             **demography_extra(demo), **leaders_extra(lrules)}
+             **demography_extra(demo), **leaders_extra(lrules), **visibility_extra(vrules)}
     m = cs.write_turn(args.state, 0, state, extra=extra)
     cs.write_phase(args.state, 0, cs.ORDERS)
     print(f"turn 0: {m['segments']} segments on {m['populated_tiles']} tiles, {m['total_people']:,.1f} people, "
@@ -639,11 +663,32 @@ def age_one_year(people):
     return new_people
 
 
+BUSY = 3   # exit status when another step holds the state, or --expect-turn doesn't match
+
+
 def step(args):
-    for _ in range(args.turns):
+    try:
+        with cs.state_lock(args.state, blocking=False):
+            step_locked(args)
+    except cs.Busy:
+        print("another engine step is running", file=sys.stderr)
+        return BUSY
+    except TurnMismatch as e:
+        print(e, file=sys.stderr)
+        return BUSY
+
+
+class TurnMismatch(Exception):
+    pass
+
+
+def step_locked(args):
+    for i in range(args.turns):
         ptr = cs.read_current(args.state)
         if ptr is None:
             sys.exit(f"no state in {args.state}; run: python engine/engine.py init")
+        if i == 0 and args.expect_turn is not None and ptr["turn"] != args.expect_turn:
+            raise TurnMismatch(f"asked to resolve turn {args.expect_turn}, but the current turn is {ptr['turn']}")
         cs.write_phase(args.state, ptr["turn"], cs.RESOLVING)   # close this turn's commands before reading it
         try:
             cur = cs.Turn(args.state, ptr["dir"], mmap=False)
@@ -686,14 +731,15 @@ def step(args):
             people, hours = age_one_year(survivors), cur.hours
             people[:, 0] = born_alive
             tile_owner = update_ownership(cur.owner, tiles, cur.nation, people, at == toward)
-            visible = active_visibility(tiles, cur.nation, people, len(cur.nations) + 1)
+            vrules = load_visibility()
+            visible = active_visibility(tiles, cur.nation, people, len(cur.nations) + 1, vrules["radius_tiles"])
             state = cs.State(cur.leaders, at, toward, progress, destination, people, hours, cur.activities,
                              tile_owner, cur.nations, visible, cur.explored | visible, products, economy, CAUSES,
                              deaths, cur.leader_types, cur.next_leader_id)
             extra = {k: v for k, v in cur.manifest.items() if k.startswith("initial_")}
             m = cs.write_turn(args.state, cur.turn + 1, state,
                               extra={**extra, **economy_extra(rules), **demography_extra(demo),
-                                     **leaders_extra(lrules), **movement_extra(mrules),
+                                     **leaders_extra(lrules), **movement_extra(mrules), **visibility_extra(vrules),
                                      "orders": {"turn": cur.turn, "applied": applied, "rejected": rejected}})
         except BaseException:
             cs.write_phase(args.state, ptr["turn"], cs.ORDERS)   # no new turn was written; reopen this one
@@ -740,6 +786,7 @@ def main():
                                      "the population file; one is required)")
     p = sub.add_parser("step", help="advance the current turn")
     p.add_argument("--turns", type=int, default=1)
+    p.add_argument("--expect-turn", type=int, help="only step if this is the current turn (exit status 3 if not)")
     sub.add_parser("verify", help="check the current turn's checksum")
     args = ap.parse_args()
     return {"init": init, "step": step, "verify": verify}[args.cmd](args) or 0

@@ -1,0 +1,4 @@
+{
+  "about": "Visibility rules read by engine.py on every step (and by init); a copy goes into each turn's manifest. A nation actively sees every tile within radius_tiles of a tile where one of its segments has people (a square: radius 2 is the 5 x 5 block around it). Tiles it has ever seen stay explored. Eventually how far a segment sees will depend on the land, its people and their technology.",
+  "radius_tiles": 2
+}

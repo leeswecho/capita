@@ -10,7 +10,7 @@ The game state holds, for every segment, its leader, its position, the people of
 age, and how many hours a day they spend on each activity, what it produced in the past year and what
 it holds of each product. It also holds a record for each nation, which nation owns each tile, and what
 each nation can see. The turn engine (`engine/engine.py`) writes it, and the web server
-(`server/server.py`) and control server (`control/control.py`) read it. This document is the contract
+(`server/server.py`), control server (`control/control.py`) and player server (`player/player.py`) read it. This document is the contract
 between them, written so that an engine in any language can produce it. `server/cohort_state.py` is the
 Python implementation.
 
@@ -31,6 +31,8 @@ state/
   current.json          pointer to the current turn
   phase.json            the current turn's phase: accepting commands, or resolving
   orders/               the players' commands, by turn (not part of the turns; see "Orders" below)
+  names.json            the names players have given their nations (see "Names" below)
+  .lock                 empty; locked by whoever is changing the state (see "The lock" below)
   turn_00007/           one directory per turn; never changed once current.json has named it
     manifest.json
     nations.json
@@ -268,6 +270,8 @@ Every record has exactly these keys.
   "leader_rules": { "types": { ... }, "start_type": "chieftain" },
   "movement_rules_source": "engine/movement.json",
   "movement_rules": { "km_per_hour": 2.5, "not_travel_activities": ["sleep", "subsistence"] },
+  "visibility_rules_source": "engine/visibility.json",
+  "visibility_rules": { "radius_tiles": 2 },
   "orders": { "turn": 6, "applied": [ { "nation": 1, "leader": 37, "type": "move", "to": "S355E1495" } ],
               "rejected": [ { "nation": 23, "leader": 31, "type": "move", "to": "N100E0100",
                               "reason": "N100E0100 isn't next to N355E1395" } ] }
@@ -278,7 +282,8 @@ Every record has exactly these keys.
 - `economy_rules` is a copy of the rules the engine used to compute this turn's production and decay
   (`engine/economy.json` at the time), so a replay can tell whether they changed. `demography_rules`
   is the same for births and deaths (`engine/demography.json`), `leader_rules` for leaders
-  (`engine/leaders.json`) and `movement_rules` for movement (`engine/movement.json`).
+  (`engine/leaders.json`), `movement_rules` for movement (`engine/movement.json`) and
+  `visibility_rules` for visibility (`engine/visibility.json`).
 - `orders` (every turn after 0) lists the commands of the previous turn that the engine applied to
   compute this one, and those it rejected with the reason.
 - `leader_types` lists the types a leader can have; `next_leader_id` is the id the next new leader
@@ -297,7 +302,7 @@ Every record has exactly these keys.
 ## Orders
 
 Players' commands are kept beside the turns, not in them, because a turn never changes once written.
-The control server writes them while a turn is in `orders`, one file per nation:
+The control and player servers write them while a turn is in `orders`, one file per nation:
 
 ```
 state/orders/turn_00007/nation_037.json
@@ -313,6 +318,27 @@ whichever makes the whole way to `to` shorter (finishing the step on a tie), the
 A writer checks every command against the turn it is for (`server/orders.py` `check()`),
 and so does the engine when it reads them, skipping any that fail. Old turns' orders may be deleted
 along with the turns.
+
+## Names
+
+The names players give their nations are kept beside the turns, since a name changes nothing in the
+simulation and the engine never reads it:
+
+```
+state/names.json
+{ "format": "capita/names-1", "nations": { "1": "The River People" } }
+```
+
+Keys are nation ids. A nation without an entry goes by its country's name (from its `code`). The
+player server writes the file (atomically, under the lock); every server shows the names.
+
+## The lock
+
+Whoever changes the state holds an exclusive OS lock on `state/.lock` while doing it (`flock` on
+Linux, `msvcrt.locking` on Windows; `cohort_state.state_lock()`): the engine for a whole `init` or
+`step`, and the servers while they write orders or names. So no order lands in the middle of a step,
+and two steps can't run at once; the OS releases the lock if its holder dies. `engine.py step` doesn't
+wait for it: if it is held, the step exits with status 3. Readers don't take it.
 
 ## Writing a turn
 
@@ -436,7 +462,8 @@ with the most people in such segments there (the lowest id on a tie), or to nobo
 nation never claim. At turn 0 every populated tile belongs to the nation living on it. The rule is expected to change (treaties, contested areas...); readers only use
 `owner.npy`.
 
-**Visibility, recomputed every turn** (`active_visibility()`): a nation actively sees every tile one
-of its segments with people counts as being in, plus the 8 tiles around each one (east–west wraps around; nothing past the poles). Then
+**Visibility, recomputed every turn** (`active_visibility()`): a nation actively sees every tile within
+`radius_tiles` rows and columns (`engine/visibility.json`; 2, so the 5 × 5 block) of a tile one of its
+segments with people counts as being in (east–west wraps around; nothing past the poles). Then
 `explored = explored OR visible`. The rule is expected to change as the game develops; readers only
 use the stored bits.

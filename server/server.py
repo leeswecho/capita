@@ -40,7 +40,8 @@ just as often; a new turn is memory-mapped, and its segments' people are summed 
     /api/tile/<id>/cohorts the tile's people and activity hours by single year of age, from the
                            engine's current turn, summed over the segments there (hours averaged,
                            weighted by people) (JSON); read on request from memory-mapped files
-    /api/nations           the current turn's nations: id, code, name, capital tile, people, and
+    /api/nations           the current turn's nations: id, code, name (the one its player gave it, if
+                           any), capital tile, people, and
                            owned, visible and explored tile counts (JSON)
     /api/nation/<id>/visibility  one nation's visibility at the current turn: 32,400 bytes of
                            active-visibility bits, then 32,400 bytes of explored bits (tile i is bit
@@ -63,6 +64,7 @@ import cohort_state
 import numpy as np
 
 import grid
+import names
 from convert_map import read_map
 from convert_population import FORMAT as POP_FORMAT
 from grid import HEIGHT, TILE_ID_RE, WIDTH, tile_at
@@ -323,22 +325,26 @@ class World:
                 last_error = str(e)
 
     def nation_ref(self, st, nid: int):
-        """Short description of nation `nid` at turn `st`, or None for 0 (no nation)."""
+        """Short description of nation `nid` at turn `st`, or None for 0 (no nation). Its name is the one
+        its player gave it (names.py), or its country's."""
         if not nid:
             return None
         n = st.nations[nid - 1]
         cap = n["capital"]
-        return {"id": nid, "code": n["code"], "name": self.country_names.get(n["code"]) or n["code"],
+        given = names.read(self.state_dir).get(nid)
+        return {"id": nid, "code": n["code"], "name": given or self.country_names.get(n["code"]) or n["code"],
                 "capital": grid.tile_id(*grid.corner(*divmod(cap, WIDTH))) if cap is not None else None,
                 "alive": n["alive"]}
 
     def nations_json(self):
-        """The current turn's nations, built once per turn (counting visibility bits reads both arrays)."""
+        """The current turn's nations, built once per turn and set of given names (counting visibility bits
+        reads both arrays)."""
         st = self.turn
         if st is None:
             return json.dumps({"turn": None, "nations": []}).encode()
+        given = names.read(self.state_dir)   # the same dict until the names change
         cached = getattr(st, "nations_cache", None)
-        if cached is None:
+        if cached is None or cached[0] is not given:
             vis = POPCOUNT[np.asarray(st.visible)].sum(axis=1, dtype=np.int64)
             exp = POPCOUNT[np.asarray(st.explored)].sum(axis=1, dtype=np.int64)
             people = np.bincount(st.nation, weights=np.asarray(st.people).sum(axis=1), minlength=len(st.nations) + 1)
@@ -352,8 +358,8 @@ class World:
                             "leader": {"id": lead["id"], "name": lead["name"], "type": lead["type"]} if lead else None,
                             "people": round(float(people[i]), 2), "owned_tiles": int(owned[i]),
                             "visible_tiles": int(vis[i]), "explored_tiles": int(exp[i])})
-            cached = st.nations_cache = json.dumps({"turn": st.turn, "nations": out}, separators=(",", ":")).encode()
-        return cached
+            cached = st.nations_cache = (given, json.dumps({"turn": st.turn, "nations": out}, separators=(",", ":")).encode())
+        return cached[1]
 
     def visibility_bytes(self, nid: int):
         """(turn, 64,800 bytes) for nation `nid`, or None if there is no such nation."""

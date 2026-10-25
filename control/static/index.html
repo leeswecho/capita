@@ -148,7 +148,9 @@
     show("");
     render({ ...lastStatus, phase: "resolving" });   // commands close as soon as the player commits
     try {
-      const r = await fetch("/api/commit", { method: "POST" });
+      // Naming the turn keeps a commit made elsewhere in the meantime from advancing the next one too.
+      const r = await fetch("/api/commit", { method: "POST", headers: { "Content-Type": "application/json" },
+                                             body: JSON.stringify({ turn: lastStatus.turn }) });
       const body = await r.json();
       if (r.ok) show(`Committed. Now turn ${body.turn}.`);
       else show(body.output ? `${body.error}\n${body.output}` : body.error, true);

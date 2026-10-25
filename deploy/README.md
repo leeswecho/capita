@@ -1,17 +1,19 @@
 # Deploying capita
 
 How the public server at `capita.leeswecho.net` (an AWS EC2 machine running Ubuntu 26.04) is set
-up. The developer view and control servers run as systemd services. Caddy sits in front of them, serving
+up. The player, developer view and control servers run as systemd services. Caddy sits in front of them, serving
 HTTPS with a Let's Encrypt certificate it obtains and renews by itself.
 
 | Address | Goes to |
 |---------|---------|
+| `https://capita.leeswecho.net/` | player page (`player/player.py`), `127.0.0.1:8000` |
 | `https://capita.leeswecho.net:9443/` | developer view (`server/server.py`), `127.0.0.1:9000` |
 | `https://capita.leeswecho.net:8443/` | control server, `127.0.0.1:8001` |
-| `http://capita.leeswecho.net:9000/`, `:8001/` | the Python servers directly, without HTTPS |
+| `http://capita.leeswecho.net/` | redirects to HTTPS |
+| `http://capita.leeswecho.net:8000/`, `:9000/`, `:8001/` | the Python servers directly, without HTTPS |
 
-Ports 80 and 443 are kept free for the player interface. The developer view sees the whole game
-state and its mechanics.
+The player page shows only what the chosen nation knows. The developer view sees the whole game state
+and its mechanics, and the control page is the developer's controls.
 
 The servers have no authentication. Anyone who can reach the control page can commit turns.
 
@@ -19,15 +21,15 @@ The servers have no authentication. Anyone who can reach the control page can co
 
 | File | Installed at |
 |------|--------------|
+| `capita-player.service` | `/etc/systemd/system/capita-player.service` |
 | `capita-view.service` | `/etc/systemd/system/capita-view.service` |
 | `capita-control.service` | `/etc/systemd/system/capita-control.service` |
 | `Caddyfile` | `/etc/caddy/Caddyfile` |
 
 ## Setting up a new machine
 
-1. Point the hostname's DNS A record at the machine, and allow inbound TCP 80, 443, 8443, 9443, 9000
-   and 8001 in the security group (80 for Caddy's certificate challenge, 9000 and 8001 only for direct
-   HTTP access).
+1. Point the hostname's DNS A record at the machine, and allow inbound TCP 80, 443, 8443, 9443, 8000,
+   9000 and 8001 in the security group (8000, 9000 and 8001 only for direct HTTP access).
 2. Install the dependencies and clone the repository as `ubuntu`:
 
    ```sh
@@ -46,10 +48,10 @@ The servers have no authentication. Anyone who can reach the control page can co
 
    ```sh
    cd ~/capita/deploy
-   sudo cp capita-view.service capita-control.service /etc/systemd/system/
+   sudo cp capita-player.service capita-view.service capita-control.service /etc/systemd/system/
    sudo cp Caddyfile /etc/caddy/Caddyfile
    sudo systemctl daemon-reload
-   sudo systemctl enable --now capita-view capita-control
+   sudo systemctl enable --now capita-player capita-view capita-control
    sudo systemctl enable caddy && sudo systemctl restart caddy
    ```
 
@@ -58,15 +60,15 @@ The servers have no authentication. Anyone who can reach the control page can co
 
 ## Day to day
 
-- **Update after a push:** `cd ~/capita && git pull && sudo systemctl restart capita-view capita-control`
-- **Logs:** `journalctl -u capita-view -f`, `journalctl -u capita-control -f`, `journalctl -u caddy -f`
+- **Update after a push:** `cd ~/capita && git pull && sudo systemctl restart capita-player capita-view capita-control`
+- **Logs:** `journalctl -u capita-player -f`, `journalctl -u capita-view -f`, `journalctl -u capita-control -f`, `journalctl -u caddy -f`
 - **Start the game over:**
 
   ```sh
-  sudo systemctl stop capita-view capita-control
+  sudo systemctl stop capita-player capita-view capita-control
   rm -rf ~/capita/state
   (cd ~/capita/server && python3 ../engine/engine.py init)
-  sudo systemctl start capita-view capita-control
+  sudo systemctl start capita-player capita-view capita-control
   ```
 
 - **After changing the Caddyfile:** copy it to `/etc/caddy/Caddyfile`, then

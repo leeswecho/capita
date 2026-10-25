@@ -1,6 +1,7 @@
-# capita: HTTPS in front of the view (8000) and control (8001) servers.
-capita.leeswecho.net {
-	reverse_proxy 127.0.0.1:8000
+# capita: HTTPS in front of the developer view (9000) and control (8001) servers. Ports 80 and 443
+# are left free for the player interface.
+capita.leeswecho.net:9443 {
+	reverse_proxy 127.0.0.1:9000
 }
 
 capita.leeswecho.net:8443 {

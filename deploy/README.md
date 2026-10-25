@@ -1,15 +1,17 @@
 # Deploying capita
 
 How the public server at `capita.leeswecho.net` (an AWS EC2 machine running Ubuntu 26.04) is set
-up. The view and control servers run as systemd services. Caddy sits in front of them, serving
+up. The developer view and control servers run as systemd services. Caddy sits in front of them, serving
 HTTPS with a Let's Encrypt certificate it obtains and renews by itself.
 
 | Address | Goes to |
 |---------|---------|
-| `https://capita.leeswecho.net/` | view server, `127.0.0.1:8000` |
+| `https://capita.leeswecho.net:9443/` | developer view (`server/server.py`), `127.0.0.1:9000` |
 | `https://capita.leeswecho.net:8443/` | control server, `127.0.0.1:8001` |
-| `http://capita.leeswecho.net/` | redirects to HTTPS |
-| `http://capita.leeswecho.net:8000/`, `:8001/` | the Python servers directly, without HTTPS |
+| `http://capita.leeswecho.net:9000/`, `:8001/` | the Python servers directly, without HTTPS |
+
+Ports 80 and 443 are kept free for the player interface. The developer view sees the whole game
+state and its mechanics.
 
 The servers have no authentication. Anyone who can reach the control page can commit turns.
 
@@ -23,8 +25,9 @@ The servers have no authentication. Anyone who can reach the control page can co
 
 ## Setting up a new machine
 
-1. Point the hostname's DNS A record at the machine, and allow inbound TCP 80, 443, 8443, 8000 and
-   8001 in the security group (8000 and 8001 only for direct HTTP access).
+1. Point the hostname's DNS A record at the machine, and allow inbound TCP 80, 443, 8443, 9443, 9000
+   and 8001 in the security group (80 for Caddy's certificate challenge, 9000 and 8001 only for direct
+   HTTP access).
 2. Install the dependencies and clone the repository as `ubuntu`:
 
    ```sh

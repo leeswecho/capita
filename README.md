@@ -17,7 +17,7 @@ two neighbouring tiles.
 
 | Path | What it is |
 |------|------------|
-| `server/` | The globe viewer: `server.py` (Python HTTP server), `static/index.html` (Three.js page), the shared tile grid (`grid.py`), the cohort-state reader/writer (`cohort_state.py`), data converters and generators, and the JSON data and globe images the server loads. |
+| `server/` | The developer view, a globe that shows the whole game state and its mechanics: `server.py` (Python HTTP server), `static/index.html` (Three.js page), the shared tile grid (`grid.py`), the cohort-state reader/writer (`cohort_state.py`), data converters and generators, and the JSON data and globe images the server loads. |
 | `engine/` | `engine.py`, the turn engine. It runs as its own process and writes the game state to `state/`. |
 | `control/` | The player's control page, served separately from the viewer: `control.py` (Python HTTP server) and `static/index.html`. It lists the nation's leaders, each of whom can be ordered to move, and has a **Commit Turn** button, which advances the engine one turn. |
 | `deploy/` | How the public server at `capita.leeswecho.net` is set up: systemd services for both servers, and the Caddy config that serves them over HTTPS. |
@@ -35,7 +35,7 @@ two neighbouring tiles.
 
 ```sh
 cd server
-python server.py                      # then open http://localhost:8000/
+python server.py                      # then open http://localhost:9000/
 ```
 
 In a second terminal, from `server/`, start a game state and advance it:
@@ -60,7 +60,7 @@ the nation's leaders. **Move** next to a leader lists the tiles around their seg
 saves a move command in the turn's orders (`state/orders/`). The orders are listed above Commit Turn,
 one per leader: a new command for a leader replaces their old one, and each can be cancelled until you
 commit. **Commit Turn** means the player has entered all their commands for the turn. It runs `engine.py step` as its own
-process, and the viewer on port 8000 shows the new turn by itself. The control page and the viewer are
+process, and the viewer on port 9000 shows the new turn by itself. The control page and the viewer are
 kept separate on purpose for now. Below it, the page lists the food each of the nation's segments
 produced in the past year, how much of its people's need that met, and how many people died of each
 cause.
@@ -69,7 +69,7 @@ Each turn has two phases, which the engine records in `state/phase.json` and bot
 **orders** (the turn accepts commands) and then **resolving** (commands are closed while the engine
 applies them and a year's passage of time to compute the next turn, which opens for orders).
 
-Useful server options: `--port` (default `8000`), `--host` (default `127.0.0.1`, local only, no
+Useful server options: `--port` (default `9000`), `--host` (default `127.0.0.1`, local only, no
 authentication), and `--population <file>`. For example, `--population world_population_current.json`
 shows the full modern world instead of the starting scenario. Page URL options: `?texture=8192` caps
 the globe texture size, and `?detail=0` turns off the detail-tile pyramid.

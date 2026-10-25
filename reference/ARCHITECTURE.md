@@ -113,7 +113,7 @@ automatically.
 `main()` does this, in order:
 
 1. **Parse arguments**: `--host` (default `127.0.0.1`, so only your machine can connect), `--port`
-   (`8000`), `--map`, `--population`, `--countries`.
+   (`9000`), `--map`, `--population`, `--countries`.
 2. **Build a `World`** (§4.2), which loads all data. This takes about 0.6 s.
 3. **Start the reload thread** (§4.4) as a daemon thread, so it dies with the process.
 4. **Start a `ThreadingHTTPServer`**, which handles each request on its own thread, so a slow request
@@ -506,7 +506,7 @@ you're close to the surface. Double-click and the "Go to" box (`N275E0865` or `2
 **Run the viewer**
 
 ```
-python server.py            # then open http://localhost:8000/
+python server.py            # then open http://localhost:9000/
 ```
 
 **Run the turn engine (cohorts)**

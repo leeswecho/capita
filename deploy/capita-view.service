@@ -1,11 +1,11 @@
 [Unit]
-Description=capita view server (port 8000)
+Description=capita view server (port 9000), the developer view
 After=network.target
 
 [Service]
 User=ubuntu
 WorkingDirectory=/home/ubuntu/capita/server
-ExecStart=/usr/bin/python3 server.py --host 0.0.0.0 --port 8000
+ExecStart=/usr/bin/python3 server.py --host 0.0.0.0 --port 9000
 Restart=on-failure
 
 [Install]

@@ -3,9 +3,9 @@
     python convert_map.py          # once, and again whenever world_map.yaml changes
     python convert_population.py   # prototype data only: world_population.yaml -> world_population_current.json
     python ../engine/engine.py init   # optional: cohort state for /api/tile/<id>/cohorts
-    python server.py [--port 8000] [--host 127.0.0.1] [--population world_population_start.json] [--state ../state]
+    python server.py [--port 9000] [--host 127.0.0.1] [--population world_population_start.json] [--state ../state]
 
-Then open http://localhost:8000/ in a browser.
+Then open http://localhost:9000/ in a browser.
 
 Endpoints:
     /                      the globe viewer (static/index.html)
@@ -556,7 +556,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument("--port", type=int, default=9000)
     ap.add_argument("--map", default=os.path.join(ROOT, "world_map.json"))
     ap.add_argument("--population", default=os.path.join(ROOT, "world_population_start.json"),
                     help="population file (default: world_population_start.json, the game's starting scenario; "

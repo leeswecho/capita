@@ -57,7 +57,8 @@ python control/control.py             # then open http://localhost:8001/
 
 First choose the nation you're playing (or open `http://localhost:8001/?nation=AUS`). The page lists
 the nation's leaders. **Move** next to a leader lists the tiles around their segment, and choosing one
-saves a move command in the turn's orders (`state/orders/`). You can change or cancel it until you
+saves a move command in the turn's orders (`state/orders/`). The orders are listed above Commit Turn,
+one per leader: a new command for a leader replaces their old one, and each can be cancelled until you
 commit. **Commit Turn** means the player has entered all their commands for the turn. It runs `engine.py step` as its own
 process, and the viewer on port 8000 shows the new turn by itself. The control page and the viewer are
 kept separate on purpose for now. Below it, the page lists the food each of the nation's segments

@@ -26,6 +26,12 @@
   #turn { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
   #phase { color: var(--muted); margin: 2px 0 18px; }
   #phase.resolving { color: var(--accent); }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 6px; font-weight: 600; }
+  #orders { margin-bottom: 14px; }
+  #orders ol { margin: 0; padding-left: 22px; }
+  #orders li { padding: 3px 0; }
+  #orders li .tile { color: var(--muted); margin-left: 6px; font-size: 12px; }
+  #orders li button { margin-left: 8px; }
   #commit { width: 100%; padding: 12px; border: 0; border-radius: 8px; background: var(--accent); color: #000; font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; }
   #commit:disabled { opacity: 0.45; cursor: default; }
   #message { margin-top: 12px; min-height: 1.45em; color: var(--muted); font-size: 13px; white-space: pre-wrap; }
@@ -71,6 +77,8 @@
     <h1>Control</h1>
     <div id="turn">Turn …</div>
     <div id="phase"></div>
+    <h2>Orders this turn</h2>
+    <div id="orders" class="none">Choose a nation to give orders.</div>
     <button id="commit" disabled>Commit Turn</button>
     <div id="message"></div>
   </div>
@@ -199,6 +207,7 @@
   async function loadLeaders() {
     if (nationId === null) {
       leaderList = null;
+      renderOrders();
       leadersNote.textContent = "";
       leadersEl.innerHTML = '<div class="none">Choose a nation to see its leaders.</div>';
       return;
@@ -222,8 +231,29 @@
     return esc(c.type);
   }
 
+  // The nation's orders for this turn as a list, one per leader (a new command for a leader replaces
+  // their old one), to review before committing.
+  const ordersEl = document.getElementById("orders");
+  function renderOrders() {
+    if (!leaderList) {
+      ordersEl.className = "none";
+      ordersEl.textContent = nationId === null ? "Choose a nation to give orders." : "";
+      return;
+    }
+    const given = leaderList.leaders.filter(l => l.command), open = canOrder();
+    ordersEl.className = given.length ? "" : "none";
+    if (!given.length) {
+      ordersEl.textContent = "None yet. Use Move next to a leader below.";
+      return;
+    }
+    ordersEl.innerHTML = `<ol>${given.map(l => `
+      <li><b>${esc(l.name)}</b>: ${commandText(l.command).replace(/^Move/, "move")}<span class="tile">from ${esc(l.tile)}</span>
+        <button class="small" data-cancel="${l.id}" ${open ? "" : "disabled"}>Cancel</button></li>`).join("")}</ol>`;
+  }
+
   function renderLeaders() {
     leadersPhase = lastStatus.phase;
+    renderOrders();
     if (!leaderList) return;
     const L = leaderList.leaders, open = canOrder();
     leadersNote.textContent = `(${L.length} leader${L.length === 1 ? "" : "s"}, turn ${leaderList.turn})`;
@@ -269,6 +299,8 @@
   }
 
   async function giveOrder(leader, command) {
+    const l = leaderList.leaders.find(l => l.id === leader);
+    const old = l.command && l.command.type === "move" ? l.command.to : null;
     try {
       const r = await fetch(`/api/nation/${nationId}/orders`, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -276,8 +308,9 @@
       });
       const body = await r.json();
       if (!r.ok) { show(body.error, true); return; }
-      show(command ? `Saved: ${leaderList.leaders.find(l => l.id === leader).name} will move to ${command.to} when the turn is committed.`
-                   : "Command cancelled.");
+      show(command ? `Saved: ${l.name} will move to ${command.to} when the turn is committed${
+                       old && old !== command.to ? ` (replacing the order to move to ${old})` : ""}.`
+                   : `Cancelled ${l.name}'s order.`);
     } catch {
       show("Couldn't reach the control server.", true);
       return;
@@ -285,6 +318,11 @@
     openMoves = null;
     await loadLeaders();
   }
+
+  ordersEl.addEventListener("click", e => {
+    const b = e.target.closest("button");
+    if (b && !b.disabled && b.dataset.cancel) giveOrder(Number(b.dataset.cancel), null);
+  });
 
   leadersEl.addEventListener("click", async e => {
     const b = e.target.closest("button");

@@ -50,10 +50,23 @@
   .seg { width: 100%; }
   .seg .people { display: block; font-size: 13px; }
   .seg .order { display: block; font-size: 13px; font-style: italic; }
-  #foot { display: flex; flex-direction: column; gap: 6px; }
+  /* Two small boxes over the map: the nation's orders this turn (top left, only when there are any)
+     and the turn with Commit Turn (bottom left). The side bar is only about the chosen tile. */
+  #ordersBox { position: absolute; top: 10px; left: 10px; z-index: 2; width: 210px; max-height: 30%; overflow-y: auto;
+               padding: 6px 8px; font-size: 13px; scrollbar-color: var(--lo) transparent; }
+  #ordersBox .head { font-weight: bold; margin-bottom: 3px; }
+  #ordersBox .row { display: flex; align-items: center; gap: 4px; }
+  #ordersBox .row + .row { margin-top: 3px; }
+  #ordersBox .who { flex: 1; min-width: 0; background: none; border: 0; padding: 1px 0; font: inherit; color: var(--ink);
+                    text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #ordersBox .who:hover { text-decoration: underline; }
+  #ordersBox .x { padding: 0 5px; font-size: 12px; line-height: 1.3; text-align: center; }
+  #turnBox { position: absolute; left: 10px; bottom: 10px; z-index: 2; width: 180px; padding: 8px;
+             display: flex; flex-direction: column; gap: 6px; }
   #turnLine { font-size: 13px; }
-  #commit { text-align: center; padding: 8px; font-weight: bold; }
-  #msg { font-size: 13px; min-height: 1.4em; }
+  #commit { text-align: center; padding: 7px; font-weight: bold; }
+  #msg { font-size: 13px; }
+  #msg:empty { display: none; }
   #view { position: relative; flex: 1; min-width: 0; background: #000; }
   #view canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
   #view canvas.dragging { cursor: grabbing; }
@@ -88,16 +101,18 @@
 </div>
 
 <div id="game" hidden>
-  <div id="view"></div>
+  <div id="view">
+    <div id="ordersBox" class="stone" hidden></div>
+    <div id="turnBox" class="stone">
+      <div id="turnLine"></div>
+      <button id="commit" class="btn" disabled>Commit Turn</button>
+      <div id="msg"></div>
+    </div>
+  </div>
   <aside id="side" class="stone">
     <div id="tile">
       <div id="terrain" class="hole"></div>
       <div id="segments"></div>
-    </div>
-    <div id="foot">
-      <div id="turnLine"></div>
-      <button id="commit" class="btn" disabled>Commit Turn</button>
-      <div id="msg"></div>
     </div>
   </aside>
 </div>
@@ -560,6 +575,7 @@ async function loadView(follow) {
   if (selected && !known.has(selected)) selected = null;
   drawOutlines();
   renderSide();
+  renderOrders();
   renderStatus();
 }
 
@@ -688,6 +704,29 @@ function renderSide() {
       ${esc(s.title)}${s.own ? `<span class="people">${s.people.toLocaleString()} ${s.people === 1 ? "person" : "people"}</span>` : ""}
       ${s.order ? `<span class="order">Orders: move ${DIR_LABEL[s.order.direction] || ""}</span>` : ""}</button>`).join("");
 }
+// The orders box: every order given to the nation's leaders this turn, one per leader. Choosing a
+// leader there chooses their tile; the cross cancels the order.
+function renderOrders() {
+  const ordered = VIEW.segments.filter(s => s.own && s.order), box = $("ordersBox");
+  const html = `<div class="head">Orders</div>` + ordered.map(s => `<div class="row">
+      <button class="who" data-leader="${s.leader}" title="${esc(s.title)}">${esc(s.title)}: move ${DIR_LABEL[s.order.direction] || ""}</button>
+      <button class="btn x" data-cancel="${s.leader}" title="Cancel this order"${canOrder() ? "" : " disabled"}>✕</button></div>`).join("");
+  box.hidden = !ordered.length;
+  if (box.dataset.html !== html) { box.innerHTML = html; box.dataset.html = html; }   // not mid-click on every poll
+}
+$("ordersBox").addEventListener("click", async e => {
+  const who = e.target.closest("[data-leader]"), cancel = e.target.closest("[data-cancel]");
+  if (who) {
+    const s = VIEW.segments.find(s => s.leader === +who.dataset.leader);
+    focusLeader = s.leader;
+    const c = tileCentre(s.tile);
+    flyTo(c.lat, c.lon);
+    selectTile(s.tile);
+  } else if (cancel) {
+    await giveOrder(VIEW.segments.find(s => s.leader === +cancel.dataset.cancel), null);
+  }
+});
+
 $("segments").addEventListener("click", e => {
   const b = e.target.closest("button[data-leader]");
   if (!b) return;
@@ -738,17 +777,20 @@ $("menu").addEventListener("click", async e => {
   const go = e.target.closest("[data-go]"), mv = e.target.closest("[data-move]"), cancel = e.target.closest("[data-cancel]");
   if (go) return showMenu(go.dataset.go);
   if (mv || cancel) {
-    const s = menuFor, direction = mv ? mv.dataset.move : null;
-    try {
-      await api(`/api/nation/${nationId}/orders`, { turn: VIEW.turn, leader: s.leader, direction });
-      say(direction ? `${s.title} will move ${DIR_LABEL[direction]} when the turn is committed.` : `${s.title}'s order is cancelled.`);
-    } catch (err) {
-      say(err.message);
-    }
+    const s = menuFor;
     closeMenu();
-    await loadView(false);
+    await giveOrder(s, mv ? mv.dataset.move : null);
   }
 });
+async function giveOrder(s, direction) {   // direction null takes the order back
+  try {
+    await api(`/api/nation/${nationId}/orders`, { turn: VIEW.turn, leader: s.leader, direction });
+    say("");   // the orders box shows it
+  } catch (err) {
+    say(err.message);
+  }
+  await loadView(false);
+}
 document.addEventListener("pointerdown", e => {
   if (!$("menu").hidden && !e.target.closest("#menu") && !e.target.closest("#segments")) closeMenu();
 });
@@ -762,6 +804,7 @@ function renderStatus() {
   const busy = committing || status.phase !== "orders";
   $("commit").disabled = busy || !VIEW;
   $("commit").textContent = busy && status.turn != null ? "The year passes…" : "Commit Turn";
+  if (VIEW) renderOrders();   // the crosses follow whether orders can be given
 }
 async function pollStatus() {
   try {

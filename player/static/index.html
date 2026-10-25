@@ -54,7 +54,9 @@
   .ticon svg { display: block; width: 100%; height: 100%; }
   #segments { display: flex; flex-direction: column; gap: 5px; }
   .seg { width: 100%; }
-  .seg .people { display: block; font-size: 13px; }
+  .seg .people { display: flex; align-items: center; gap: 3px; font-size: 13px; }
+  .glyph { display: inline-block; width: 1em; height: 1em; vertical-align: -0.12em; }
+  .glyph svg { display: block; width: 100%; height: 100%; }
   .seg .order { display: block; font-size: 13px; font-style: italic; }
   /* Two small boxes over the map: the nation's orders this turn (top left, only when there are any)
      and the turn with Commit Turn (bottom left). The side bar is only about the chosen tile. */
@@ -70,7 +72,8 @@
   #turnBox { position: absolute; left: 10px; bottom: 10px; z-index: 2; width: 180px; padding: 8px;
              display: flex; flex-direction: column; gap: 6px; }
   #turnLine { font-size: 13px; }
-  #commit { text-align: center; padding: 7px; font-weight: bold; }
+  #commit { display: flex; justify-content: center; align-items: center; padding: 5px; }
+  #commit .glyph { width: 26px; height: 26px; }
   #msg { font-size: 13px; }
   #msg:empty { display: none; }
   #view { position: relative; flex: 1; min-width: 0; background: #000; }
@@ -111,7 +114,7 @@
     <div id="ordersBox" class="stone" hidden></div>
     <div id="turnBox" class="stone">
       <div id="turnLine"></div>
-      <button id="commit" class="btn" disabled>Commit Turn</button>
+      <button id="commit" class="btn" disabled title="Commit Turn" aria-label="Commit Turn"></button>
       <div id="msg"></div>
     </div>
   </div>
@@ -233,6 +236,14 @@ function typeIcon(name) {
   if (!icon) return `<span>${esc(name)}</span>`;
   return `<span class="ticon" title="${esc(name)}" role="img" aria-label="${esc(name)}"><svg viewBox="0 0 20 20"><rect width="20" height="20" fill="${icon[0]}"/>${icon[1]}</svg></span>`;
 }
+
+// Small drawn symbols that stand in for words, each with the word as its tooltip.
+const GLYPHS = {
+  people: `<circle cx="10" cy="5" r="3.2"/><path d="M4 19v-5.5a6 6 0 0 1 12 0V19Z"/>`,
+  play: `<path d="M5 3 17 10 5 17Z"/>`,
+  wait: `<path d="M5 2h10v1.5c0 3-2.5 4.8-4 6.5 1.5 1.7 4 3.5 4 6.5V18H5v-1.5c0-3 2.5-4.8 4-6.5-1.5-1.7-4-3.5-4-6.5Z"/>`,
+};
+const glyph = (name, title) => `<span class="glyph" title="${esc(title)}" role="img" aria-label="${esc(title)}"><svg viewBox="0 0 20 20" fill="currentColor">${GLYPHS[name]}</svg></span>`;
 
 const leaderLabel = s => s.nation ? `${flag(s.nation)} ${esc(s.kind)}` : esc(s.kind);   // e.g. [flag] Chieftain
 
@@ -809,7 +820,7 @@ function renderSide() {
     .filter(list => list.length).map(list => `<div class="types">${list.map(typeIcon).join("")}</div>`).join("") : "";
   const segs = t && t.seen ? segsByTile.get(t.id) || [] : [];
   $("segments").innerHTML = segs.map(s => `<button class="btn seg" data-leader="${s.leader}">
-      ${leaderLabel(s)}${s.own ? `<span class="people">${s.people.toLocaleString()} ${s.people === 1 ? "person" : "people"}</span>` : ""}
+      ${leaderLabel(s)}${s.own ? `<span class="people">${s.people.toLocaleString()} ${glyph("people", s.people === 1 ? "person" : "people")}</span>` : ""}
       ${s.order ? `<span class="order">Orders: move ${DIR_LABEL[s.order.direction] || ""}</span>` : ""}</button>`).join("");
 }
 // The orders box: every order given to the nation's leaders this turn, one per leader. Choosing a
@@ -868,7 +879,7 @@ function showMenu(page) {
     const cell = d => `<button class="btn${s.order?.direction === d ? " on" : ""}" data-move="${d}"${ok[d] ? "" : " disabled"}>${DIR_LABEL[d]}</button>`;
     html += `<p>Which way?</p><div class="compass">${cell("nw")}${cell("n")}${cell("ne")}${cell("w")}<span class="here">·</span>${cell("e")}${cell("sw")}${cell("s")}${cell("se")}</div>`;
   } else if (page === "info") {
-    html += s.own ? `<p>${s.people.toLocaleString()} ${s.people === 1 ? "person" : "people"}.</p><p>${esc(s.situation)}</p>`
+    html += s.own ? `<p>${s.people.toLocaleString()} ${glyph("people", s.people === 1 ? "person" : "people")}</p><p>${esc(s.situation)}</p>`
                   : `<p>They appear to be ${esc(s.known.size)}.</p>`;
   }
   if (page !== "main" && s.own) html += `<button class="btn" data-go="${page === "move" ? "orders" : "main"}">Back</button>`;
@@ -911,7 +922,13 @@ function renderStatus() {
   $("turnLine").textContent = status.turn == null ? "" : `Turn ${status.turn}`;
   const busy = committing || status.phase !== "orders";
   $("commit").disabled = busy || !VIEW;
-  $("commit").textContent = busy && status.turn != null ? "The year passes…" : "Commit Turn";
+  // A play symbol; an hourglass while the year passes.
+  const label = busy && status.turn != null ? "The year passes…" : "Commit Turn";
+  if ($("commit").title !== label || !$("commit").firstChild) {
+    $("commit").innerHTML = glyph(busy && status.turn != null ? "wait" : "play", label);
+    $("commit").title = label;
+    $("commit").setAttribute("aria-label", label);
+  }
   if (VIEW) renderOrders();   // the crosses follow whether orders can be given
 }
 async function pollStatus() {

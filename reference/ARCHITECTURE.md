@@ -349,14 +349,14 @@ deliberately spartan, and `player.py` sends only what the nation knows.
   image and the grid are shown: no rivers, heatmap, terrain or cover overlays.
 - **The side bar** is a tile explorer: it shows only the chosen tile (clicking a tile chooses it; it starts on the nation's root
   leader): its landforms and then its cover as rows of small drawn icons (largest
-  first; the name is the icon's tooltip), then a button per leader there (Iceland's flag, "Chieftain,
-  206 people"). A leader's menu offers **Orders** (for now only **Move**: a 3 × 3 compass of directions,
+  first; the name is the icon's tooltip), then a button per leader there (Iceland's flag, "Chieftain",
+  206 and a person symbol; the words are the tooltips). A leader's menu offers **Orders** (for now only **Move**: a 3 × 3 compass of directions,
   all-water ones disabled, plus Cancel) and **Info** (people and situation); another nation's leader
   offers only Info. `POST /api/nation/<id>/orders` takes a direction and turns it into a move command for
   that neighbour (`orders.py`, through `game.py`). A small **Orders** box at the top left of the map
   lists every order the nation has given this turn (choosing one goes to that leader's tile; ✕ cancels
-  it), and a box at the bottom left holds the turn number and **Commit Turn** (`POST /api/commit` with
-  the turn), which resolves the turn for the whole world; afterwards the page follows the leader last chosen. The page
+  it), and a box at the bottom left holds the turn number and **Commit Turn**, a play symbol (an hourglass
+  while the year passes; `POST /api/commit` with the turn), which resolves the turn for the whole world; afterwards the page follows the leader last chosen. The page
   polls `/api/status` every 2 s, so a turn committed elsewhere shows up too.
 - **Flags.** Wherever the page would print a nation's name (the leader buttons and menus, the Orders
   box), it shows the nation's flag instead, with the name as the flag's tooltip; the nation menu shows

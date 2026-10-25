@@ -1,5 +1,5 @@
 {
-  "about": "How the player page puts what the state holds about a segment into words, read by player.py on every request. A player knows little about their own people at first: only how many there are and how they seem. 'situation' describes one of the player's own segments from the year that ended with this turn: the first 'food' rule whose share of food need met is below its value, then the 'deaths' rules whose cause killed more than its share of the people alive at the start of that year (at most max_sentences sentences in all, food first), else 'fine'; 'moving' is added while the segment is between tiles. Shares of deaths are of people at the start of the year. At turn 0 no year has passed, so everyone looks fine. 'foreign_size' describes another nation's segment by roughly how many people are in it: the first entry whose 'below' is more than its people (null = no limit). As technology advances, intelligence will tell a player more about other nations' segments.",
+  "about": "How the player page puts what the state holds about a segment into words, read by player.py on every request. A player knows little about their own people at first: only how many there are and how they seem. 'situation' describes one of the player's own segments from the year that ended with this turn: the first 'food' rule whose share of food need met is below its value, then the 'deaths' rules whose cause killed more than its share of the people alive at the start of that year (at most max_sentences sentences in all, food first), else 'fine'; 'moving' is added while the segment is between tiles. Shares of deaths are of people at the start of the year. At turn 0 no year has passed, so everyone looks fine. 'foreign_size' describes another nation's segment by roughly how many people are in it: the first entry whose 'below' is more than its people (null = no limit). As technology advances, intelligence will tell a player more about other nations' segments. 'camp' sets how many tepees the map shows for a nation's people on a tile (all its segments there added up): base for base_people, growing with the square root of the people (so 4 for twice base_people), at least min and at most max.",
   "situation": {
     "food_product": "food",
     "food": [
@@ -17,6 +17,7 @@
     "fine": "They look fine.",
     "moving": "They are on the move."
   },
+  "camp": {"base": 3, "base_people": 200, "min": 1, "max": 10},
   "foreign_size": [
     {"below": 10, "text": "a handful of people"},
     {"below": 40, "text": "a small band"},

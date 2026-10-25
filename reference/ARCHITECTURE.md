@@ -345,7 +345,12 @@ deliberately spartan, and `player.py` sends only what the nation knows.
   the screen as a rectangle of latitude and longitude; a screen can't be smaller than 3 tiles). Unexplored tiles are black, explored tiles not seen now are dimmed, with soft,
   slightly ragged edges between them (a fine fog patch over the explored area, 12 pixels per tile, inside
   a one-pixel-per-tile black layer for the rest of the world), and the grid is drawn only on explored tiles. Each
-  segment is a small token (own ochre, others rust red), with a line for an ordered move. Only the globe
+  nation's people on a tile are a camp of small tepees (own ochre, others rust red): all its segments
+  there added up, 3 tepees for 200 people, growing with the square root of the people, from 1 to 10
+  (`camps` in /view, worked out by the server from `descriptions.json` "camp", so other nations'
+  counts stay hidden). Each nation on a tile gets a strip of it, and its tepees sit at fixed,
+  well-spread spots seeded by the tile and nation, so they stay put from turn to turn. An ordered move
+  is a line from the segment to the tile it heads for. Only the globe
   image and the grid are shown: no rivers, heatmap, terrain or cover overlays.
 - **The side bar** is a tile explorer: it shows only the chosen tile (clicking a tile chooses it; it starts on the nation's root
   leader): its landforms and then its cover as rows of small drawn icons (largest

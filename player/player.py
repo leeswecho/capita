@@ -90,6 +90,14 @@ def situation(t, r, rules) -> str:
     return " ".join(said)
 
 
+def tepees(people: float, rules) -> int:
+    """How many tepees a camp of `people` shows on the map (descriptions.json "camp"): `base` for
+    `base_people`, growing with the square root of the people, between `min` and `max`."""
+    c = rules["camp"]
+    n = round(c["base"] * (max(people, 0) / c["base_people"]) ** 0.5)
+    return int(min(c["max"], max(c["min"], n)))
+
+
 def foreign_size(people: float, rules) -> str:
     for rule in rules["foreign_size"]:
         if rule["below"] is None or people < rule["below"]:
@@ -189,7 +197,11 @@ class Player(Game):
                     what covers its land (and frozen water), each as indices into terrain_types or
                     cover_types, largest share first}] for every tile it has explored,
          "segments": [...] on the tiles it can see now: its own with "people", "situation", "order" and
-                    "moves"; other nations' with what it knows of them}."""
+                    "moves"; other nations' with what it knows of them,
+         "camps": [{"tile", "nation": {"id", "name", "flag"}, "own", "tepees"}]: one per nation per tile it
+                    can see, drawn as that many tepees: all of the nation's people there (on the tile or
+                    counted as on it while moving) added up, so a camp's size shows roughly how many
+                    live there without giving the number}."""
         t = self.current_turn()
         if t is None or not 1 <= nid <= len(t.nations):
             return None
@@ -206,6 +218,12 @@ class Player(Game):
         rows = np.flatnonzero(visible[t.tile])
         rows = sorted(rows.tolist(), key=lambda r: (t.leaders[r]["nation"] != nid, r))   # own first
         segments = [self.segment_json(t, r, nid, commands, rules) for r in rows]
+        people = {}
+        for r in rows:
+            key = (int(t.tile[r]), t.leaders[r]["nation"])
+            people[key] = people.get(key, 0.0) + float(np.asarray(t.people[r]).sum())
+        camps = [{"tile": orders.tile_name(i), "nation": self.nation_ref(t, k) if k else None, "own": k == nid,
+                  "tepees": tepees(p, rules)} for (i, k), p in sorted(people.items()) if p > 0]
         root = t.nations[nid - 1]["leader"]
         rr = t.row_of().get(root)
         own = [r for r in rows if t.leaders[r]["nation"] == nid]
@@ -214,7 +232,7 @@ class Player(Game):
                            "nation": self.nation_ref(t, nid),
                            "home": orders.tile_name(home) if home is not None else None,
                            "terrain_types": self.terrain_types, "cover_types": self.cover_types, "tiles": tiles,
-                           "segments": segments}, separators=(",", ":")).encode()
+                           "segments": segments, "camps": camps}, separators=(",", ":")).encode()
 
     def order(self, nid: int, body: dict):
         """Turn a direction into a move command and give it (Game.give_order()). Returns (status, dict)."""

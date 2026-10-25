@@ -347,7 +347,7 @@ deliberately spartan, and `player.py` sends only what the nation knows.
   segment is a small token (own ochre, others rust red), with a line for an ordered move. Only the globe
   image and the grid are shown: no rivers, heatmap, terrain or cover overlays.
 - **The side bar** is a tile explorer: it shows only the chosen tile (clicking a tile chooses it; it starts on the nation's root
-  leader): its landforms and then its cover as comma-separated lists, then a button per leader there ("Iceland Chieftain,
+  leader): its landforms and then its cover as comma-separated lists, then a button per leader there (Iceland's flag, "Chieftain,
   206 people"). A leader's menu offers **Orders** (for now only **Move**: a 3 × 3 compass of directions,
   all-water ones disabled, plus Cancel) and **Info** (people and situation); another nation's leader
   offers only Info. `POST /api/nation/<id>/orders` takes a direction and turns it into a move command for
@@ -356,6 +356,11 @@ deliberately spartan, and `player.py` sends only what the nation knows.
   it), and a box at the bottom left holds the turn number and **Commit Turn** (`POST /api/commit` with
   the turn), which resolves the turn for the whole world; afterwards the page follows the leader last chosen. The page
   polls `/api/status` every 2 s, so a turn committed elsewhere shows up too.
+- **Flags.** Wherever the page would print a nation's name (the leader buttons and menus, the Orders
+  box), it shows the nation's flag instead, with the name as the flag's tooltip; the nation menu shows
+  both. Flags are the country's, from the flag-icons package on the jsDelivr CDN, named by the ISO
+  alpha-2 code the server adds to each nation (`flag`, from the Natural Earth countries file; a
+  renamed nation keeps its country's flag). A nation with no known flag is shown by its name.
 - **Eras.** The panels and menus are stone (a texture generated in the page, with bevelled edges like
   Civilization's), in a plain sans-serif font. Everything that changes with the era is a CSS variable
   set by `applyEra()`, so a later era adds its own texture and colours.

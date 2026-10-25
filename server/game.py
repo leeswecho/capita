@@ -41,11 +41,29 @@ def load_country_names(path: str = COUNTRIES) -> dict:
     return out
 
 
+def load_flag_codes(path: str = COUNTRIES) -> dict:
+    """ISO alpha-3 code -> lower-case ISO alpha-2 code, which names a country's flag (the player page
+    shows flags from the flag-icons package, which are named by alpha-2 code)."""
+    out = {"XKX": "xk"}
+    try:
+        with open(path, encoding="utf-8") as f:
+            features = json.load(f)["features"]
+    except (OSError, ValueError, KeyError):
+        return out
+    for feat in features:
+        p = feat["properties"]
+        a3, a2 = p.get("ISO_A3_EH"), p.get("ISO_A2_EH")
+        if a3 and a3 != "-99" and a2 and a2 != "-99" and a3 not in out:
+            out[a3] = a2.lower()
+    return out
+
+
 class Game:
     def __init__(self, state_dir: str, map_path: str = MAP, countries_path: str = COUNTRIES):
         self.state_dir = state_dir
         self.commit_lock = threading.Lock()   # held while a commit of ours runs
         self.country_names = load_country_names(countries_path)
+        self.flag_codes = load_flag_codes(countries_path)
         self.turn_cache = None                # the last Turn opened, reused until current.json names another
         self.world = read_map(map_path)
         self.walkable = orders.walkable(self.world)
@@ -64,6 +82,10 @@ class Game:
         """The name the nation's player gave it, or its country's name."""
         code = t.nations[nid - 1]["code"]
         return names.read(self.state_dir).get(nid) or self.country_names.get(code) or code
+
+    def nation_ref(self, t, nid: int) -> dict:
+        """{"id", "name", "flag"}: the flag is the nation's country's alpha-2 code (None if unknown)."""
+        return {"id": nid, "name": self.nation_name(t, nid), "flag": self.flag_codes.get(t.nations[nid - 1]["code"])}
 
     def status(self) -> dict:
         """The current turn and phase. A commit of ours still starting the engine counts as resolving."""

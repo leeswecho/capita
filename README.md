@@ -62,7 +62,7 @@ The page starts black, with only a menu to choose the nation you will lead, and 
 nothing else: the map is locked to a handful of tiles, and you can't zoom or pan to see more than a
 couple of tiles past what your nation has explored. Tiles you have seen before but can't see now are dimmed, and the rest are
 black. Choose a tile to see its landforms and what covers its land (each largest first) and the leaders
-there. Your own leader shows
+there. Nations are shown by their flags; hover over a flag for the nation's name. Your own leader shows
 their title and people; choosing them offers **Orders** (for now only **Move**, to one of the eight
 directions around) and **Info** (their people and how they seem, from `player/descriptions.json`).
 Another nation's leader offers only Info: roughly how big their group looks. The side bar is only

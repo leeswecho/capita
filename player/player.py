@@ -24,10 +24,11 @@ Endpoints:
     /globe/<level>/<x>_<y>.jpg  a piece of the detail-tile pyramid (server/make_globe_tiles.py)
     /api/meta              the tile grid, the globe images and the detail-tile pyramid (JSON)
     /api/status            {"turn": t, "phase": p, "since": s} (JSON)
-    /api/nations           {"turn": t, "nations": [{"id", "name"}, ...]}: the nations a player can choose,
-                           those that are alive and have a leader, by name (JSON)
+    /api/nations           {"turn": t, "nations": [{"id", "name", "flag"}, ...]}: the nations a player can
+                           choose, those that are alive and have a leader, by name; "flag" is the
+                           alpha-2 code of the country's flag (JSON)
     POST /api/nation/<id>/name  {"name": "..."} renames the nation (null goes back to its country's
-                           name); returns {"id", "name"}; 400 if the name can't be used (JSON)
+                           name); returns {"id", "name", "flag"}; 400 if the name can't be used (JSON)
     /api/nation/<id>/view  what the nation knows at the current turn (see view_json()) (JSON)
     POST /api/nation/<id>/orders  {"turn": t, "leader": id, "direction": "nw"} orders a leader to move
                            their segment to the neighbouring tile that way; "direction": null takes the
@@ -121,7 +122,7 @@ class Player(Game):
         t = self.current_turn()
         if t is None:
             return json.dumps({"turn": None, "nations": []}).encode()
-        out = [{"id": n["id"], "name": self.nation_name(t, n["id"])} for n in t.nations
+        out = [self.nation_ref(t, n["id"]) for n in t.nations
                if n["alive"] and n["leader"] is not None]
         return json.dumps({"turn": t.turn, "nations": sorted(out, key=lambda n: n["name"].lower())}).encode()
 
@@ -133,7 +134,14 @@ class Player(Game):
             names.write(self.state_dir, nid, name)
         except ValueError as e:
             return 400, {"error": str(e)}
-        return 200, {"id": nid, "name": self.nation_name(t, nid)}
+        return 200, self.nation_ref(t, nid)
+
+    def leader_ref(self, t, r) -> dict:
+        """How the page names a leader: "title" in words ("Iceland Chieftain"), and for showing the
+        nation as a flag instead, "kind" ("Chieftain") and "nation" ({"id", "name", "flag"}, or None)."""
+        lead = t.leaders[r]
+        return {"title": self.title(t, r), "kind": lead["type"].capitalize(),
+                "nation": self.nation_ref(t, lead["nation"]) if lead["nation"] else None}
 
     def title(self, t, r) -> str:
         """A leader as the player page names them: their nation and type, e.g. "Iceland Chieftain"."""
@@ -157,14 +165,14 @@ class Player(Game):
             to = orders.tile_index(c["to"])
             order = {"type": "move",
                      "direction": next((d for d, i in orders.neighbours(int(t.tile[r])) if i == to), None)}
-        return {"leader": lid, "own": True, "title": self.title(t, r),
+        return {"leader": lid, "own": True, **self.leader_ref(t, r),
                 "people": round(float(np.asarray(t.people[r]).sum())), "situation": situation(t, r, rules),
                 "moving": bool(t.at[r] != t.toward[r]), "order": order, "moves": self.moves(t, r)}
 
     def foreign_segment(self, t, r, rules) -> dict:
         # All a nation can tell about another's people for now is how many they look; intelligence will
         # add to "known" as technology advances.
-        return {"leader": int(t.leader[r]), "own": False, "title": self.title(t, r),
+        return {"leader": int(t.leader[r]), "own": False, **self.leader_ref(t, r),
                 "known": {"size": foreign_size(float(np.asarray(t.people[r]).sum()), rules)}}
 
     def segment_json(self, t, r, nid, commands, rules) -> dict:
@@ -175,7 +183,7 @@ class Player(Game):
 
     def view_json(self, nid: int):
         """What nation `nid` knows at the current turn, or None if there is no such nation:
-        {"turn", "phase", "nation": {"id", "name"}, "home": the tile of its root leader's segment,
+        {"turn", "phase", "nation": {"id", "name", "flag"}, "home": the tile of its root leader's segment,
          "terrain_types": [...], "cover_types": [...],
          "tiles": [{"id", "seen": whether it can see the tile now, "terrain": its landforms and "cover":
                     what covers its land (and frozen water), each as indices into terrain_types or
@@ -203,7 +211,7 @@ class Player(Game):
         own = [r for r in rows if t.leaders[r]["nation"] == nid]
         home = int(t.tile[rr]) if rr is not None else int(t.tile[own[0]]) if own else None
         return json.dumps({"turn": t.turn, "phase": self.status()["phase"],
-                           "nation": {"id": nid, "name": self.nation_name(t, nid)},
+                           "nation": self.nation_ref(t, nid),
                            "home": orders.tile_name(home) if home is not None else None,
                            "terrain_types": self.terrain_types, "cover_types": self.cover_types, "tiles": tiles,
                            "segments": segments}, separators=(",", ":")).encode()

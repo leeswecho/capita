@@ -35,7 +35,10 @@
   #chooseBox { width: min(360px, 100%); padding: 18px; display: flex; flex-direction: column; gap: 12px; }
   #chooseBox h1 { margin: 0; font-size: 18px; font-weight: bold; }
   #nationList { height: min(300px, 45vh); overflow-y: auto; padding: 4px; display: flex; flex-direction: column; gap: 3px; }
-  #nationList .btn { width: 100%; }
+  #nationList .btn { width: 100%; display: flex; align-items: center; gap: 8px; }
+  #nationList .flag { height: 18px; }
+  /* A nation is shown by its flag wherever the page would otherwise print its name; hovering shows the name. */
+  .flag { height: 0.9em; aspect-ratio: 4 / 3; vertical-align: -0.05em; border: 1px solid rgba(0, 0, 0, 0.55); }
   #chooseBox label { display: flex; flex-direction: column; gap: 4px; }
   #nationName { font: inherit; color: var(--ink); padding: 5px 7px; background: rgba(255, 255, 255, 0.35);
                 border: 2px solid; border-color: var(--lo) var(--hi) var(--hi) var(--lo); outline: none; }
@@ -196,6 +199,17 @@ function applyEra(name) {
 }
 applyEra("stone");
 
+// ---------- flags ----------
+// Nations are shown by their country's flag (the flag-icons package, by ISO alpha-2 code), with the
+// nation's name as the flag's tooltip. A nation with no known flag is shown by its name.
+const FLAG_URL = "https://cdn.jsdelivr.net/npm/flag-icons@7.2.3/flags/4x3/{code}.svg";
+function flag(n) {
+  if (!n) return "";
+  return n.flag ? `<img class="flag" src="${FLAG_URL.replace("{code}", encodeURIComponent(n.flag))}" alt="${esc(n.name)}" title="${esc(n.name)}">`
+                : `<span>${esc(n.name)}</span>`;
+}
+const leaderLabel = s => s.nation ? `${flag(s.nation)} ${esc(s.kind)}` : esc(s.kind);   // e.g. [flag] Chieftain
+
 // ---------- choosing a nation ----------
 let nations = [], nationId = null;
 
@@ -209,7 +223,7 @@ async function loadNations() {
   if (!nations.length) { $("chooseMsg").textContent = "No world has begun yet."; return; }
   const remembered = +store.get("capita.player.nation");
   $("nationList").innerHTML = nations.map(n =>
-    `<button class="btn" data-id="${n.id}">${esc(n.name)}</button>`).join("");
+    `<button class="btn" data-id="${n.id}">${flag(n)}<span class="name">${esc(n.name)}</span></button>`).join("");
   if (nations.some(n => n.id === remembered)) pickNation(remembered);
 }
 function pickNation(id) {
@@ -232,7 +246,10 @@ $("begin").addEventListener("click", async () => {
   const name = $("nationName").value.trim().replace(/\s+/g, " ");
   $("begin").disabled = true;
   try {
-    if (name !== n.name) n.name = (await api(`/api/nation/${nationId}/name`, { name })).name;
+    if (name !== n.name) {
+      n.name = (await api(`/api/nation/${nationId}/name`, { name })).name;
+      $("nationList").querySelector(".on .name").textContent = n.name;
+    }
   } catch (e) {
     $("chooseMsg").textContent = e.message;
     $("begin").disabled = false;
@@ -701,7 +718,7 @@ function renderSide() {
     .filter(list => list.length).map(list => `<div>${esc(list.join(", "))}</div>`).join("") : "";
   const segs = t && t.seen ? segsByTile.get(t.id) || [] : [];
   $("segments").innerHTML = segs.map(s => `<button class="btn seg" data-leader="${s.leader}">
-      ${esc(s.title)}${s.own ? `<span class="people">${s.people.toLocaleString()} ${s.people === 1 ? "person" : "people"}</span>` : ""}
+      ${leaderLabel(s)}${s.own ? `<span class="people">${s.people.toLocaleString()} ${s.people === 1 ? "person" : "people"}</span>` : ""}
       ${s.order ? `<span class="order">Orders: move ${DIR_LABEL[s.order.direction] || ""}</span>` : ""}</button>`).join("");
 }
 // The orders box: every order given to the nation's leaders this turn, one per leader. Choosing a
@@ -709,7 +726,7 @@ function renderSide() {
 function renderOrders() {
   const ordered = VIEW.segments.filter(s => s.own && s.order), box = $("ordersBox");
   const html = `<div class="head">Orders</div>` + ordered.map(s => `<div class="row">
-      <button class="who" data-leader="${s.leader}" title="${esc(s.title)}">${esc(s.title)}: move ${DIR_LABEL[s.order.direction] || ""}</button>
+      <button class="who" data-leader="${s.leader}">${leaderLabel(s)}: move ${DIR_LABEL[s.order.direction] || ""}</button>
       <button class="btn x" data-cancel="${s.leader}" title="Cancel this order"${canOrder() ? "" : " disabled"}>✕</button></div>`).join("");
   box.hidden = !ordered.length;
   if (box.dataset.html !== html) { box.innerHTML = html; box.dataset.html = html; }   // not mid-click on every poll
@@ -748,7 +765,7 @@ const canOrder = () => VIEW && VIEW.phase === "orders" && status.phase === "orde
 
 function showMenu(page) {
   const s = menuFor, m = $("menu");
-  let html = `<div class="title">${esc(s.title)}</div>`;
+  let html = `<div class="title">${leaderLabel(s)}</div>`;
   if (page === "main") {
     html += `<button class="btn" data-go="orders">Orders</button><button class="btn" data-go="info">Info</button>`;
   } else if (page === "orders") {

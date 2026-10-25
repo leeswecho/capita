@@ -48,7 +48,10 @@
   #game { position: fixed; inset: 0; display: flex; }
   #side { width: 250px; flex: none; display: flex; flex-direction: column; padding: 12px; gap: 12px; }
   #tile { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
-  #terrain { padding: 6px 8px; min-height: 2.6em; }
+  #terrain { padding: 6px 8px; min-height: 2.6em; display: flex; flex-direction: column; gap: 5px; }
+  #terrain .types { display: flex; flex-wrap: wrap; gap: 4px; }
+  .ticon { display: inline-block; width: 24px; height: 24px; border: 1px solid rgba(0, 0, 0, 0.6); }
+  .ticon svg { display: block; width: 100%; height: 100%; }
   #segments { display: flex; flex-direction: column; gap: 5px; }
   .seg { width: 100%; }
   .seg .people { display: block; font-size: 13px; }
@@ -208,6 +211,29 @@ function flag(n) {
   return n.flag ? `<img class="flag" src="${FLAG_URL.replace("{code}", encodeURIComponent(n.flag))}" alt="${esc(n.name)}" title="${esc(n.name)}">`
                 : `<span>${esc(n.name)}</span>`;
 }
+
+// ---------- landform and cover icons ----------
+// Each landform and cover type is a small drawn tile, with its name as the tooltip, in place of the
+// word. A type with no icon is shown by its name.
+const TYPE_ICONS = {
+  water: ["#3d6fa6", `<path d="M2 8q2-2 4 0t4 0t4 0t4 0M2 13q2-2 4 0t4 0t4 0t4 0" stroke="#e2edf7" stroke-width="1.5" fill="none"/>`],
+  plains: ["#cdb86e", `<path d="M2 15H18M5 15v-3M8 15v-2M11 15v-3M14 15v-2M16 15v-3" stroke="#5f4f22" stroke-width="1.3" fill="none"/>`],
+  hills: ["#b08a55", `<path d="M1 16Q6 6 11 16M8 16Q13 9 19 16" stroke="#3f2c14" stroke-width="1.6" fill="none"/>`],
+  mountains: ["#8f8882", `<path d="M2 17 8 5 14 17Z" fill="#45403b"/><path d="M9 17 14 8 19 17Z" fill="#5d5650"/><path d="M6.5 8 8 5 9.5 8Z" fill="#fff"/>`],
+  grass: ["#86b24c", `<path d="M4 16 3 9M6.5 16 7.5 8M10 16 9 7M12.5 16 13.5 9M15.5 16 16.5 8" stroke="#2d4d13" stroke-width="1.4" fill="none"/>`],
+  forest: ["#2f6a36", `<path d="M6 3 2 12H10ZM14 6 10 15H18Z" fill="#123519"/><path d="M5.3 12h1.4v4H5.3ZM13.3 15h1.4v3H13.3Z" fill="#3b2a17"/>`],
+  desert: ["#e3c27a", `<circle cx="14" cy="6" r="2.6" fill="#b8641e"/><path d="M1 15Q7 9 13 14T19 13" stroke="#94662a" stroke-width="1.4" fill="none"/>`],
+  sand: ["#f1e0a8", `<g fill="#a88a4a"><circle cx="4" cy="5" r="1"/><circle cx="10" cy="4" r="1"/><circle cx="15" cy="7" r="1"/><circle cx="6" cy="10" r="1"/><circle cx="12" cy="11" r="1"/><circle cx="17" cy="13" r="1"/><circle cx="4" cy="15" r="1"/><circle cx="10" cy="16" r="1"/></g>`],
+  wetlands: ["#6b8a63", `<path d="M2 16q2-1.5 4 0t4 0t4 0t4 0" stroke="#d3e4da" stroke-width="1.3" fill="none"/><path d="M6 14V6M9.5 14V8M13 14V5M16 14V8" stroke="#1f331c" stroke-width="1.2"/><path d="M5.2 6h1.6v3H5.2ZM12.2 5h1.6v3H12.2Z" fill="#4a2f17"/>`],
+  tundra: ["#bccfd1", `<path d="M2 15q2.5-4 5 0M8 16q2.5-4 5 0M13 13q2.5-4 5 0" stroke="#3f5a43" stroke-width="1.4" fill="#6f8a6f"/><g fill="#fff"><circle cx="5" cy="5" r="0.9"/><circle cx="11" cy="7" r="0.9"/><circle cx="16" cy="4" r="0.9"/></g>`],
+  ice: ["#eaf4f8", `<path d="M3 5 8 9 6 14M8 9 14 8 17 13M14 8 16 3" stroke="#6f98ae" stroke-width="1.3" fill="none"/>`],
+};
+function typeIcon(name) {
+  const icon = TYPE_ICONS[name];
+  if (!icon) return `<span>${esc(name)}</span>`;
+  return `<span class="ticon" title="${esc(name)}" role="img" aria-label="${esc(name)}"><svg viewBox="0 0 20 20"><rect width="20" height="20" fill="${icon[0]}"/>${icon[1]}</svg></span>`;
+}
+
 const leaderLabel = s => s.nation ? `${flag(s.nation)} ${esc(s.kind)}` : esc(s.kind);   // e.g. [flag] Chieftain
 
 // ---------- choosing a nation ----------
@@ -713,9 +739,9 @@ function drawMarkers() {
 const DIR_LABEL = { n: "N", ne: "NE", e: "E", se: "SE", s: "S", sw: "SW", w: "W", nw: "NW" };
 function renderSide() {
   const t = selected ? known.get(selected) : null;
-  // Landforms, then what covers the land, each largest first, as plain lists without the shares.
+  // Landforms, then what covers the land, each largest first, as rows of icons without the shares.
   $("terrain").innerHTML = t ? [t.terrain.map(k => VIEW.terrain_types[k]), t.cover.map(k => VIEW.cover_types[k])]
-    .filter(list => list.length).map(list => `<div>${esc(list.join(", "))}</div>`).join("") : "";
+    .filter(list => list.length).map(list => `<div class="types">${list.map(typeIcon).join("")}</div>`).join("") : "";
   const segs = t && t.seen ? segsByTile.get(t.id) || [] : [];
   $("segments").innerHTML = segs.map(s => `<button class="btn seg" data-leader="${s.leader}">
       ${leaderLabel(s)}${s.own ? `<span class="people">${s.people.toLocaleString()} ${s.people === 1 ? "person" : "people"}</span>` : ""}

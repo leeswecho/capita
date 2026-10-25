@@ -347,7 +347,8 @@ deliberately spartan, and `player.py` sends only what the nation knows.
   segment is a small token (own ochre, others rust red), with a line for an ordered move. Only the globe
   image and the grid are shown: no rivers, heatmap, terrain or cover overlays.
 - **The side bar** is a tile explorer: it shows only the chosen tile (clicking a tile chooses it; it starts on the nation's root
-  leader): its landforms and then its cover as comma-separated lists, then a button per leader there (Iceland's flag, "Chieftain,
+  leader): its landforms and then its cover as rows of small drawn icons (largest
+  first; the name is the icon's tooltip), then a button per leader there (Iceland's flag, "Chieftain,
   206 people"). A leader's menu offers **Orders** (for now only **Move**: a 3 × 3 compass of directions,
   all-water ones disabled, plus Cancel) and **Info** (people and situation); another nation's leader
   offers only Info. `POST /api/nation/<id>/orders` takes a direction and turns it into a move command for

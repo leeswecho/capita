@@ -55,8 +55,10 @@ The server does no rendering. It hands the browser compact data, and the browser
 | `../engine/engine.py` | The turn engine, in its own directory and run as its own process: `init` writes turn 0 of the cohort state, `step` advances it a year at a time, `verify` checks the current turn's checksum (§4.6). It imports `cohort_state.py`, `grid.py` and `convert_map.py` from `server/` (it reads `world_map.json` for production), and by default uses the top-level `state/` folder and `server/world_population_start.json` with its nation seed. |
 | `../engine/economy.json` | The economy rules the engine reads on every step: the products (food, in kcal) with their decay rates, and the foraging model's yields and factors. |
 | `../engine/demography.json` | The demography rules the engine reads on every step: birth rates by age, and each cause of death's rule and values. |
+| `../engine/movement.json` | The movement rules the engine reads on every step: walking pace, and which activities' hours aren't free for travel. |
+| `orders.py` | The players' orders (`../state/orders/turn_NNNNN/nation_KKK.json`): reading and writing them, the command types (for now `move`), and `check()`, the one validation used by both the control server and the engine. |
 | `../engine/leaders.json` | The leader types (chieftain, mayor, superintendent, admiral, general, king) and the type every turn-0 leader gets. Types will decide which commands a leader can be given. |
-| `../control/control.py`, `../control/static/index.html` | The player's control page, a separate server on port 8001 so control stays apart from the view. **Commit Turn** (`POST /api/commit`) runs `engine/engine.py step` as its own process. Commits are accepted only while the turn's phase is `orders`; one sent while it is `resolving`, however the step was started, gets 409. `/api/status` gives the current turn and phase. The player first chooses the nation they control (remembered by the browser, or `?nation=AUS` in the URL); Commit Turn stays disabled until they do. The player is that nation's root leader, which the page names. It then lists what each of the nation's segments produced and consumed in the year that ended with the current turn, and how much of its need was met (`/api/nation/<id>/production`: the 100 most productive segments, with totals), and how many died of each cause (`/api/nation/<id>/deaths`). It reads the state and never writes it. |
+| `../control/control.py`, `../control/static/index.html` | The player's control page, a separate server on port 8001 so control stays apart from the view. **Commit Turn** (`POST /api/commit`) runs `engine/engine.py step` as its own process. Commits are accepted only while the turn's phase is `orders`; one sent while it is `resolving`, however the step was started, gets 409. `/api/status` gives the current turn and phase. The player first chooses the nation they control (remembered by the browser, or `?nation=AUS` in the URL); Commit Turn stays disabled until they do. The player is that nation's root leader, which the page names. The page lists the nation's leaders, root first (`/api/nation/<id>/leaders`); **Move** lists where a leader's segment can go (`/api/leader/<id>/moves`: the 8 neighbouring tiles, all-water ones disabled; for a segment already moving, the tiles around both ends of its step, each with the way there and its length), and choosing one saves a move command (`POST /api/nation/<id>/orders`, checked by `orders.check()`, refused unless the turn is in `orders`). It then lists what each of the nation's segments produced and consumed in the year that ended with the current turn, and how much of its need was met (`/api/nation/<id>/production`: the 100 most productive segments, with totals), and how many died of each cause (`/api/nation/<id>/deaths`). It reads the state and never writes it; the only files it writes are the orders. |
 | `cohort_state.py` | Reads and writes the cohort state (`../state/`): the format id, atomic turn writing, memory-mapped reading, checksums and pruning. Shared by `engine/engine.py` and the server. |
 | `../state/` | The cohort state written by `engine/engine.py`, in its own top-level folder next to `server/` and `engine/`: `current.json` plus one `turn_NNNNN/` directory per recent turn (see `cohort_state_schema.md`). Generated; not committed. |
 | `gen_start_capitals.py` | Writes the game's starting scenario: `world_population_start.json` (200 people in each of 38 start tiles, 0 elsewhere; the start tiles are placeholder locations at present-day capitals; country and area copied from `world_population_current.json`), `../reference/world_population_capitals.yaml` (the same as YAML) and `world_population_start_capitals.nations.json`, the nation seed (one nation per start tile, with that tile as its capital) that `engine.py init` picks up automatically. |
@@ -255,8 +257,22 @@ server.py ◄── memory-maps the arrays of the turn current.json names ◄─
 - **Phases.** Each turn is first open for **orders** (players enter commands, then commit), then
   **resolving** (commands closed; the engine computes the next turn). The engine records this in
   `state/phase.json`, beside the turns rather than inside them, because a turn never changes once
-  written. The control page refuses commits while a turn is resolving, and the viewer's turn chip shows
-  the phase.
+  written. The control page refuses commits and commands while a turn is resolving, and the viewer's
+  turn chip shows the phase.
+- **Orders and movement.** Players' commands for a turn are saved beside the turns in
+  `state/orders/turn_NNNNN/`, one file per nation (`server/orders.py`), by the control server; the
+  engine reads them when it resolves that turn, checks each again and applies the valid ones, and
+  records what it applied and rejected (with reasons) in the new turn's manifest (`orders`). A move
+  sends a segment toward a neighbouring tile that isn't all water. A segment already partway from A to
+  B can be sent to any neighbour of A or B: it first finishes the step to B or walks back to A,
+  whichever makes the whole way shorter (`orders.plan_move()`), and the state keeps where its move ends
+  (`destination.npy`). Every moving segment then covers
+  `km_per_hour` × its travel hours a day × 365 (`engine/movement.json`; travel hours are the
+  people-weighted mean of the hours not spent sleeping or subsisting), along the great circle between
+  tile centres, over the rest of its step and then the step on to its destination. If that reaches the
+  destination, it arrives and stops; otherwise it stays partway and goes on
+  next turn. On foot that is several thousand km a year, so a one-tile move (about 55 km) always
+  finishes in the turn. The segment forages, eats and claims tiles where it ends up.
 - **Production.** Each step first works out what the year produced, from the current people and their
   activity hours before they age. Foraging turns `subsistence` hours into food (kcal), at about 1,000
   kcal an hour while labor is light, levelling off at what the tile's land cover, landform, latitude,
@@ -285,7 +301,7 @@ server.py ◄── memory-maps the arrays of the turn current.json names ◄─
   = passive visibility). Ids are never reused. The turn-0 nations and their capitals come from the
   population file's nation seed, which `init` requires; `init` makes one segment per populated tile,
   each under its own chieftain, with the one on the nation's capital as its root leader and the rest
-  reporting to them. Segments don't move yet. Each turn the engine recomputes ownership (first come,
+  reporting to them. Each turn the engine recomputes ownership (first come,
   first served, claimed only by segments that aren't moving: the first nation with such a segment on a
   tile owns it until it has none there) and active visibility (tiles where the nation's segments have
   people, plus the 8 around each). A
@@ -511,7 +527,8 @@ delete the top-level `state/` folder and run `init` again.
 python ../control/control.py         # then open http://localhost:8001/ and press Commit Turn
 ```
 
-Each commit runs `engine.py step` once, exactly as above.
+Each commit runs `engine.py step` once, exactly as above, after saving any move commands given on the
+page.
 
 **After changing the starting scenario**
 

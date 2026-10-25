@@ -45,6 +45,19 @@
   .bar.short i { background: var(--error); }
   td.short { color: var(--error); }
   .summary .short { color: var(--error); }
+  #leaders td { vertical-align: top; }
+  #leaders td.command { white-space: normal; text-align: left; }
+  #leaders th.command { text-align: left; }
+  #leaders .root { color: var(--accent); font-size: 11px; margin-left: 6px; text-transform: uppercase; letter-spacing: 0.05em; }
+  button.small { padding: 3px 10px; border: 1px solid var(--panel-border); border-radius: 6px; background: #1b2130; color: var(--text); font: inherit; font-size: 12px; cursor: pointer; }
+  button.small:hover:not(:disabled) { border-color: var(--accent); }
+  button.small:disabled { opacity: 0.4; cursor: default; }
+  button.small.on { background: var(--accent); color: #000; border-color: var(--accent); }
+  tr.moves td { background: rgba(255, 211, 77, 0.04); white-space: normal; text-align: left; }
+  .options { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 6px; margin: 4px 0; }
+  .options button { text-align: left; padding: 6px 9px; line-height: 1.35; }
+  .options .dir { font-weight: 600; display: inline-block; min-width: 2.2em; }
+  .options .about { color: var(--muted); display: block; font-size: 11px; }
 </style>
 </head>
 <body>
@@ -60,6 +73,10 @@
     <div id="phase"></div>
     <button id="commit" disabled>Commit Turn</button>
     <div id="message"></div>
+  </div>
+  <div class="panel">
+    <h1>Leaders <small id="leadersNote"></small></h1>
+    <div id="leaders"><div class="none">Choose a nation to see its leaders.</div></div>
   </div>
   <div class="panel">
     <h1>Production and consumption <small id="productionWhen"></small></h1>
@@ -104,7 +121,7 @@
     if (status.turn !== null && status.turn !== shownTurn) {
       shownTurn = status.turn;
       loadNations().then(loadReports);
-    }
+    } else if (status.phase !== leadersPhase) renderLeaders();   // commands open or close
   }
 
   async function poll() {
@@ -168,7 +185,126 @@
   }
 
   nationSelect.addEventListener("change", () => { choose(nationSelect.value); loadReports(); });
-  function loadReports() { loadProduction(); loadDeaths(); }
+  function loadReports() { loadLeaders(); loadProduction(); loadDeaths(); }
+
+  // ---------- leaders and their commands ----------
+  // The nation's leaders, root (the player) first. Each can be told to move their segment to a
+  // neighbouring tile: "Move" lists the tiles it can go to, and choosing one saves the command as the
+  // nation's orders for this turn. The engine carries it out when the turn is committed.
+  const leadersEl = document.getElementById("leaders");
+  const leadersNote = document.getElementById("leadersNote");
+  const DIRS = { n: "N", ne: "NE", e: "E", se: "SE", s: "S", sw: "SW", w: "W", nw: "NW", on: "On", back: "Back" };
+  let leaderList = null, leadersPhase = null, openMoves = null, moveOptions = null;   // openMoves: leader id
+
+  async function loadLeaders() {
+    if (nationId === null) {
+      leaderList = null;
+      leadersNote.textContent = "";
+      leadersEl.innerHTML = '<div class="none">Choose a nation to see its leaders.</div>';
+      return;
+    }
+    const id = nationId;
+    let body;
+    try {
+      body = await (await fetch(`/api/nation/${id}/leaders`)).json();
+    } catch { return; }
+    if (id !== nationId || body.error) return;
+    if (leaderList && leaderList.turn !== body.turn) openMoves = null;
+    leaderList = body;
+    renderLeaders();
+  }
+
+  const canOrder = () => lastStatus.phase === "orders" && !committing && leaderList && leaderList.turn === lastStatus.turn;
+
+  function commandText(c) {
+    if (!c) return '<span class="none">None</span>';
+    if (c.type === "move") return `Move to ${esc(c.to)}`;
+    return esc(c.type);
+  }
+
+  function renderLeaders() {
+    leadersPhase = lastStatus.phase;
+    if (!leaderList) return;
+    const L = leaderList.leaders, open = canOrder();
+    leadersNote.textContent = `(${L.length} leader${L.length === 1 ? "" : "s"}, turn ${leaderList.turn})`;
+    if (!L.length) {
+      leadersEl.innerHTML = `<div class="none">${esc(leaderList.nation.name)} has no leaders.</div>`;
+      return;
+    }
+    const where = l => l.moving
+      ? `${esc(l.tile)}<span class="tile">${esc(l.at)} → ${esc(l.toward)}, ${num(100 * l.progress)}%${
+          l.destination !== l.toward ? `, then ${esc(l.destination)}` : ""}</span>`
+      : esc(l.tile);
+    leadersEl.innerHTML = `
+      <div class="table-wrap"><table>
+        <thead><tr><th>Leader</th><th>Type</th><th>Tile</th><th>People</th><th class="command">Command this turn</th><th></th></tr></thead>
+        <tbody>${L.map(l => `
+          <tr>
+            <td>${esc(l.name)}${l.root ? '<span class="root">you</span>' : ""}</td>
+            <td>${esc(l.type)}</td><td>${where(l)}</td><td>${num(l.people)}</td>
+            <td class="command">${commandText(l.command)}
+              ${l.command ? `<button class="small" data-cancel="${l.id}" ${open ? "" : "disabled"}>Cancel</button>` : ""}</td>
+            <td><button class="small${openMoves === l.id ? " on" : ""}" data-move="${l.id}" ${open ? "" : "disabled"}>Move</button></td>
+          </tr>
+          ${openMoves === l.id ? `<tr class="moves"><td colspan="6">${movesHtml(l)}</td></tr>` : ""}`).join("")}
+        </tbody>
+      </table></div>`;
+  }
+
+  function movesHtml(l) {
+    if (!moveOptions || moveOptions.leader.id !== l.id) return '<span class="none">Loading…</span>';
+    const m = moveOptions;
+    const intro = m.moving
+      ? `${esc(l.name)} is ${num(100 * m.progress)}% of the way from ${esc(m.from)} to ${esc(m.toward)}. They will
+         finish that step or walk back, whichever makes the way shorter. Move to:`
+      : `Move ${esc(l.name)} from ${esc(m.from)} to:`;
+    return `${intro}<div class="options">${m.options.map(o => {
+      const about = [m.moving ? `${num(o.km)} km${o.via ? ` via ${o.via}` : ""}` : null, `${o.land}% land`, o.cover, o.river ? "river" : null, o.owner ? `owned by ${o.owner}` : null,
+                     o.people > 0 ? `${num(o.people)} people` : null].filter(Boolean).join(", ");
+      const chosen = l.command && l.command.type === "move" && l.command.to === o.tile;
+      return `<button class="small${chosen ? " on" : ""}" data-to="${esc(o.tile)}" data-leader="${l.id}"
+        ${o.walkable ? "" : 'disabled title="All water: crossing it will need boats"'}>
+        <span class="dir">${DIRS[o.direction] ?? esc(o.direction)}</span> ${esc(o.tile)}<span class="about">${esc(about)}</span></button>`;
+    }).join("")}</div>`;
+  }
+
+  async function giveOrder(leader, command) {
+    try {
+      const r = await fetch(`/api/nation/${nationId}/orders`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ turn: leaderList.turn, leader, command }),
+      });
+      const body = await r.json();
+      if (!r.ok) { show(body.error, true); return; }
+      show(command ? `Saved: ${leaderList.leaders.find(l => l.id === leader).name} will move to ${command.to} when the turn is committed.`
+                   : "Command cancelled.");
+    } catch {
+      show("Couldn't reach the control server.", true);
+      return;
+    }
+    openMoves = null;
+    await loadLeaders();
+  }
+
+  leadersEl.addEventListener("click", async e => {
+    const b = e.target.closest("button");
+    if (!b || b.disabled) return;
+    if (b.dataset.move) {
+      const id = Number(b.dataset.move);
+      if (openMoves === id) { openMoves = null; renderLeaders(); return; }
+      openMoves = id;
+      moveOptions = null;
+      renderLeaders();
+      try {
+        const body = await (await fetch(`/api/leader/${id}/moves`)).json();
+        if (openMoves === id && !body.error) { moveOptions = body; renderLeaders(); }
+      } catch {}
+    } else if (b.dataset.to) {
+      giveOrder(Number(b.dataset.leader), { type: "move", to: b.dataset.to });
+    } else if (b.dataset.cancel) {
+      giveOrder(Number(b.dataset.cancel), null);
+    }
+  });
 
   // ---------- production and consumption ----------
   // What each of the nation's segments (the people directly under one leader) made and consumed in the

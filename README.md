@@ -19,7 +19,7 @@ two neighbouring tiles.
 |------|------------|
 | `server/` | The globe viewer: `server.py` (Python HTTP server), `static/index.html` (Three.js page), the shared tile grid (`grid.py`), the cohort-state reader/writer (`cohort_state.py`), data converters and generators, and the JSON data and globe images the server loads. |
 | `engine/` | `engine.py`, the turn engine. It runs as its own process and writes the game state to `state/`. |
-| `control/` | The player's control page, served separately from the viewer: `control.py` (Python HTTP server) and `static/index.html`. For now it has only a **Commit Turn** button, which advances the engine one turn. |
+| `control/` | The player's control page, served separately from the viewer: `control.py` (Python HTTP server) and `static/index.html`. It lists the nation's leaders, each of whom can be ordered to move, and has a **Commit Turn** button, which advances the engine one turn. |
 | `deploy/` | How the public server at `capita.leeswecho.net` is set up: systemd services for both servers, and the Caddy config that serves them over HTTPS. |
 | `state/` | The game state, one directory per turn. The engine generates it and it isn't committed. |
 | `reference/` | Documentation, plus the full-size YAML source data (`world_map.yaml`, `world_population.yaml`, `world_population_capitals.yaml`). |
@@ -55,8 +55,10 @@ To play turns from a browser instead, start the control server (from the reposit
 python control/control.py             # then open http://localhost:8001/
 ```
 
-First choose the nation you're playing (or open `http://localhost:8001/?nation=AUS`). **Commit Turn**
-means the player has entered all their commands for the turn. It runs `engine.py step` as its own
+First choose the nation you're playing (or open `http://localhost:8001/?nation=AUS`). The page lists
+the nation's leaders. **Move** next to a leader lists the tiles around their segment, and choosing one
+saves a move command in the turn's orders (`state/orders/`). You can change or cancel it until you
+commit. **Commit Turn** means the player has entered all their commands for the turn. It runs `engine.py step` as its own
 process, and the viewer on port 8000 shows the new turn by itself. The control page and the viewer are
 kept separate on purpose for now. Below it, the page lists the food each of the nation's segments
 produced in the past year, how much of its people's need that met, and how many people died of each
@@ -92,8 +94,10 @@ engine.py init / step ─────────────┘
   checksum. Turns are written atomically and never changed afterwards, so the server can read one turn
   while the engine writes the next.
 - **Current turn rules** (placeholders): turn 0 has one segment per populated tile, each under its
-  own chieftain, reporting to the chieftain on the nation's capital. Segments don't move yet, and
-  there are no commands yet. Each segment's people forage for food (kcal), with returns that level off
+  own chieftain, reporting to the chieftain on the nation's capital. A move command sends a
+  segment to a neighbouring tile that isn't all water, on foot, at a pace set by its people's free
+  hours (`engine/movement.json`). That is thousands of kilometres a year, so a one-tile move finishes
+  within the turn. The segment then lives the year where it ends up. Each segment's people forage for food (kcal), with returns that level off
   at what their tile's terrain can sustain, shared among the segments there. People eat according to
   their age, everyone in a segment eating less when it hasn't enough, and food that isn't eaten decays
   completely. The rules and their
@@ -130,7 +134,7 @@ All in `reference/`:
 - [ARCHITECTURE.md](reference/ARCHITECTURE.md): how the server, page and engine work, the HTTP API,
   workflows, and limits.
 - [cohort_state_schema.md](reference/cohort_state_schema.md): the game-state format
-  (`capita/cohort-state-7`), written so an engine in any language can produce it.
+  (`capita/cohort-state-8`), written so an engine in any language can produce it.
 - [world_map_schema.md](reference/world_map_schema.md): the `world_map.yaml` and `world_map.json`
   formats, tile ids, grid order and guaranteed properties.
 - [world_map_generation.md](reference/world_map_generation.md): how the map was built, including

@@ -93,6 +93,16 @@ def centre(index):
     return 90 - (r + 0.5) * TILE, (c + 0.5) * TILE - 180
 
 
+def distance_km(a, b):
+    """Great-circle distance between the centres of the tiles at flat indices a and b (numbers or NumPy
+    arrays), in km."""
+    import numpy as np
+    lat0, lon0 = (np.radians(x) for x in centre(a))
+    lat1, lon1 = (np.radians(x) for x in centre(b))
+    h = np.sin((lat1 - lat0) / 2) ** 2 + np.cos(lat0) * np.cos(lat1) * np.sin((lon1 - lon0) / 2) ** 2
+    return 2 * EARTH_RADIUS_KM * np.arcsin(np.sqrt(np.clip(h, 0, 1)))
+
+
 def fmt(v):
     """Coordinate as YAML text: always one decimal place (39.5, -105.0)."""
     return f'{v:.1f}'

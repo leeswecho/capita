@@ -16,6 +16,8 @@ Layout (see reference/cohort_state_schema.md for the full, language-neutral spec
         at.npy                <u4 [S]          the tile the segment is at, or is leaving
         toward.npy            <u4 [S]          the neighbouring tile it is moving toward; equal to at when it isn't moving
         progress.npy          <f8 [S]          how far it has gone from at to toward, 0 <= progress < 1 (0 when not moving)
+        destination.npy       <u4 [S]          where its move ends: toward, or a neighbour of toward to go on to
+                              once there; equal to at when it isn't moving
         people.npy            <f8 [S, 101]     people by single year of age; column 100 is "100 and over"
         hours.npy             <f4 [S, 101, A]  mean hours per person per day spent on each activity
         owner.npy             <u2 [259200]     nation id that owns each tile of the whole grid (0 = nobody)
@@ -53,11 +55,11 @@ import numpy as np
 
 import grid
 
-FORMAT = "capita/cohort-state-7"
+FORMAT = "capita/cohort-state-8"
 AGES = 101                      # ages 0..99, then 100 = "100 and over"
 HOURS_UNIT = "mean hours per person per day, averaged over the year"
 BITS_BYTES = (grid.COUNT + 7) // 8          # one visibility row: 259,200 tiles -> 32,400 bytes
-DTYPES = {"leader": "<u4", "tile": "<u4", "at": "<u4", "toward": "<u4", "progress": "<f8",
+DTYPES = {"leader": "<u4", "tile": "<u4", "at": "<u4", "toward": "<u4", "progress": "<f8", "destination": "<u4",
           "people": "<f8", "hours": "<f4", "owner": "<u2", "visible": "<u1", "explored": "<u1",
           "production": "<f8", "labor": "<f8", "production_max": "<f8", "need": "<f8", "consumed": "<f8",
           "decay": "<f4", "stock": "<f8", "deaths": "<f8"}
@@ -109,13 +111,14 @@ def segment_latlon(at, toward, progress):
 class State:
     """Everything in one turn. The engine builds one, write_turn() saves it, Turn reads it back."""
 
-    def __init__(self, leaders, at, toward, progress, people, hours, activities, owner, nations, visible, explored,
-                 products, economy, causes, deaths, leader_types, next_leader_id):
+    def __init__(self, leaders, at, toward, progress, destination, people, hours, activities, owner, nations, visible,
+                 explored, products, economy, causes, deaths, leader_types, next_leader_id):
         """leaders: one record per row (LEADER_KEYS), ids increasing; at/toward/progress: each segment's
-        position; products: [{"name": "food", "unit": "kcal"}, ...]; economy: {name: array [S, P]} for each
+        position; destination: where its move ends; products: [{"name": "food", "unit": "kcal"}, ...]; economy: {name: array [S, P]} for each
         name in ECONOMY, with columns in products order; causes: names of the causes of death; deaths:
         [S, C]; leader_types: the names a leader's type can take; next_leader_id: the next id to hand out."""
         self.leaders, self.at, self.toward, self.progress = leaders, at, toward, progress
+        self.destination = destination
         self.people, self.hours, self.owner = people, hours, owner
         self.visible, self.explored = visible, explored
         self.activities, self.nations, self.products = list(activities), nations, list(products)
@@ -151,7 +154,7 @@ class State:
         for k, a in self.arrays().items():
             if a.dtype != np.dtype(DTYPES[k]):
                 raise ValueError(f"{k} must be {DTYPES[k]}, got {a.dtype}")
-        shapes = {k: (n,) for k in ("leader", "tile", "at", "toward", "progress")}
+        shapes = {k: (n,) for k in ("leader", "tile", "at", "toward", "progress", "destination")}
         shapes.update({"people": (n, AGES), "hours": (n, AGES, len(self.activities)), "owner": (grid.COUNT,),
                        "visible": (m, BITS_BYTES), "explored": (m, BITS_BYTES)})
         shapes.update({k: (n, len(self.products)) for k in ECONOMY})
@@ -225,9 +228,10 @@ class State:
 
     def validate_positions(self):
         """Tiles are on the grid; a moving segment heads for a neighbouring tile and is partway there;
-        a segment that isn't moving has progress 0."""
-        if len(self.at) and max(int(self.at.max()), int(self.toward.max())) >= grid.COUNT:
-            raise ValueError("at and toward must be tile indices")
+        a segment that isn't moving has progress 0 and no destination; a destination is toward or one of
+        its neighbours."""
+        if len(self.at) and max(int(self.at.max()), int(self.toward.max()), int(self.destination.max())) >= grid.COUNT:
+            raise ValueError("at, toward and destination must be tile indices")
         moving = self.at != self.toward
         if np.any(self.progress[~moving] != 0):
             raise ValueError("a segment that isn't moving (toward = at) must have progress 0")
@@ -235,6 +239,11 @@ class State:
             raise ValueError("progress must be at least 0 and below 1")
         if not np.all(grid.adjacent(self.at[moving], self.toward[moving])):
             raise ValueError("a moving segment's toward must be a neighbour of its at")
+        if np.any(self.destination[~moving] != self.at[~moving]):
+            raise ValueError("a segment that isn't moving must have destination = at")
+        last = self.destination == self.toward
+        if not np.all(last | grid.adjacent(self.toward, self.destination)):
+            raise ValueError("a destination must be toward or a neighbour of toward")
 
 
 def _retry(fn, tries: int = 20, wait: float = 0.025):
@@ -344,11 +353,13 @@ class Turn(State):
         big = ("people", "hours", "visible", "explored")   # mapped when mmap=True; the rest are read in full
         a = {k: np.load(os.path.join(self.path, f"{k}.npy"), mmap_mode="r" if mmap and k in big else None)
              for k in ARRAYS}
-        super().__init__(leaders, a["at"], a["toward"], a["progress"], a["people"], a["hours"], m["activities"],
+        super().__init__(leaders, a["at"], a["toward"], a["progress"], a["destination"], a["people"], a["hours"],
+                         m["activities"],
                          a["owner"], nations, a["visible"], a["explored"], m["products"], {k: a[k] for k in ECONOMY},
                          m["causes"], a["deaths"], m["leader_types"], m["next_leader_id"])
         n = len(leaders)
-        if any(len(a[k]) != n for k in ("leader", "tile", "at", "toward", "progress", "people", "hours", "deaths")) or \
+        if any(len(a[k]) != n for k in ("leader", "tile", "at", "toward", "progress", "destination", "people", "hours",
+                                        "deaths")) or \
                 len(self.visible) != len(nations) + 1 or any(a[k].shape != (n, len(self.products)) for k in ECONOMY) or \
                 a["deaths"].shape != (n, len(self.causes)):
             raise ValueError(f"{dir_name}: array sizes don't match the manifest")

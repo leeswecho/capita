@@ -18,8 +18,15 @@ shaped by age (starting_hours()). It also creates the nations (make_nations()): 
 leader leads the segment on its capital, and the nation's other leaders report to them. Then the
 starting visibility.
 
-`step` advances one year per turn. Each segment lives the year on the tile it counts as being in
-(cohort_state.segment_tile()). Segments don't move yet. For now the rules are:
+`step` advances one year per turn. For now the rules are:
+- Orders: the players' commands for the turn (server/orders.py, written by the control server) are
+  checked again and applied (apply_orders()). A move sends a leader's segment toward a neighbouring
+  tile; given to a segment already between two tiles, it first finishes that step or walks back,
+  whichever makes the whole way shorter.
+- Movement (move_segments()): every moving segment covers a distance set by its people's travel hours
+  and the pace in movement.json, along the rest of its step and then the step on to its destination,
+  and arrives, stopping there, if that is enough; otherwise it is left partway and goes on next turn. Each segment then lives the year on the tile it counts as being in
+  (cohort_state.segment_tile()) where it ends up.
 - Production, from the year's people and activity hours before they age (produce()): foraging turns
   the year's subsistence hours into food (kcal), saturating at what the tile's land cover, landform,
   climate, water and rivers can sustain (foraging_max()). Segments on the same tile share that limit,
@@ -75,12 +82,14 @@ sys.path.insert(0, SERVER)   # cohort_state.py and grid.py live with the server,
 import cohort_state as cs  # noqa: E402
 import grid  # noqa: E402
 from cohort_state import AGES  # noqa: E402
+import orders  # noqa: E402
 from convert_map import read_map  # noqa: E402
 
 KEEP_TURNS = 3
 RULES = os.path.join(HERE, "economy.json")
 DEMOGRAPHY = os.path.join(HERE, "demography.json")
 LEADERS = os.path.join(HERE, "leaders.json")
+MOVEMENT = os.path.join(HERE, "movement.json")
 MAP = os.path.join(SERVER, "world_map.json")
 
 # Placeholder activities. Replace with the real list; the state files carry the names, so readers adapt.
@@ -191,6 +200,79 @@ def make_leaders(tiles, nation, people, nations, start_type):
         leaders.append({"id": r + 1, "name": f"{title} of {place}", "type": start_type, "nation": k,
                         "parent": 0 if root is None or root == r else root + 1, "founded_turn": 0})
     return leaders
+
+
+def load_movement(path=MOVEMENT):
+    """movement.json: {"km_per_hour": ..., "not_travel_activities": [...]}."""
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def movement_extra(rules):
+    return {"movement_rules_source": os.path.relpath(MOVEMENT, REPO).replace(os.sep, "/"), "movement_rules": rules}
+
+
+def apply_orders(state, commands, can_walk):
+    """Apply the turn's commands to the segments' positions.
+
+    commands: [(nation id, command)] (orders.read_turn()). Each is checked again (orders.check()) against
+    the turn they were given for; invalid ones are skipped. A move sets where the segment is heading
+    (orders.plan_move()): a standing segment steps straight to the named neighbour; a moving one first
+    finishes its step or walks back, whichever makes the whole way shorter. Returns (at, toward,
+    progress, destination, applied, rejected): new position arrays and the commands, the rejected ones
+    with a "reason".
+    """
+    at, toward, progress = state.at.copy(), state.toward.copy(), state.progress.copy()
+    destination = state.destination.copy()
+    rows = state.row_of()
+    applied, rejected = [], []
+    for nation, c in commands:
+        why = orders.check(state, rows, nation, c, can_walk)
+        if why:
+            rejected.append({"nation": nation, **(c if isinstance(c, dict) else {"command": c}), "reason": why})
+            continue
+        r = rows[c["leader"]]
+        plan = orders.plan_move(state.at[r], state.toward[r], state.progress[r], orders.tile_index(c["to"]))
+        at[r], toward[r], progress[r], destination[r] = plan["at"], plan["toward"], plan["progress"], plan["destination"]
+        applied.append({"nation": nation, **c})
+    return at, toward, progress, destination, applied, rejected
+
+
+def travel_km(people, hours, activities, rules):
+    """How far each segment can travel in a year, float64 [S] km: km_per_hour x 365 x its travel hours a
+    day, the people-weighted mean over ages of the hours not spent on not_travel_activities. A segment
+    with nobody in it doesn't move."""
+    missing = [a for a in rules["not_travel_activities"] if a not in activities]
+    if missing:
+        sys.exit(f"movement.json's not_travel_activities {missing} aren't activities of the state: {activities}")
+    busy = np.zeros(people.shape)
+    for a in rules["not_travel_activities"]:
+        busy = busy + hours[:, :, activities.index(a)]
+    free = np.clip(24 - busy, 0, 24)
+    total = people.sum(axis=1)
+    per_day = np.divide((people * free).sum(axis=1), total, out=np.zeros(len(people)), where=total > 0)
+    return per_day * 365 * rules["km_per_hour"]
+
+
+def move_segments(at, toward, progress, destination, km):
+    """A year of movement. Each moving segment travels km [S] along its way: the rest of its step from at
+    to toward, then, if its destination is beyond toward, the step on to it. If it reaches its destination
+    it stops there for the rest of the year; otherwise it is left partway along a step. Returns (at,
+    toward, progress, destination) and how many segments arrived."""
+    left = np.asarray(km, dtype=np.float64).copy()
+    arrived = np.zeros(len(at), dtype=bool)
+    for _ in range(2):   # the step under way, then at most one more
+        moving = at != toward
+        leg = grid.distance_km(at, toward)
+        rest = (1 - progress) * leg                       # km to toward
+        reach = moving & (left >= rest)
+        p = np.divide(left, leg, out=np.zeros(len(left)), where=moving & (leg > 0))
+        progress = np.where(moving & ~reach, progress + p, np.where(reach, 0.0, progress))
+        left = np.where(reach, left - rest, np.where(moving, 0.0, left))
+        at = np.where(reach, toward, at).astype(at.dtype)
+        toward = np.where(reach, destination, toward).astype(toward.dtype)
+        arrived |= reach & (at == destination)
+    return at, toward, progress, destination, int(arrived.sum())
 
 
 def update_ownership(prev_owner, tiles, nation, people, stationary):
@@ -528,7 +610,8 @@ def init(args):
                "production_max": production_max(tiles, [p["name"] for p in products], rules, read_map(MAP)),
                "decay": economy_modifiers(len(tiles), rules)}
     demo = load_demography()
-    state = cs.State(leaders, tiles, tiles.copy(), np.zeros(len(tiles)), people, hours, ACTIVITIES, tile_owner,
+    state = cs.State(leaders, tiles, tiles.copy(), np.zeros(len(tiles)), tiles.copy(), people, hours, ACTIVITIES,
+                     tile_owner,
                      nations, visible, visible.copy(), products, economy, CAUSES, np.zeros((len(tiles), len(CAUSES))),
                      leader_types(lrules), len(leaders) + 1)
     extra = {"initial_population_source": os.path.basename(args.population),
@@ -574,10 +657,16 @@ def step(args):
             if leader_types(lrules) != cur.leader_types:
                 sys.exit(f"leaders.json's types {leader_types(lrules)} don't match the state's {cur.leader_types}; "
                          "start a new state to change them")
-            # Segments don't move yet: each lives the year on the tile it counts as being in.
-            tiles = cur.tile
-            # Production: the year that is ending, so this turn's people and hours, before they age.
+            # Orders, then movement: each segment lives the year on the tile it counts as being in
+            # where it ends up.
             world = read_map(MAP)
+            mrules = load_movement()
+            commands = orders.read_turn(args.state, cur.turn)
+            at, toward, progress, destination, applied, rejected = apply_orders(cur, commands, orders.walkable(world))
+            at, toward, progress, destination, arrived = move_segments(
+                at, toward, progress, destination, travel_km(cur.people, cur.hours, cur.activities, mrules))
+            tiles = cs.segment_tile(at, toward, progress)
+            # Production: the year that is ending, so this turn's people and hours, before they age.
             prod_max = production_max(tiles, names, rules, world)
             production, labor = produce(cur.people, cur.hours, cur.activities, tiles, prod_max, names, rules)
             held = cur.stock + production
@@ -596,15 +685,16 @@ def step(args):
 
             people, hours = age_one_year(survivors), cur.hours
             people[:, 0] = born_alive
-            tile_owner = update_ownership(cur.owner, tiles, cur.nation, people, cur.at == cur.toward)
+            tile_owner = update_ownership(cur.owner, tiles, cur.nation, people, at == toward)
             visible = active_visibility(tiles, cur.nation, people, len(cur.nations) + 1)
-            state = cs.State(cur.leaders, cur.at, cur.toward, cur.progress, people, hours, cur.activities,
+            state = cs.State(cur.leaders, at, toward, progress, destination, people, hours, cur.activities,
                              tile_owner, cur.nations, visible, cur.explored | visible, products, economy, CAUSES,
                              deaths, cur.leader_types, cur.next_leader_id)
             extra = {k: v for k, v in cur.manifest.items() if k.startswith("initial_")}
             m = cs.write_turn(args.state, cur.turn + 1, state,
                               extra={**extra, **economy_extra(rules), **demography_extra(demo),
-                                     **leaders_extra(lrules)})
+                                     **leaders_extra(lrules), **movement_extra(mrules),
+                                     "orders": {"turn": cur.turn, "applied": applied, "rejected": rejected}})
         except BaseException:
             cs.write_phase(args.state, ptr["turn"], cs.ORDERS)   # no new turn was written; reopen this one
             raise
@@ -615,10 +705,16 @@ def step(args):
                           f"({np.count_nonzero(consumed[:, i] < need[:, i] * (1 - 1e-9))} segments short)"
                           for i, p in enumerate(products) if need[:, i].sum() > 0)
         died = ", ".join(f"{c} {deaths[:, k].sum():,.1f}" for k, c in enumerate(CAUSES))
+        for c in rejected:
+            print(f"turn {m['turn'] - 1}: rejected nation {c['nation']}'s command {json.dumps({k: v for k, v in c.items() if k not in ('nation', 'reason')})}: {c['reason']}")
+        print(f"turn {m['turn'] - 1}: {len(applied)} commands applied, {len(rejected)} rejected; "
+              f"{int(np.count_nonzero(at != toward))} segments moving, {arrived} arrived")
         print(f"turn {m['turn']}: {m['total_people']:,.1f} people ({born.sum():,.1f} born, {deaths.sum():,.1f} died: "
               f"{died}), made {made}; {short}; "
               f"checksum {m['checksum']['value'][:12]}")
     gone = cs.prune(args.state, keep=KEEP_TURNS)
+    cur = cs.read_current(args.state)
+    gone += [f"orders/{n}" for n in orders.prune(args.state, cur["turn"] - KEEP_TURNS + 1)]
     if gone:
         print(f"pruned {', '.join(gone)}")
 

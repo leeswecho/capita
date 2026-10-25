@@ -1,4 +1,4 @@
-# Game state format (`capita/cohort-state-7`)
+# Game state format (`capita/cohort-state-8`)
 
 People belong to **segments**. A segment is the people directly under one **leader**: a leader marshals
 their segment toward some purpose, whether as a band, a town, an army or a settling party. Leaders form
@@ -20,7 +20,8 @@ version 3 added tile ownership (`owner.npy`); version 4 added products and produ
 added consumption (`need.npy`, `consumed.npy`); version 6 added deaths (`deaths.npy`, and `causes` in
 the manifest); version 7 made rows segments instead of tiles (`leaders.json`, `leader.npy`, `tile.npy`,
 `at.npy`, `toward.npy`, `progress.npy`, and `leader_types` and `next_leader_id` in the manifest, replacing
-`tiles.npy` and `nation.npy`; nations gained `leader`). Older states can't be read; delete the state
+`tiles.npy` and `nation.npy`; nations gained `leader`); version 8 added `destination.npy`, so a move
+can take a segment one step past the tile it is heading for. Older states can't be read; delete the state
 folder and run `engine.py init` again.
 
 ## Directory layout
@@ -29,6 +30,7 @@ folder and run `engine.py init` again.
 state/
   current.json          pointer to the current turn
   phase.json            the current turn's phase: accepting commands, or resolving
+  orders/               the players' commands, by turn (not part of the turns; see "Orders" below)
   turn_00007/           one directory per turn; never changed once current.json has named it
     manifest.json
     nations.json
@@ -38,6 +40,7 @@ state/
     at.npy
     toward.npy
     progress.npy
+    destination.npy
     people.npy
     hours.npy
     owner.npy
@@ -60,7 +63,7 @@ Turn directories are named `turn_` + the turn number as 5 digits, zero-padded.
 ## `current.json`
 
 ```json
-{ "format": "capita/cohort-state-7", "turn": 7, "dir": "turn_00007" }
+{ "format": "capita/cohort-state-8", "turn": 7, "dir": "turn_00007" }
 ```
 
 Readers open the directory named by `dir`. Writers replace this file atomically: write
@@ -69,7 +72,7 @@ Readers open the directory named by `dir`. Writers replace this file atomically:
 ## `phase.json`
 
 ```json
-{ "format": "capita/cohort-state-7", "turn": 7, "phase": "resolving", "since": "2026-10-21T20:28:13Z" }
+{ "format": "capita/cohort-state-8", "turn": 7, "phase": "resolving", "since": "2026-10-21T20:28:13Z" }
 ```
 
 Each turn goes through two phases:
@@ -106,6 +109,7 @@ is the number of products. A tile is named by its flat grid index: `row * 720 + 
 | `at.npy` | `<u4` (uint32) | `[S]` | The tile the segment is at, or is leaving. |
 | `toward.npy` | `<u4` (uint32) | `[S]` | The tile it is moving toward, one of the 8 neighbours of `at`; **equal to `at` when it isn't moving**. |
 | `progress.npy` | `<f8` (float64) | `[S]` | How far it has gone from the centre of `at` to the centre of `toward`, as a share of that distance: at least 0 and below 1, and 0 when it isn't moving. |
+| `destination.npy` | `<u4` (uint32) | `[S]` | Where its move ends: `toward`, or one of the 8 neighbours of `toward`, which it goes on to once it gets there. **Equal to `at` when it isn't moving.** |
 | `people.npy` | `<f8` (float64) | `[S, 101]` | People in the segment by single year of age. Column `a` holds age `a` for `a` = 0..99; **column 100 is "100 and over"**. Fractions are allowed and are rounded only for display. |
 | `hours.npy` | `<f4` (float32) | `[S, 101, A]` | For each segment, age and activity: the mean hours per person per day spent on that activity, averaged over the year. Activities are in `manifest.activities` order. They needn't sum to 24; any remainder is unassigned time. |
 | `owner.npy` | `<u2` (uint16) | `[259200]` | The id of the nation that **owns** each tile of the whole grid (flat index), 0 = nobody. Ownership belongs to tiles, not segments, and nations can own tiles nobody is on. |
@@ -217,7 +221,7 @@ Every record has exactly these keys.
 
 ```json
 {
-  "format": "capita/cohort-state-7",
+  "format": "capita/cohort-state-8",
   "turn": 7,
   "grid": { "tile_size_degrees": 0.5, "width": 720, "height": 360 },
   "ages": { "count": 101, "last_is_open_ended": true },
@@ -234,6 +238,7 @@ Every record has exactly these keys.
     "at":       { "file": "at.npy",       "dtype": "<u4", "shape": [49910] },
     "toward":   { "file": "toward.npy",   "dtype": "<u4", "shape": [49910] },
     "progress": { "file": "progress.npy", "dtype": "<f8", "shape": [49910] },
+    "destination": { "file": "destination.npy", "dtype": "<u4", "shape": [49910] },
     "people":   { "file": "people.npy",   "dtype": "<f8", "shape": [49910, 101] },
     "hours":    { "file": "hours.npy",    "dtype": "<f4", "shape": [49910, 101, 4] },
     "owner":    { "file": "owner.npy",    "dtype": "<u2", "shape": [259200] },
@@ -260,20 +265,27 @@ Every record has exactly these keys.
   "demography_rules_source": "engine/demography.json",
   "demography_rules": { "births": { ... }, "deaths": { ... } },
   "leader_rules_source": "engine/leaders.json",
-  "leader_rules": { "types": { ... }, "start_type": "chieftain" }
+  "leader_rules": { "types": { ... }, "start_type": "chieftain" },
+  "movement_rules_source": "engine/movement.json",
+  "movement_rules": { "km_per_hour": 2.5, "not_travel_activities": ["sleep", "subsistence"] },
+  "orders": { "turn": 6, "applied": [ { "nation": 1, "leader": 37, "type": "move", "to": "S355E1495" } ],
+              "rejected": [ { "nation": 23, "leader": 31, "type": "move", "to": "N100E0100",
+                              "reason": "N100E0100 isn't next to N355E1395" } ] }
 }
 ```
 
 - `products` lists each product's `name` and `unit`, in the order of the product columns.
 - `economy_rules` is a copy of the rules the engine used to compute this turn's production and decay
   (`engine/economy.json` at the time), so a replay can tell whether they changed. `demography_rules`
-  is the same for births and deaths (`engine/demography.json`), and `leader_rules` for leaders
-  (`engine/leaders.json`).
+  is the same for births and deaths (`engine/demography.json`), `leader_rules` for leaders
+  (`engine/leaders.json`) and `movement_rules` for movement (`engine/movement.json`).
+- `orders` (every turn after 0) lists the commands of the previous turn that the engine applied to
+  compute this one, and those it rejected with the reason.
 - `leader_types` lists the types a leader can have; `next_leader_id` is the id the next new leader
   gets.
 - `causes` lists the causes of death, in the order of the `deaths.npy` columns.
 - `checksum.value` is the SHA-256 of the raw data bytes (not the `.npy` headers) of `leader`, `tile`,
-  `at`, `toward`, `progress`, `people`, `hours`, `owner`, `visible`, `explored`, `production`, `labor`,
+  `at`, `toward`, `progress`, `destination`, `people`, `hours`, `owner`, `visible`, `explored`, `production`, `labor`,
   `production_max`, `need`, `consumed`, `decay`, `stock` and `deaths`, in that order, followed by the
   `nations` list and then the `leaders` list, each as canonical JSON: sorted keys, no whitespace (`","`
   and `":"` separators), UTF-8. It shows whether a deterministic replay reproduced a turn exactly.
@@ -281,6 +293,26 @@ Every record has exactly these keys.
   are informational only and aren't part of the checksum.
 - Readers must check `format` and `grid`, and must ignore keys they don't know. Writers may add keys,
   such as `initial_population_source` and `initial_nations_source`.
+
+## Orders
+
+Players' commands are kept beside the turns, not in them, because a turn never changes once written.
+The control server writes them while a turn is in `orders`, one file per nation:
+
+```
+state/orders/turn_00007/nation_037.json
+{ "format": "capita/orders-1", "turn": 7, "nation": 37,
+  "commands": [ { "leader": 37, "type": "move", "to": "S355E1495" } ] }
+```
+
+At most one command per leader, in leader id order. The only type so far is `move`: the leader takes
+their segment to `to`, a tile id. A segment on a tile can go to any of its 8 neighbours that isn't all
+water (`water` 100 in `world_map.json`). One already moving from `at` (A) to `toward` (B) can go to A,
+B, or any neighbour of either that isn't all water: it first finishes the step to B or walks back to A,
+whichever makes the whole way to `to` shorter (finishing the step on a tie), then steps on to `to`.
+A writer checks every command against the turn it is for (`server/orders.py` `check()`),
+and so does the engine when it reads them, skipping any that fail. Old turns' orders may be deleted
+along with the turns.
 
 ## Writing a turn
 
@@ -295,8 +327,18 @@ Every record has exactly these keys.
 
 ## Turn rules (`engine/engine.py`, for now)
 
-One turn is one year. Each segment lives the year on the tile it counts as being in; segments don't
-move yet, and no commands exist yet to create, move or merge them. Each turn every surviving cohort
+One turn is one year. First the turn's orders are applied (`orders.plan_move()`). A `move` given to a
+standing segment sets `toward` and `destination` to the named neighbour. Given to a moving one, it sets
+`destination` to the named tile and either keeps the step under way or turns back (swapping `at` and
+`toward` and keeping `1 - progress`), whichever way is shorter, measuring the rest of the current step
+plus the step from its end to the destination. Then every moving segment travels `km`, which is
+`km_per_hour × 365 ×` its people-weighted mean of the hours a day not spent on `not_travel_activities`
+(`engine/movement.json`; a segment with nobody in it doesn't move). Distances are great circles between
+tile centres. When it reaches `toward`, it sets `at = toward` and `progress = 0`. If that tile is its
+`destination`, it has arrived and stops for the year; otherwise `toward = destination` and it carries
+on with what is left of `km`. Whatever step it is on when `km` runs out, it is left partway along. Each segment
+then lives the year on the tile it counts as being in where it ended up. There are no commands yet to
+create or merge segments. Each turn every surviving cohort
 moves up one year of age, and the 99-year-olds
 join the 100+ group. Age 0 holds the children born during the year who survived it (below). Activity
 hours belong to the age, not the cohort: people take on the hours of their new age, so that people

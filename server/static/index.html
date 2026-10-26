@@ -148,6 +148,7 @@
 <script type="module">
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { drawCamps } from "/camps.js";
 
 const EARTH_KM = 6371;
 // Landform (terrain) and what is on the land (cover): two independent sets of percentages per tile.
@@ -548,6 +549,7 @@ async function loadData() {
   scene.add(fogOverlay);
   scene.add(capitalMarker);
   scene.add(capitalStars);
+  scene.add(campGroup);
   await loadNations();
 
   // Ownership tint: one pixel per tile, between the heatmap and the fog.
@@ -561,6 +563,7 @@ async function loadData() {
   tintOverlay.renderOrder = 2.5;
   scene.add(tintOverlay);
   await loadOwners();
+  await loadCamps();
 }
 
 // ---------- live population updates ----------
@@ -865,6 +868,7 @@ async function onTurnChange(turn) {
   tileCache.clear();
   await loadNations();
   await loadOwners();
+  await loadCamps();
   const tid = pinnedTid || hoverTid;
   if (tid) { shownTid = null; showTile(tid); }
 }
@@ -960,10 +964,37 @@ async function setViewNation(id) {
     }
   }
   drawCapitalStars();
+  showCamps();
   const tid = pinnedTid || hoverTid;
   if (tid) { shownTid = null; showTile(tid); }
 }
 viewAs.addEventListener("change", () => setViewNation(+viewAs.value));
+
+// Camps: each nation's people on a tile, as tepees, or huts for a settled nation (/api/camps, drawn by
+// /camps.js as on the player page). Viewing as a nation, its own camps are ochre and others' rust red,
+// and only camps on tiles it can see now are shown; viewing as everyone, all are shown in ochre.
+const campGroup = new THREE.Group();
+let campList = [];
+async function loadCamps() {
+  try { campList = (await (await fetch("/api/camps")).json()).camps; } catch (e) { /* server restarting */ }
+  showCamps();
+}
+function campQuad(lat, lon, size) {   // a square `size` degrees of latitude across, flat on the surface
+  const k = 1 / Math.max(0.05, Math.cos(lat * Math.PI / 180)), h = size / 2, R = 1.0017;
+  const v = [latLonToVec(lat - h, lon - h * k, R), latLonToVec(lat - h, lon + h * k, R),
+             latLonToVec(lat + h, lon + h * k, R), latLonToVec(lat + h, lon - h * k, R)];
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(v.flatMap(p => [p.x, p.y, p.z]), 3));
+  g.setAttribute("uv", new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2));
+  g.setIndex([0, 1, 2, 0, 2, 3]);
+  return g;
+}
+function showCamps() {
+  for (const m of [...campGroup.children]) { campGroup.remove(m); m.geometry.dispose(); }
+  const shown = campList.filter(c => !fogBits || tileVisibility(c.tile) === "active")
+    .map(c => ({ ...c, own: !viewNation || c.nation?.id === viewNation }));
+  drawCamps(campGroup, shown, { tile: TILE, parseTileId, tileIndex, quad: campQuad, depthTest: true, renderOrder: 6.2 });
+}
 
 // People are fractional in the state; the panel always shows them rounded to whole people.
 const fmtPeople = n => fmtInt(n);

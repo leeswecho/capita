@@ -21,6 +21,7 @@ server/game.py, which the control server shares.
 
 Endpoints:
     /                      the player page (static/index.html)
+    /camps.js              the script that draws camps, shared with the developer view (server/static)
     /earth/<width>.jpg     the globe image at a size /api/meta lists
     /globe/<level>/<x>_<y>.jpg  a piece of the detail-tile pyramid (server/make_globe_tiles.py)
     /api/meta              the tile grid, the globe images and the detail-tile pyramid (JSON)
@@ -55,12 +56,13 @@ sys.path.insert(0, os.path.join(REPO, "server"))   # the shared modules live wit
 
 import numpy as np  # noqa: E402
 
+import camps as campsmod  # noqa: E402
 import cohort_state as cs  # noqa: E402
 import grid  # noqa: E402
 import names  # noqa: E402
 import orders  # noqa: E402
 from game import COUNTRIES, MAP, Game  # noqa: E402
-from server import GLOBE_TILES, ROOT as SERVER_DIR, find_textures  # noqa: E402
+from server import GLOBE_TILES, ROOT as SERVER_DIR, STATIC as SERVER_STATIC, find_textures  # noqa: E402
 
 DIRECTIONS = [d for d, _, _ in grid.DIRS]   # n, ne, e, se, s, sw, w, nw
 
@@ -91,14 +93,6 @@ def situation(t, r, rules) -> str:
     if t.at[r] != t.toward[r]:
         said.append(s["moving"])
     return " ".join(said)
-
-
-def tepees(people: float, rules) -> int:
-    """How many tepees a camp of `people` shows on the map (descriptions.json "camp"): `base` for
-    `base_people`, growing with the square root of the people, between `min` and `max`."""
-    c = rules["camp"]
-    n = round(c["base"] * (max(people, 0) / c["base_people"]) ** 0.5)
-    return int(min(c["max"], max(c["min"], n)))
 
 
 def foreign_size(people: float, rules) -> str:
@@ -242,16 +236,9 @@ class Player(Game):
         rows = np.flatnonzero(visible[t.tile])
         rows = sorted(rows.tolist(), key=lambda r: (t.leaders[r]["nation"] != nid, r))   # own first
         segments = [self.segment_json(t, r, nid, commands, rules) for r in rows]
-        people, settled = {}, set()
-        is_settled = orders.settled(t, t.manifest["leader_rules"])
-        for r in rows:
-            key = (int(t.tile[r]), t.leaders[r]["nation"])
-            people[key] = people.get(key, 0.0) + float(np.asarray(t.people[r]).sum())
-            if is_settled[r]:
-                settled.add(key)
-        camps = [{"tile": orders.tile_name(i), "nation": self.nation_ref(t, k) if k else None, "own": k == nid,
-                  "tepees": tepees(p, rules), "settled": (i, k) in settled}
-                 for (i, k), p in sorted(people.items()) if p > 0]
+        camps = [{**c, "tile": orders.tile_name(c["tile"]), "own": c["nation"] == nid,
+                  "nation": self.nation_ref(t, c["nation"]) if c["nation"] else None}
+                 for c in campsmod.camps(t, rows, rules["camp"])]
         root = t.nations[nid - 1]["leader"]
         rr = t.row_of().get(root)
         own = [r for r in rows if t.leaders[r]["nation"] == nid]
@@ -328,6 +315,8 @@ class Handler(BaseHTTPRequestHandler):
         p = self.player
         if path in ("/", "/index.html"):
             return self.send_file(os.path.join(STATIC, "index.html"), "text/html; charset=utf-8")
+        if path == "/camps.js":
+            return self.send_file(os.path.join(SERVER_STATIC, "camps.js"), "text/javascript; charset=utf-8")
         m = re.fullmatch(r"/earth/(\d+)\.jpg", path)
         if m:
             name = p.textures.get(int(m.group(1)))

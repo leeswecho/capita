@@ -59,6 +59,7 @@ The server does no rendering. It hands the browser compact data, and the browser
 | `../engine/visibility.json` | The visibility rules the engine reads on every step: how many tiles around its people a nation sees (1: the tile and the 8 around it). |
 | `orders.py` | The players' orders (`../state/orders/turn_NNNNN/nation_KKK.json`): reading and writing them, the command types (`move`, `found_kingdom`), and `check()`, the one validation used by both servers and the engine. |
 | `game.py` | What the control and player servers share: the current turn (memory-mapped), its phase, giving orders (under the state's lock, so never during a step) and Commit Turn (runs `engine.py step --expect-turn T` as its own process, so a commit for a turn that has already resolved doesn't advance the next one; 409 if another step is running). Nation names come from here too. |
+| `camps.py`, `static/camps.js` | Camps, shared by the player page and the developer view: `camps.py` adds up each nation's people on a tile and how many tepees or huts they show (`../player/descriptions.json` "camp"); `camps.js` draws them (the tepee and hut pictures and their seeded placement). |
 | `names.py` | The names players give their nations (`../state/names.json`), written by the player server under the state's lock and shown by every server. The engine never reads them. |
 | `../player/player.py`, `../player/static/index.html`, `../player/descriptions.json` | The player page (§4.7), a separate server on port 8000. It sends a player only what their nation knows. |
 | `../engine/leaders.json` | The leader types (chieftain, mayor, superintendent, admiral, general, king), each with its title, the commands it takes, the activity its segment feeds itself by and whether it is settled; what founding a kingdom does; and the type every turn-0 leader gets. |
@@ -545,8 +546,12 @@ paints a fog layer over the globe: unknown tiles dark, passive tiles dimmed, act
 clear, with the nation's capital outlined. "Everyone" removes the fog. The fog is only a view: the
 server still sends every tile's data, so it is not yet a real fog of war for players. Every nation's capital
 has a small gold star in its tile's upper-left corner (a placeholder marker, `drawCapitalStars()`);
-while viewing as a nation, stars on tiles that nation has never seen are hidden. Rivers are drawn
-above the fog. The list and fog reload when the engine advances a turn.
+while viewing as a nation, stars on tiles that nation has never seen are hidden. Each nation's people
+on a tile are drawn as a camp of tepees, or huts if settled, exactly as on the player page
+(`/api/camps`, from `camps.py`; drawn by `static/camps.js`, which both pages load as `/camps.js`):
+viewing as everyone, every camp in ochre; viewing as a nation, only camps on tiles it can see now,
+its own ochre and others rust red. Rivers are drawn above the fog. The list, fog and camps reload
+when the engine advances a turn.
 
 ### 5.6 Live population updates
 

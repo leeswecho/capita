@@ -47,6 +47,9 @@ just as often; a new turn is memory-mapped, and its segments' people are summed 
                            active-visibility bits, then 32,400 bytes of explored bits (tile i is bit
                            i % 8 of byte i // 8); header X-Turn
     /api/tile_at?lat=&lon= the tile containing a point (JSON)
+    /api/camps             every camp at the current turn (camps.py): {"turn", "camps": [{"tile",
+                           "nation": {"id"} or null, "tepees", "settled"}]}, drawn by /camps.js (JSON)
+    /camps.js              the script that draws camps, shared with the player page
 """
 
 import argparse
@@ -60,6 +63,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+import camps
 import cohort_state
 import numpy as np
 
@@ -361,6 +365,19 @@ class World:
             cached = st.nations_cache = (given, json.dumps({"turn": st.turn, "nations": out}, separators=(",", ":")).encode())
         return cached[1]
 
+    def camps_json(self):
+        """Every nation's camps at the current turn, built once per turn."""
+        st = self.turn
+        if st is None:
+            return json.dumps({"turn": None, "camps": []}).encode()
+        cached = getattr(st, "camps_cache", None)
+        if cached is None:
+            out = [{**c, "tile": grid.tile_id(*grid.corner(*divmod(c["tile"], WIDTH))),
+                    "nation": {"id": c["nation"]} if c["nation"] else None}
+                   for c in camps.camps(st, range(len(st.leaders)), camps.load_rule())]
+            cached = st.camps_cache = json.dumps({"turn": st.turn, "camps": out}, separators=(",", ":")).encode()
+        return cached
+
     def visibility_bytes(self, nid: int):
         """(turn, 64,800 bytes) for nation `nid`, or None if there is no such nation."""
         st = self.turn
@@ -476,6 +493,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if path in ("/", "/index.html"):
             return self.send_file(os.path.join(STATIC, "index.html"), "text/html; charset=utf-8")
+        if path == "/camps.js":
+            return self.send_file(os.path.join(STATIC, "camps.js"), "text/javascript; charset=utf-8")
+        if path == "/api/camps":
+            return self.send_json(w.camps_json())
         if path == "/earth.jpg":
             return self.send_file(os.path.join(ROOT, w.meta["source_image"]), "image/jpeg", cache=True)
         m = re.fullmatch(r"/globe/(\d{1,2})/(\d{1,4})_(\d{1,4})\.jpg", path)

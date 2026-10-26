@@ -40,6 +40,9 @@ Endpoints:
                            "direction": null takes the order back. Returns the leader's segment as /view
                            lists it; 400 if the order isn't possible, 409 if turn t isn't accepting
                            orders (JSON)
+    POST /api/nation/<id>/place  {"tile": id, "name": "..."} names a tile the nation has explored, for that
+                           nation only (places.py); null or "" takes the name back. Returns {"tile",
+                           "place"}; 400 if the name can't be used (JSON)
     POST /api/commit       {"turn": t}: commit turn t, advancing the whole world one year (JSON)
 """
 import argparse
@@ -63,6 +66,7 @@ import cohort_state as cs  # noqa: E402
 import grid  # noqa: E402
 import names  # noqa: E402
 import orders  # noqa: E402
+import places  # noqa: E402
 from game import COUNTRIES, MAP, Game  # noqa: E402
 from server import GLOBE_TILES, ROOT as SERVER_DIR, STATIC as SERVER_STATIC, find_textures  # noqa: E402
 
@@ -232,7 +236,10 @@ class Player(Game):
                     what covers its land (and frozen water), each as indices into terrain_types or
                     cover_types, largest share first; "terrain_size" and "cover_size": for each, how big
                     a share it is, roughly (0: half or more, 1: a quarter to a half, 2: less), which the
-                    page shows as the icon's size}] for every tile it has explored,
+                    page shows as the icon's size; "place": the name the nation gave the tile, if any
+                    (places.py); "place_others": [{"nation", "name"}] the names other nations gave it,
+                    only once the nation can learn them (knows_foreign_places())}] for every tile it has
+                    explored,
          "segments": [...] on the tiles it can see now: its own with "people", "situation", "order" and
                     "moves"; other nations' with what it knows of them,
          "camps": [{"tile", "nation": {"id", "name", "flag"}, "own", "look", "count", "small"}]: one per
@@ -247,14 +254,25 @@ class Player(Game):
         explored = np.flatnonzero(cs.unpack_tiles(np.asarray(t.explored[nid])))
         tiles = []
         def largest_first(share):
-            return sorted((k for k in range(len(share)) if share[k] > 0), key=lambda k: (-share[k], k))
+            return sorted((k for k in range(len(share)) if share[k] > 0), key=lambda k: (-int(share[k]), k))
         def sizes(share, order):   # shares are percentages
             return [0 if share[k] >= 50 else 1 if share[k] >= 25 else 2 for k in order]
+        named = places.read(self.state_dir)
+        mine, others = named.get(nid, {}), {k: v for k, v in named.items() if k != nid and 1 <= k <= len(t.nations)}
+        foreign = self.knows_foreign_places(t, nid)
         for i in explored.tolist():
             terrain, cover = largest_first(self.terrain[:, i]), largest_first(self.cover[:, i])
-            tiles.append({"id": orders.tile_name(i), "seen": bool(visible[i]),
-                          "terrain": terrain, "terrain_size": sizes(self.terrain[:, i], terrain),
-                          "cover": cover, "cover_size": sizes(self.cover[:, i], cover)})
+            tid = orders.tile_name(i)
+            tile = {"id": tid, "seen": bool(visible[i]),
+                    "terrain": terrain, "terrain_size": sizes(self.terrain[:, i], terrain),
+                    "cover": cover, "cover_size": sizes(self.cover[:, i], cover)}
+            if tid in mine:
+                tile["place"] = mine[tid]
+            if foreign:
+                theirs = [{"nation": self.nation_ref(t, k), "name": v[tid]} for k, v in sorted(others.items()) if tid in v]
+                if theirs:
+                    tile["place_others"] = theirs
+            tiles.append(tile)
         commands = {c["leader"]: c for c in orders.read_nation(self.state_dir, t.turn, nid)}
         rows = np.flatnonzero(visible[t.tile])
         rows = sorted(rows.tolist(), key=lambda r: (t.leaders[r]["nation"] != nid, r))   # own first
@@ -271,6 +289,32 @@ class Player(Game):
                            "home": orders.tile_name(home) if home is not None else None,
                            "terrain_types": self.terrain_types, "cover_types": self.cover_types, "tiles": tiles,
                            "segments": segments, "camps": camps}, separators=(",", ":")).encode()
+
+    def knows_foreign_places(self, t, nid: int) -> bool:
+        """Whether nation `nid` can learn what other nations call the tiles it has explored. No nation
+        can yet: a technology, not yet decided, will unlock it."""
+        return False
+
+    def name_place(self, nid: int, body: dict):
+        """Nation `nid`'s name for a tile it has explored: {"tile", "name"} (null or "" for none).
+        Returns (status, {"tile", "place"}), or an error."""
+        t = self.current_turn()
+        if t is None or not 1 <= nid <= len(t.nations):
+            return 404, {"error": f"no nation {nid}"}
+        tid, name = body.get("tile"), body.get("name")
+        try:
+            i = orders.tile_index(tid)
+        except ValueError:
+            return 400, {"error": "no such tile"}
+        if not cs.unpack_tiles(np.asarray(t.explored[nid]))[i]:
+            return 400, {"error": "Your people don't know that land."}
+        if isinstance(name, str) and not name.strip():
+            name = None
+        try:
+            saved = places.write(self.state_dir, nid, tid, name)
+        except ValueError as e:
+            return 400, {"error": str(e)[0].upper() + str(e)[1:] + "."}
+        return 200, {"tile": tid, "place": saved}
 
     def order(self, nid: int, body: dict):
         """Turn a direction into a move command, a title into a found_kingdom or establish_settlement
@@ -382,10 +426,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/commit":
             status, body = p.commit(data.get("turn"))
             return self.send_json({k: v for k, v in body.items() if k != "output"}, status)   # no engine log for players
-        m = re.fullmatch(r"/api/nation/(\d+)/(name|orders)", path)
+        m = re.fullmatch(r"/api/nation/(\d+)/(name|orders|place)", path)
         if m:
-            nid = int(m.group(1))
-            status, body = p.rename(nid, data.get("name")) if m.group(2) == "name" else p.order(nid, data)
+            nid, what = int(m.group(1)), m.group(2)
+            status, body = (p.rename(nid, data.get("name")) if what == "name" else
+                            p.name_place(nid, data) if what == "place" else p.order(nid, data))
             return self.send_json(body, status)
         self.send_error(404)
 

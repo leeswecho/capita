@@ -34,6 +34,7 @@ state/
   phase.json            the current turn's phase: accepting commands, or resolving
   orders/               the players' commands, by turn (not part of the turns; see "Orders" below)
   names.json            the names players have given their nations (see "Names" below)
+  places.json           the names players have given tiles, each nation its own (see "Names" below)
   .lock                 empty; locked by whoever is changing the state (see "The lock" below)
   turn_00007/           one directory per turn; never changed once current.json has named it
     manifest.json
@@ -336,11 +337,19 @@ state/names.json
 Keys are nation ids. A nation without an entry goes by its country's name (from its `code`). The
 player server writes the file (atomically, under the lock); every server shows the names.
 
+Names players give tiles are kept the same way, each nation's to itself, so a tile can have a name
+for every nation. Only named tiles are listed; the player page calls the rest "Unnamed land":
+
+```
+state/places.json
+{ "format": "capita/places-1", "nations": { "14": { "N600E0245": "Home Vale" } } }
+```
+
 ## The lock
 
 Whoever changes the state holds an exclusive OS lock on `state/.lock` while doing it (`flock` on
 Linux, `msvcrt.locking` on Windows; `cohort_state.state_lock()`): the engine for a whole `init` or
-`step`, and the servers while they write orders or names. So no order lands in the middle of a step,
+`step`, and the servers while they write orders or names (of nations or places). So no order lands in the middle of a step,
 and two steps can't run at once; the OS releases the lock if its holder dies. `engine.py step` doesn't
 wait for it: if it is held, the step exits with status 3. Readers don't take it.
 

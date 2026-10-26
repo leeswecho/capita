@@ -61,8 +61,9 @@ The page starts black, with only a menu to choose the nation you will lead, and 
 (`state/names.json`; every page shows the new name). Then you see the land around your people and
 nothing else: the map is locked to a handful of tiles, and you can't zoom or pan to see more than a
 couple of tiles past what your nation has explored. Tiles you have seen before but can't see now are dimmed, and the rest are
-black. Choose a tile to see its landforms and what covers its land (each largest first) and the leaders
-there. Nations are shown by their flags, and landforms and cover by small icons; hover over one for its name. Your own leader shows
+black. Choose a tile to see its landforms and what covers its land (each largest first, sized roughly by
+how much of the tile they cover), its name (yours alone: click "Unnamed land" to name it) and the
+leaders there. Nations are shown by their flags, and landforms and cover by small icons; hover over one for its name. Your own leader shows
 their title and people; choosing them offers the orders they can take: **Move**, to one of the eight
 directions around, and **Found a kingdom**, which settles your people where they stand to farm and herd,
 and makes your chieftain a king under the title you choose. A king can **Form settlers**: a party of

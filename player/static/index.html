@@ -55,6 +55,11 @@
   /* A landform or cover's icon is smaller the less of the tile it covers: a quarter to a half, less. */
   .ticon.size1 { width: 19px; height: 19px; }
   .ticon.size2 { width: 14px; height: 14px; }
+  #place { padding: 5px 8px; font-size: 14px; cursor: text; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #place:empty { display: none; }
+  #place.unnamed { font-style: italic; color: var(--ink-soft); }
+  #place input { width: 100%; font: inherit; font-style: normal; color: var(--ink); padding: 0 2px; margin: -1px 0;
+                 background: rgba(255, 255, 255, 0.35); border: 0; outline: none; }
   #segments { display: flex; flex-direction: column; gap: 5px; }
   .seg.shown { outline: 2px solid var(--ink); outline-offset: -5px; }
   #info { padding: 6px 8px; font-size: 14px; display: flex; flex-direction: column; gap: 4px; }
@@ -133,6 +138,7 @@
   <aside id="side" class="stone">
     <div id="tile">
       <div id="terrain" class="hole"></div>
+      <div id="place" class="hole"></div>
       <div id="segments"></div>
       <div id="info" class="hole"></div>
     </div>
@@ -827,12 +833,55 @@ function renderSide() {
   $("terrain").innerHTML = t ? [t.terrain.map((k, j) => typeIcon(VIEW.terrain_types[k], t.terrain_size[j])),
                                 t.cover.map((k, j) => typeIcon(VIEW.cover_types[k], t.cover_size[j]))]
     .filter(list => list.length).map(list => `<div class="types">${list.join("")}</div>`).join("") : "";
+  renderPlace(t);
   const segs = t && t.seen ? segsByTile.get(t.id) || [] : [];
   $("segments").innerHTML = segs.map(s => `<button class="btn seg" data-leader="${s.leader}">
       ${leaderLabel(s)}${s.own ? `<span class="people">${s.people.toLocaleString()} ${glyph("people", s.people === 1 ? "person" : "people")}</span>` : ""}
       ${s.order ? `<span class="order">Orders: ${orderText(s.order)}</span>` : ""}</button>`).join("");
   renderInfo();
 }
+
+// The place box: what the player calls the chosen tile ("Unnamed land" until they name it). Clicking
+// it edits the name (Enter saves, Escape cancels, an empty name takes it back). Names are the
+// nation's own; once some technology lets a nation learn what others call a tile, the server adds
+// those ("place_others") and the box's tooltip lists them.
+let placeEditing = null;   // the tile whose name is being edited
+function renderPlace(t) {
+  const box = $("place");
+  if (placeEditing && t && placeEditing === t.id) return;   // don't disturb the typing on a poll
+  placeEditing = null;
+  if (!t) { box.textContent = ""; box.removeAttribute("title"); return; }
+  box.textContent = t.place || "Unnamed land";
+  box.classList.toggle("unnamed", !t.place);
+  box.title = t.place_others ? "Also called: " + t.place_others.map(o => `${o.name} (${o.nation.name})`).join(", ")
+                             : "Click to name this land";
+}
+$("place").addEventListener("click", () => {
+  const t = selected ? known.get(selected) : null;
+  if (!t || placeEditing) return;
+  placeEditing = t.id;
+  const box = $("place");
+  box.classList.remove("unnamed");
+  box.innerHTML = `<input id="placeName" maxlength="30" spellcheck="false" placeholder="Unnamed land" value="${esc(t.place || "")}">`;
+  $("placeName").focus();
+  $("placeName").select();
+});
+$("place").addEventListener("keydown", async e => {
+  if (e.key === "Escape") { e.stopPropagation(); placeEditing = null; renderSide(); }
+  if (e.key !== "Enter" || !placeEditing) return;
+  const tid = placeEditing, name = $("placeName").value.trim();
+  try {
+    const out = await api(`/api/nation/${nationId}/place`, { tile: tid, name: name || null });
+    const t = known.get(tid);
+    if (t) { if (out.place) t.place = out.place; else delete t.place; }
+    say("");
+  } catch (err) {
+    say(err.message);
+  }
+  placeEditing = null;
+  renderSide();
+});
+$("place").addEventListener("focusout", () => { if (placeEditing) { placeEditing = null; renderSide(); } });
 
 // The info box under the tile's leaders: what is known about one of their segments. It shows the
 // leader under the pointer, else the one last clicked on this tile, else the player's own leader

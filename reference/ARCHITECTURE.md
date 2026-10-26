@@ -60,6 +60,7 @@ The server does no rendering. It hands the browser compact data, and the browser
 | `orders.py` | The players' orders (`../state/orders/turn_NNNNN/nation_KKK.json`): reading and writing them, the command types (`move`, `found_kingdom`), and `check()`, the one validation used by both servers and the engine. |
 | `game.py` | What the control and player servers share: the current turn (memory-mapped), its phase, giving orders (under the state's lock, so never during a step) and Commit Turn (runs `engine.py step --expect-turn T` as its own process, so a commit for a turn that has already resolved doesn't advance the next one; 409 if another step is running). Nation names come from here too. |
 | `camps.py`, `static/camps.js` | Camps, shared by the player page and the developer view: `camps.py` adds up each nation's people on a tile and how many tepees or huts they show (`../player/descriptions.json` "camp"); `camps.js` draws them (the tepee and hut pictures and their seeded placement). |
+| `places.py` | The names players give tiles (`../state/places.json`), each nation its own, written by the player server under the state's lock. The engine never reads them. |
 | `names.py` | The names players give their nations (`../state/names.json`), written by the player server under the state's lock and shown by every server. The engine never reads them. |
 | `../player/player.py`, `../player/static/index.html`, `../player/descriptions.json` | The player page (§4.7), a separate server on port 8000. It sends a player only what their nation knows. |
 | `../engine/leaders.json` | The leader types (chieftain, mayor, superintendent, admiral, general, king), each with its title, the commands it takes, the activity its segment feeds itself by and whether it is settled; what founding a kingdom does; and the type every turn-0 leader gets. |
@@ -369,7 +370,11 @@ deliberately spartan, and `player.py` sends only what the nation knows.
   image and the grid are shown: no rivers, heatmap, terrain or cover overlays.
 - **The side bar** is a tile explorer: it shows only the chosen tile (clicking a tile chooses it; it starts on the nation's root
   leader): its landforms and then its cover as rows of small drawn icons (largest
-  first; the name is the icon's tooltip), then a button per leader there (Iceland's flag, "Chieftain",
+  first, full size for half the tile or more, 80% for a quarter to a half, 60% for less: the server sends
+  only that size class; the name is the icon's tooltip), then the place box, the nation's own name for
+  the tile ("Unnamed land" until named; clicking it edits the name, `POST /api/nation/<id>/place`, saved
+  by `places.py`; what other nations call it will appear in its tooltip once a technology lets a nation
+  learn it, `knows_foreign_places()`), then a button per leader there (Iceland's flag, "Chieftain",
   206 and a person symbol; the words are the tooltips). Under them, an info box tells what is known about one leader's segment (people and
   situation for the player's own, rough size for another nation's): the leader under the pointer, else
   the one last clicked on this tile, else the player's leader with the most people there. Clicking one

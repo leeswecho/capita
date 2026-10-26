@@ -223,7 +223,7 @@ class Player(Game):
                     "moves"; other nations' with what it knows of them,
          "camps": [{"tile", "nation": {"id", "name", "flag"}, "own", "tepees", "settled"}]: one per nation
                     per tile it can see, drawn as that many tepees (or, if any of the nation's segments
-                    there is settled, huts among fields): all of the nation's people there (on the tile
+                    there is settled, round huts): all of the nation's people there (on the tile
                     or counted as on it while moving) added up, so a camp's size shows roughly how many
                     live there without giving the number}."""
         t = self.current_turn()

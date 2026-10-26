@@ -354,7 +354,7 @@ deliberately spartan, and `player.py` sends only what the nation knows.
   the screen as a rectangle of latitude and longitude; a screen can't be smaller than 3 tiles). Unexplored tiles are black, explored tiles not seen now are dimmed, with soft,
   slightly ragged edges between them (a fine fog patch over the explored area, 12 pixels per tile, inside
   a one-pixel-per-tile black layer for the rest of the world), and the grid is drawn only on explored tiles. Each
-  nation's people on a tile are a camp of small tepees, or round huts among fields if any of them are
+  nation's people on a tile are a camp of small tepees, or round huts if any of them are
   settled (own ochre, others rust red): all its segments
   there added up, 3 tepees for 200 people, growing with the square root of the people, from 1 to 10
   (`camps` in /view, worked out by the server from `descriptions.json` "camp", so other nations'

@@ -216,7 +216,7 @@ don't age or die.
 |-----|---------|
 | `id` | The leader's number. **Strictly increasing** down the list, and never reused: `manifest.next_leader_id` is the next one to hand out, so a leader that is removed (say, merged back into another segment) leaves a gap. |
 | `name` | What the leader is called. |
-| `type` | The leader's internal type, one of `manifest.leader_types`: `chieftain`, `mayor`, `superintendent`, `admiral`, `general` or `king`. It decides what they can do (`engine/leaders.json`). |
+| `type` | The leader's internal type, one of `manifest.leader_types`: `chieftain`, `pioneer`, `lord`, `mayor`, `superintendent`, `admiral`, `general` or `king`. It decides what they can do (`engine/leaders.json`). |
 | `title` | What a leader of their type is called: the type's `title` in `leaders.json` (`Chieftain`), or one their player chose on founding a kingdom (at most 20 characters). The pages show it; nothing in the rules reads it. |
 | `nation` | The id of the leader's nation, and so of their segment's people; 0 = no nation. |
 | `parent` | The id of the leader they report to, of the same nation, or 0 for none. Following parents never loops. A nation's root leader has none; so may leaders with no nation. |
@@ -235,7 +235,7 @@ Every record has exactly these keys.
   "hours_unit": "mean hours per person per day, averaged over the year",
   "products": [{ "name": "food", "unit": "kcal" }],
   "causes": ["starvation", "predation_and_accidents", "cancer", "other_age_related", "infection", "child_mortality"],
-  "leader_types": ["chieftain", "mayor", "superintendent", "admiral", "general", "king"],
+  "leader_types": ["chieftain", "pioneer", "lord", "mayor", "superintendent", "admiral", "general", "king"],
   "next_leader_id": 49911,
   "visibility_bits": "row k = nation id k; tile i is bit i % 8 of byte i // 8",
   "arrays": {
@@ -361,8 +361,13 @@ One turn is one year. First the turn's orders are applied (`apply_orders()`). A 
 the commands their type lists (`engine/leaders.json`). `found_kingdom` turns a leader whose segment is
 wholly on one tile into a `king` (the type's `becomes`), with the title their player gave as both
 `title` and `name`; a king's segment is **settled**: it farms, takes no move commands, and keeps other
-nations from founding kingdoms on its tile. If leaders of two or more nations found kingdoms on the
-same tile in the same turn, none of them does. A `move` given to a
+nations from settling its tile. `establish_settlement` does the same for a `pioneer`, who becomes a
+`lord`. If leaders of two or more nations settle the same tile in the same turn, none of them does.
+`form_settlers` splits a settling party of the given number of people off a king's segment (at least
+`min_people`, leaving at least `min_left`): the same share of every age and of the stock goes to a new
+row at the end, standing on the king's tile, under a new `pioneer` (id `next_leader_id`, `parent` the
+king, `founded_turn` the new turn), which lives the year as its own segment. A leader takes one
+command a turn. A `move` given to a
 standing segment sets `toward` and `destination` to the named neighbour. Given to a moving one, it sets
 `destination` to the named tile and either keeps the step under way or turns back (swapping `at` and
 `toward` and keeping `1 - progress`), whichever way is shorter, measuring the rest of the current step

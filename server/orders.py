@@ -22,8 +22,13 @@ Command types:
     found_kingdom  {"leader": id, "type": "found_kingdom", "title": "King"}: the leader's segment settles on
             its tile and the leader becomes a king (leaders.json "commands"), called `title`. The segment
             must be wholly on one tile (not between two), and no other nation may have a settled segment
-            there. The engine also refuses it if a leader of another nation founds a kingdom on the same tile
-            in the same turn (engine.py apply_orders()).
+            there. The engine also refuses it if a leader of another nation settles the same tile in the
+            same turn (engine.py apply_orders()).
+    establish_settlement  {"leader": id, "type": "establish_settlement", "title": "Lord"}: the same, for a
+            settling party, whose leader becomes a lord.
+    form_settlers  {"leader": id, "type": "form_settlers", "people": 250}: splits a settling party of that
+            many people off the leader's segment, under a new pioneer who reports to the leader (at least
+            min_people, leaving at least min_left; leaders.json "commands").
 
 Which commands a leader can be given depends on their type (leaders.json "types": "commands").
 
@@ -43,7 +48,8 @@ from cohort_state import _retry, _write_json_atomic, segment_latlon, turn_dir_na
 
 FORMAT = "capita/orders-1"
 DIR = "orders"
-COMMAND_TYPES = ("move", "found_kingdom")
+COMMAND_TYPES = ("move", "found_kingdom", "establish_settlement", "form_settlers")
+SETTLE = ("found_kingdom", "establish_settlement")   # the commands that settle a segment under a new title
 
 
 def turn_orders_dir(state_dir: str, turn: int) -> str:
@@ -190,8 +196,10 @@ def plan_move(at: int, toward: int, progress: float, to: int) -> dict:
 
 def make(lid: int, command: dict) -> dict:
     """A command as it is stored: the leader, the type and that type's fields (nothing else is kept)."""
-    if command.get("type") == "found_kingdom":
-        return {"leader": lid, "type": "found_kingdom", "title": command.get("title")}
+    if command.get("type") in SETTLE:
+        return {"leader": lid, "type": command["type"], "title": command.get("title")}
+    if command.get("type") == "form_settlers":
+        return {"leader": lid, "type": "form_settlers", "people": command.get("people")}
     return {"leader": lid, "type": command.get("type"), "to": command.get("to")}
 
 
@@ -226,8 +234,8 @@ def check(state, rows: dict, nation: int, command: dict, can_walk, rules) -> str
     kind = state.leaders[r]["type"]
     if command["type"] not in rules["types"][kind]["commands"]:
         return f"a {kind} can't be given {command['type']} commands"
-    if command["type"] == "found_kingdom":
-        spec = rules["commands"]["found_kingdom"]
+    if command["type"] in SETTLE:
+        spec = rules["commands"][command["type"]]
         title = command.get("title")
         try:
             if names.clean(title, spec["max_title_length"], "title") != title:
@@ -235,9 +243,18 @@ def check(state, rows: dict, nation: int, command: dict, can_walk, rules) -> str
         except ValueError as e:
             return str(e)
         if state.at[r] != state.toward[r]:
-            return "a kingdom can't be founded while on the move: the segment must be on one tile"
+            return "a segment can't settle while on the move: it must be on one tile"
         if settled_by_others(state, rules, nation, int(state.at[r])):
             return f"another nation has settled {tile_name(state.at[r])}"
+    if command["type"] == "form_settlers":
+        spec = rules["commands"]["form_settlers"]
+        n, have = command.get("people"), float(np.asarray(state.people[r]).sum())
+        if not isinstance(n, int) or isinstance(n, bool):
+            return "people must be a whole number"
+        if n < spec["min_people"]:
+            return f"a settling party needs at least {spec['min_people']} people"
+        if have - n < spec["min_left"]:
+            return f"the segment has {have:.0f} people and must keep at least {spec['min_left']}"
     if command["type"] == "move":
         try:
             to = tile_index(command.get("to"))

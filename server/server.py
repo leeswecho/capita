@@ -48,7 +48,7 @@ just as often; a new turn is memory-mapped, and its segments' people are summed 
                            i % 8 of byte i // 8); header X-Turn
     /api/tile_at?lat=&lon= the tile containing a point (JSON)
     /api/camps             every camp at the current turn (camps.py): {"turn", "camps": [{"tile",
-                           "nation": {"id"} or null, "tepees", "settled"}]}, drawn by /camps.js (JSON)
+                           "nation": {"id"} or null, "look", "count", "small"}]}, drawn by /camps.js (JSON)
     /camps.js              the script that draws camps, shared with the player page
 """
 
@@ -374,7 +374,7 @@ class World:
         if cached is None:
             out = [{**c, "tile": grid.tile_id(*grid.corner(*divmod(c["tile"], WIDTH))),
                     "nation": {"id": c["nation"]} if c["nation"] else None}
-                   for c in camps.camps(st, range(len(st.leaders)), camps.load_rule())]
+                   for c in camps.camps(st, range(len(st.leaders)), camps.load_rules())]
             cached = st.camps_cache = json.dumps({"turn": st.turn, "camps": out}, separators=(",", ":")).encode()
         return cached
 

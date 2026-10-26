@@ -240,7 +240,7 @@ the top-level `state/` folder as NumPy `.npy` arrays plus a `manifest.json` per 
 People belong to **segments**: a segment is the people directly under one **leader**, and each row of
 the state is one segment. A leader's **following** is their segment plus the segments of every leader
 below them; the player is their nation's root leader. Leaders are an abstraction, not people, and come
-in types (`engine/leaders.json`: chieftain, mayor, superintendent, admiral, general, king). Each segment
+in types (`engine/leaders.json`: chieftain, king, pioneer, lord, mayor, superintendent, admiral, general). Each segment
 has a position: a tile, or partway between two neighbouring tiles, and it counts as being in the
 nearer one. A tile can hold several segments; per-tile figures are sums over them. Units and cities
 are meant to be the same thing: segments under leaders of different types, doing different things.
@@ -275,8 +275,11 @@ server.py ◄── memory-maps the arrays of the turn current.json names ◄─
   whichever makes the whole way shorter (`orders.plan_move()`), and the state keeps where its move ends
   (`destination.npy`). **Found a kingdom** turns a chieftain whose segment is wholly on one tile into
   a king, under a title their player chooses (internally the type stays `king`); a king's segment is
-  settled: it farms, can't move, and keeps other nations from founding kingdoms on its tile (two nations
-  founding on one tile in the same turn both fail). Which commands a leader takes comes from their type
+  settled: it farms, can't move, and keeps other nations from settling its tile (two nations settling
+  one tile in the same turn both fail). A king can **form settlers**: at the start of the year a party
+  of the given size (at least 200, leaving at least 200), the same share of every age and of the stock,
+  splits off under a new pioneer who reports to the king and stands on their tile. A pioneer can move
+  and **establish a settlement**, becoming a lord under a chosen title, settled like a king. Which commands a leader takes comes from their type
   (`engine/leaders.json`). Every moving segment then covers
   `km_per_hour` × its travel hours a day × 365 (`engine/movement.json`; travel hours are the
   people-weighted mean of the hours not spent sleeping or feeding themselves the year before), along the great circle between
@@ -355,12 +358,13 @@ deliberately spartan, and `player.py` sends only what the nation knows.
   the screen as a rectangle of latitude and longitude; a screen can't be smaller than 3 tiles). Unexplored tiles are black, explored tiles not seen now are dimmed, with soft,
   slightly ragged edges between them (a fine fog patch over the explored area, 12 pixels per tile, inside
   a one-pixel-per-tile black layer for the rest of the world), and the grid is drawn only on explored tiles. Each
-  nation's people on a tile are a camp of small tepees, or round huts if any of them are
-  settled (own ochre, others rust red): all its segments
-  there added up, 3 tepees for 200 people, growing with the square root of the people, from 1 to 10
-  (`camps` in /view, worked out by the server from `descriptions.json` "camp", so other nations'
-  counts stay hidden). Each nation on a tile gets a strip of it, and its tepees sit at fixed,
-  well-spread spots seeded by the tile and nation, so they stay put from turn to turn. An ordered move
+  nation's people on a tile are drawn as their leaders' types say (`leaders.json` "camp"): tepees for
+  bands, round huts for settled segments, covered wagons for settling parties (own ochre, others rust
+  red). All its segments drawn the same way there are added up into one camp: 3 for 200 people, growing
+  with the square root of the people, from 1 to 10 (wagons at least 3) (`camps` in /view, worked out by
+  `server/camps.py` from `descriptions.json` "camp" and "wagons", so other nations' counts stay hidden).
+  Each camp on a tile gets a strip of it, wagons are drawn smaller beside huts, and the pictures sit at
+  fixed, well-spread spots seeded by the tile, nation and look, so they stay put from turn to turn. An ordered move
   is a line from the segment to the tile it heads for. Only the globe
   image and the grid are shown: no rivers, heatmap, terrain or cover overlays.
 - **The side bar** is a tile explorer: it shows only the chosen tile (clicking a tile chooses it; it starts on the nation's root
@@ -370,11 +374,12 @@ deliberately spartan, and `player.py` sends only what the nation knows.
   situation for the player's own, rough size for another nation's): the leader under the pointer, else
   the one last clicked on this tile, else the player's leader with the most people there. Clicking one
   of the player's own leaders opens the orders their type takes: **Move** (a 3 × 3 compass of
-  directions, all-water ones disabled) and **Found a kingdom** (which asks for confirmation and a title,
-  King by default, at most 20 characters, and can't be confirmed while the segment is between tiles or
-  where another nation has settled), plus Cancel; a king takes none for now. `POST /api/nation/<id>/orders`
-  takes a direction and turns it into a move command for that neighbour, or a title for founding a
-  kingdom (`orders.py`, through `game.py`). Leaders are called by their title, which everyone sees. A small **Orders** box at the top left of the map
+  directions, all-water ones disabled); **Found a kingdom** and **Establish a settlement** (which ask for
+  confirmation and a title, King or Lord by default, at most 20 characters, and can't be confirmed while
+  the segment is between tiles or where another nation has settled); **Form settlers** (a number of
+  people, from 200 up to all but 200, disabled below 400); plus Cancel. `POST /api/nation/<id>/orders`
+  takes a direction and turns it into a move command for that neighbour, a title for settling, or a
+  number of people for forming settlers (`orders.py`, through `game.py`). Leaders are called by their title, which everyone sees. A small **Orders** box at the top left of the map
   lists every order the nation has given this turn (choosing one goes to that leader's tile; ✕ cancels
   it), and a box at the bottom left holds the turn number and **Commit Turn**, a play symbol (an hourglass
   while the year passes; `POST /api/commit` with the turn), which resolves the turn for the whole world; afterwards the page follows the leader last chosen. The page

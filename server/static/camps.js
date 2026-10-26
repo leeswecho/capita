@@ -1,14 +1,16 @@
 // Camps, shared by the player page (player/static/index.html) and the developer view
 // (server/static/index.html); both servers serve this file as /camps.js. Each nation's people on a
-// tile are drawn as a scatter of tepees, more for more people (the server says how many: "camps",
-// server/camps.py). A settled nation's people (a kingdom) are drawn as as many round huts. Own camps
-// are ochre, other nations' rust red. Each nation on a tile gets its own strip of the tile. The
-// tepees sit at fixed, well-spread places: for each tile and nation, a seeded best-candidate sequence
-// of spots, of which a camp of n tepees takes the first n, so a tepee is added or removed only when
-// the count changes.
+// tile are drawn as a scatter of tepees, round huts if settled, or covered wagons for a settling
+// party, more for more people (the server says which and how many: "camps", server/camps.py). Own
+// camps are ochre, other nations' rust red. Each camp on a tile gets its own strip of the tile, and
+// wagons are drawn smaller beside huts. They sit at fixed, well-spread places: for each tile, nation
+// and look, a seeded best-candidate sequence of spots, of which a camp of n takes the first n, so one
+// is added or removed only when the count changes.
 import * as THREE from "three";
 
 export const TEPEE_SIZE = 0.2, TEPEE_MAX = 10;   // size in tiles
+const WAGON_SIZE = 0.24, WAGON_SMALL = 0.14;      // a wagon alone on a tile, and beside huts
+const LOOKS = ["huts", "tepees", "wagons"];
 const OWN = "#d9a441", OTHER = "#a4483a";   // ochre for the nation whose map it is, rust red for others
 function tepeeTexture(hide) {
   // A tepee seen from above and to the south, as in an isometric view: a cone whose base is an
@@ -73,6 +75,48 @@ function hutTexture(thatch) {
   tex.anisotropy = 4;
   return tex;
 }
+function wagonTexture(body) {
+  // A covered wagon seen from above and to the south, facing left: a plank box in the nation's colour on
+  // two spoked wheels, under a canvas hood on hoops, with its shadow cast to the lower right.
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = 64;
+  const c = cv.getContext("2d"), wood = shader(body), canvas = shader("#e8dfc4");
+  c.beginPath(); c.ellipse(36, 52, 26, 5, 0, 0, Math.PI * 2);           // shadow
+  c.fillStyle = "rgba(0, 0, 0, 0.35)"; c.fill();
+  const x0 = 10, x1 = 54, by0 = 34, by1 = 44;                           // the box's side
+  c.fillStyle = wood(0.6); c.fillRect(x0 + 2, by0 - 4, x1 - x0, 4);    // its top edge, seen from above
+  const gb = c.createLinearGradient(0, by0, 0, by1);
+  gb.addColorStop(0, wood(1.15)); gb.addColorStop(1, wood(0.75));
+  c.fillStyle = gb; c.fillRect(x0, by0, x1 - x0, by1 - by0);
+  c.strokeStyle = "rgba(21, 18, 13, 0.45)"; c.lineWidth = 1;
+  c.beginPath(); c.moveTo(x0, by0 + 5); c.lineTo(x1, by0 + 5); c.stroke();   // a seam between planks
+  const hood = () => { c.beginPath(); c.moveTo(x0 + 3, by0); c.bezierCurveTo(x0 + 1, 8, x1 + 1, 8, x1 - 1, by0); c.closePath(); };
+  const gh = c.createLinearGradient(x0, 0, x1, 0);
+  gh.addColorStop(0, canvas(1.08)); gh.addColorStop(0.5, canvas(1.0)); gh.addColorStop(1, canvas(0.7));
+  hood(); c.fillStyle = gh; c.fill();
+  c.save(); hood(); c.clip();                                            // the hoops under the canvas
+  c.strokeStyle = "rgba(21, 18, 13, 0.3)"; c.lineWidth = 1.2;
+  for (const x of [22, 32, 42]) { c.beginPath(); c.moveTo(x, by0); c.quadraticCurveTo(x + 1, 6, x + 2, 10); c.stroke(); }
+  c.restore();
+  c.beginPath(); c.ellipse(x0 + 4, by0 - 10, 3.5, 9, 0, 0, Math.PI * 2);   // the hood's open front, dark inside
+  c.fillStyle = "#2a2219"; c.fill();
+  hood(); c.lineJoin = "round"; c.lineWidth = 2.2; c.strokeStyle = "#15120d"; c.stroke();
+  c.strokeRect(x0, by0, x1 - x0, by1 - by0);
+  for (const wx of [18, 46]) {                                           // wheels
+    c.beginPath(); c.arc(wx, by1 + 3, 7, 0, Math.PI * 2);
+    c.fillStyle = "#5a4430"; c.fill(); c.lineWidth = 2; c.stroke();
+    c.lineWidth = 1.2;
+    for (let k = 0; k < 4; k++) {
+      const a = k * Math.PI / 4;
+      c.beginPath(); c.moveTo(wx - 6 * Math.cos(a), by1 + 3 - 6 * Math.sin(a)); c.lineTo(wx + 6 * Math.cos(a), by1 + 3 + 6 * Math.sin(a)); c.stroke();
+    }
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+
 export function campSpots(seed, x0, x1, y0, y1) {   // up to TEPEE_MAX well-spread spots in a box, the same for the same seed
   let s = seed >>> 0 || 1;
   const rand = () => (s = Math.imul(s ^ (s >>> 15), 2246822519) + 0x9e3779b9 >>> 0) / 4294967296;
@@ -89,34 +133,37 @@ export function campSpots(seed, x0, x1, y0, y1) {   // up to TEPEE_MAX well-spre
   return spots;
 }
 
-const looks = new Map();   // depthTest -> {tepee: {own, other}, hut: {own, other}} materials
+const looks = new Map();   // depthTest -> {tepees: {own, other}, huts: ..., wagons: ...} materials
 function look(depthTest) {
   if (!looks.has(depthTest)) {
     const material = tex => new THREE.MeshBasicMaterial({ map: tex, depthTest, depthWrite: false, transparent: true });
-    looks.set(depthTest, { tepee: { own: material(tepeeTexture(OWN)), other: material(tepeeTexture(OTHER)) },
-                           hut: { own: material(hutTexture(OWN)), other: material(hutTexture(OTHER)) } });
+    const pair = draw => ({ own: material(draw(OWN)), other: material(draw(OTHER)) });
+    looks.set(depthTest, { tepees: pair(tepeeTexture), huts: pair(hutTexture), wagons: pair(wagonTexture) });
   }
   return looks.get(depthTest);
 }
 
-// Add the camps' meshes to `group`. camps: [{tile: tile id, nation: {id} or null, own, tepees, settled}].
+// Add the camps' meshes to `group`. camps: [{tile: tile id, nation: {id} or null, own, look: "tepees",
+// "huts" or "wagons", count, small: drawn smaller (wagons beside huts)}].
 // The page supplies its grid helpers and quad(lat, lon, size), a flat square `size` degrees of latitude
 // across at its marker height; depthTest false draws camps over everything (the player's flat map),
 // true lets the globe hide those on its far side (the developer view). Returns the meshes added.
 export function drawCamps(group, camps, { tile, parseTileId, tileIndex, quad, depthTest = false, renderOrder = 7 }) {
   const byTile = new Map(), added = [];
   for (const c of camps) (byTile.get(c.tile) || byTile.set(c.tile, []).get(c.tile)).push(c);
-  const m = TEPEE_SIZE / 2 + 0.04;   // keep whole tepees inside the tile
   const mats = look(depthTest);
   for (const [tid, list] of byTile) {
     const { lat, lon } = parseTileId(tid);
     list.forEach((c, j) => {   // strip j of the tile's width, in tile units from its south-west corner
-      const x0 = j / list.length, x1 = (j + 1) / list.length, seed = tileIndex(tid) * 7919 + (c.nation?.id || 0) * 104729;
-      const spots = campSpots(seed, x0 + m, x1 - m, m, 1 - m)
-        .slice(0, c.tepees).sort((a, b) => b[1] - a[1]);   // northern ones first, so nearer ones overlap them
-      const kind = c.settled ? mats.hut : mats.tepee;
+      const size = c.look === "wagons" ? (c.small ? WAGON_SMALL : WAGON_SIZE) : TEPEE_SIZE;
+      const m = size / 2 + 0.04;   // keep whole pictures inside the tile
+      const x0 = j / list.length, x1 = (j + 1) / list.length;
+      const seed = tileIndex(tid) * 7919 + (c.nation?.id || 0) * 104729 + LOOKS.indexOf(c.look) * 15485863;
+      const spots = campSpots(seed, x0 + m, Math.max(x0 + m, x1 - m), m, 1 - m)
+        .slice(0, c.count).sort((a, b) => b[1] - a[1]);   // northern ones first, so nearer ones overlap them
+      const kind = mats[c.look];
       for (const [x, y] of spots) {
-        const mesh = new THREE.Mesh(quad(lat + y * tile, lon + x * tile, tile * TEPEE_SIZE), c.own ? kind.own : kind.other);
+        const mesh = new THREE.Mesh(quad(lat + y * tile, lon + x * tile, tile * size), c.own ? kind.own : kind.other);
         mesh.renderOrder = renderOrder + (1 - y) * 0.5;   // drawn north to south (Three would otherwise sort these by distance)
         group.add(mesh);
         added.push(mesh);

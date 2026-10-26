@@ -807,7 +807,17 @@ function drawMarkers() {
 
 // ---------- the side bar ----------
 const DIR_LABEL = { n: "N", ne: "NE", e: "E", se: "SE", s: "S", sw: "SW", w: "W", nw: "NW" };
-const orderText = o => o.type === "found_kingdom" ? "found a kingdom" : `move ${DIR_LABEL[o.direction] || ""}`;
+const orderText = o => o.type === "found_kingdom" ? "found a kingdom"
+  : o.type === "establish_settlement" ? "establish a settlement"
+  : o.type === "form_settlers" ? `form settlers (${o.people})`
+  : `move ${DIR_LABEL[o.direction] || ""}`;
+// The orders that settle a segment under a title the player chooses: the menu's words for each.
+const SETTLE = {
+  found_kingdom: { button: "Found a kingdom", confirm: "Found the kingdom",
+    ask: "Found a kingdom here? Your people will settle on this land for good, to farm it and herd animals, and will no longer move." },
+  establish_settlement: { button: "Establish a settlement", confirm: "Establish the settlement",
+    ask: "Establish a settlement here? These settlers will make this land their home for good, to farm it and herd animals, and will no longer move." },
+};
 function renderSide() {
   const t = selected ? known.get(selected) : null;
   // Landforms, then what covers the land, each largest first, as rows of icons without the shares.
@@ -877,8 +887,9 @@ $("segments").addEventListener("click", e => {
 
 // ---------- a leader's menus ----------
 // Clicking one of the player's own leaders opens their orders, those their type can take: Move, to one
-// of the 8 tiles around; Found a kingdom, which asks for confirmation and a title; and cancelling an
-// order. (What is known about a leader is in the info box.)
+// of the 8 tiles around; Found a kingdom or Establish a settlement, which ask for confirmation and a
+// title; Form settlers, which asks how many people go; and cancelling an order. (What is known about a
+// leader is in the info box.)
 let menuFor = null, menuAnchor = null;
 function openMenu(s, anchor) {
   menuFor = s; menuAnchor = anchor;
@@ -893,21 +904,29 @@ function showMenu(page) {
   const off = canOrder() ? "" : " disabled";
   if (page === "orders") {
     if (s.commands.includes("move")) html += `<button class="btn" data-go="move"${off}>Move</button>`;
-    if (s.commands.includes("found_kingdom")) html += `<button class="btn" data-go="found"${off}>Found a kingdom</button>`;
+    for (const [kind, words] of Object.entries(SETTLE))
+      if (s.commands.includes(kind)) html += `<button class="btn" data-go="settle:${kind}"${off}>${words.button}</button>`;
+    if (s.commands.includes("form_settlers")) html += `<button class="btn" data-go="settlers"${off}>Form settlers</button>`;
     if (s.order) html += `<button class="btn" data-cancel${off}>Cancel order (${orderText(s.order)})</button>`;
     if (!canOrder()) html += `<p>Orders can't be given while the turn is resolving.</p>`;
-  } else if (page === "found") {
-    const f = s.found_kingdom, title = s.order?.type === "found_kingdom" ? s.order.title : f.title;
-    html += `<p>Found a kingdom here? Your people will settle on this land for good, to farm it and herd animals, and will no longer move.</p>
-      <label>Your title <input id="foundTitle" maxlength="${f.max_length}" spellcheck="false" value="${esc(title)}"></label>
+  } else if (page.startsWith("settle:")) {
+    const kind = page.slice(7), f = s[kind], title = s.order?.type === kind ? s.order.title : f.title;
+    html += `<p>${SETTLE[kind].ask}</p>
+      <label>Your title <input id="settleTitle" maxlength="${f.max_length}" spellcheck="false" value="${esc(title)}"></label>
       ${f.ok ? "" : `<p class="why">${esc(f.why)}</p>`}
-      <button class="btn" data-found${f.ok ? off : " disabled"}>Found the kingdom</button>`;
+      <button class="btn" data-settle="${kind}"${f.ok ? off : " disabled"}>${SETTLE[kind].confirm}</button>`;
+  } else if (page === "settlers") {
+    const f = s.form_settlers, n = s.order?.type === "form_settlers" ? s.order.people : f.min;
+    html += `<p>Form settlers? A party will set out from here under a Pioneer, to settle new land, taking young and old alike.</p>
+      <label>How many people (of ${s.people.toLocaleString()}) <input id="settlersCount" type="number" min="${f.min}" max="${f.max}" step="1" value="${n}"${f.ok ? "" : " disabled"}></label>
+      ${f.ok ? `<p class="why">From ${f.min.toLocaleString()} to ${f.max.toLocaleString()}.</p>` : `<p class="why">${esc(f.why)}</p>`}
+      <button class="btn" data-settlers${f.ok ? off : " disabled"}>Form the settlers</button>`;
   } else if (page === "move") {
     const ok = Object.fromEntries(s.moves.map(mv => [mv.direction, mv.ok]));
     const cell = d => `<button class="btn${s.order?.direction === d ? " on" : ""}" data-move="${d}"${ok[d] ? "" : " disabled"}>${DIR_LABEL[d]}</button>`;
     html += `<p>Which way?</p><div class="compass">${cell("nw")}${cell("n")}${cell("ne")}${cell("w")}<span class="here">·</span>${cell("e")}${cell("sw")}${cell("s")}${cell("se")}</div>`;
   }
-  if (page === "move" || page === "found") html += `<button class="btn" data-go="orders">Back</button>`;
+  if (page !== "orders") html += `<button class="btn" data-go="orders">Back</button>`;
   m.innerHTML = html;
   m.hidden = false;
   const a = menuAnchor.getBoundingClientRect(), w = m.offsetWidth, h = m.offsetHeight;
@@ -916,12 +935,15 @@ function showMenu(page) {
   if (left < 8 || innerWidth < 640) { left = Math.max(8, Math.min(a.left, innerWidth - w - 8)); top = a.top - h - 6; }
   m.style.left = `${left}px`;
   m.style.top = `${Math.max(8, Math.min(top, innerHeight - h - 8))}px`;
-  if (page === "found") $("foundTitle").select();
+  if (page.startsWith("settle:")) $("settleTitle").select();
+  if (page === "settlers" && !$("settlersCount").disabled) $("settlersCount").select();
 }
 $("menu").addEventListener("click", async e => {
   const go = e.target.closest("[data-go]"), mv = e.target.closest("[data-move]"), cancel = e.target.closest("[data-cancel]");
   if (go) return showMenu(go.dataset.go);
-  if (e.target.closest("[data-found]")) return foundKingdom();
+  const settle = e.target.closest("[data-settle]");
+  if (settle) return settleHere(settle.dataset.settle);
+  if (e.target.closest("[data-settlers]")) return formSettlers();
   if (mv || cancel) {
     const s = menuFor;
     closeMenu();
@@ -940,13 +962,22 @@ async function giveOrder(s, direction, extra = {}) {   // direction null takes t
     await loadView(false);
   }
 }
-async function foundKingdom() {
-  const s = menuFor, title = $("foundTitle").value.trim() || s.found_kingdom.title;
+async function settleHere(kind) {
+  const s = menuFor, title = $("settleTitle").value.trim() || s[kind].title;
   closeMenu();
-  await giveOrder(s, null, { found_kingdom: title });
+  await giveOrder(s, null, { [kind]: title });
+}
+async function formSettlers() {
+  const s = menuFor, f = s.form_settlers, n = Math.round(+$("settlersCount").value);
+  if (!(n >= f.min && n <= f.max)) { say(`The party must be from ${f.min} to ${f.max} people.`); return; }
+  closeMenu();
+  await giveOrder(s, null, { form_settlers: n });
 }
 $("menu").addEventListener("keydown", e => {
-  if (e.key === "Enter" && e.target.id === "foundTitle" && !$("menu").querySelector("[data-found]").disabled) foundKingdom();
+  if (e.key !== "Enter") return;
+  const settle = $("menu").querySelector("[data-settle]"), settlers = $("menu").querySelector("[data-settlers]");
+  if (e.target.id === "settleTitle" && !settle.disabled) settleHere(settle.dataset.settle);
+  if (e.target.id === "settlersCount" && !settlers.disabled) formSettlers();
 });
 document.addEventListener("pointerdown", e => {
   if (!$("menu").hidden && !e.target.closest("#menu") && !e.target.closest("#segments")) closeMenu();

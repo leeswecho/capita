@@ -24,7 +24,9 @@ starting visibility.
   lists (leaders.json). A move sends a leader's segment toward a neighbouring tile; given to a segment
   already between two tiles, it first finishes that step or walks back, whichever makes the whole way
   shorter. Founding a kingdom makes the leader a king, under the title their player gave, and their
-  segment settled: it farms and stays put, and no other nation can found a kingdom on its tile.
+  segment settled: it farms and stays put, and no other nation can settle its tile. A king can form
+  settlers: a settling party split off at the start of the year under a new pioneer, who can move and
+  establish a settlement, becoming a lord (settled in the same way).
 - Movement (move_segments()): every moving segment covers a distance set by its people's travel hours
   and the pace in movement.json, along the rest of its step and then the step on to its destination,
   and arrives, stopping there, if that is enough; otherwise it is left partway and goes on next turn. Each segment then lives the year on the tile it counts as being in
@@ -197,7 +199,7 @@ def make_nations(counts, country, seed):
 
 
 def load_leader_rules(path=LEADERS):
-    """leaders.json: {"types": {name: {"title", "commands", "activity", "settled"}}, "commands": {...},
+    """leaders.json: {"types": {name: {"title", "commands", "activity", "settled", "camp"}}, "commands": {...},
     "start_type": name}."""
     with open(path, encoding="utf-8") as f:
         rules = json.load(f)
@@ -211,8 +213,11 @@ def load_leader_rules(path=LEADERS):
             sys.exit(f"{name}: type {k!r}'s commands must be some of {orders.COMMAND_TYPES}")
         if not isinstance(t.get("title"), str) or not isinstance(t.get("settled"), bool):
             sys.exit(f"{name}: type {k!r} needs a title and settled true or false")
-    if rules["commands"]["found_kingdom"]["becomes"] not in rules["types"]:
-        sys.exit(f"{name}: found_kingdom becomes an unknown type")
+        if t.get("camp") not in ("tepees", "huts", "wagons"):
+            sys.exit(f"{name}: type {k!r} needs a camp: tepees, huts or wagons")
+    for k, c in rules["commands"].items():
+        if c["becomes"] not in rules["types"]:
+            sys.exit(f"{name}: {k} becomes an unknown type")
     return rules
 
 
@@ -258,48 +263,81 @@ def movement_extra(rules):
     return {"movement_rules_source": os.path.relpath(MOVEMENT, REPO).replace(os.sep, "/"), "movement_rules": rules}
 
 
-def apply_orders(state, commands, can_walk, lrules):
-    """Apply the turn's commands to the segments' positions and leaders.
+def apply_orders(state, commands, can_walk, lrules, turn):
+    """Apply the turn's commands to the segments: where they are heading, their leaders, and new segments.
 
     commands: [(nation id, command)] (orders.read_turn()). Each is checked again (orders.check()) against
     the turn they were given for; invalid ones are skipped. A move sets where the segment is heading
     (orders.plan_move()): a standing segment steps straight to the named neighbour; a moving one first
-    finishes its step or walks back, whichever makes the whole way shorter. Founding a kingdom changes the
-    leader's type (leaders.json "commands"), and their title and name to the title given; if leaders of
-    more than one nation found kingdoms on the same tile, none of them does. Returns (leaders, at, toward,
-    progress, destination, applied, rejected): new leader records, new position arrays and the commands,
-    the rejected ones with a "reason".
+    finishes its step or walks back, whichever makes the whole way shorter. Settling (founding a kingdom,
+    establishing a settlement) changes the leader's type (leaders.json "commands"), and their title and
+    name to the title given; if leaders of more than one nation settle the same tile, none of them does.
+    Forming settlers splits a party off the segment, the same share of every age and of its stock, under
+    a new leader (id next_leader_id, founded `turn`) who reports to the old one and stands on their tile;
+    new rows go at the end, so leader ids stay increasing. Returns a dict of the start of the year: leaders,
+    at, toward, progress, destination, people, hours, stock, next_leader_id, and the applied and rejected
+    commands (the rejected with a "reason").
     """
     at, toward, progress = state.at.copy(), state.toward.copy(), state.progress.copy()
     destination = state.destination.copy()
     leaders = [dict(lead) for lead in state.leaders]
+    people, hours, stock = np.array(state.people, dtype=np.float64), np.array(state.hours), np.array(state.stock)
+    next_id = state.next_leader_id
     rows = state.row_of()
-    applied, rejected, founding = [], [], []
+    applied, rejected, settling, forming, seen = [], [], [], [], set()
     reject = lambda nation, c, why: rejected.append(
         {"nation": nation, **(c if isinstance(c, dict) else {"command": c}), "reason": why})
     for nation, c in commands:
         why = orders.check(state, rows, nation, c, can_walk, lrules)
+        if not why and c["leader"] in seen:   # the servers keep one; a file edited by hand might not
+            why = "a leader takes one command a turn"
         if why:
             reject(nation, c, why)
             continue
+        seen.add(c["leader"])
         r = rows[c["leader"]]
-        if c["type"] == "found_kingdom":
-            founding.append((nation, c, r))
+        if c["type"] in orders.SETTLE:
+            settling.append((nation, c, r))
+        elif c["type"] == "form_settlers":
+            forming.append((nation, c, r))
+        else:
+            plan = orders.plan_move(state.at[r], state.toward[r], state.progress[r], orders.tile_index(c["to"]))
+            at[r], toward[r], progress[r], destination[r] = plan["at"], plan["toward"], plan["progress"], plan["destination"]
+            applied.append({"nation": nation, **c})
+    settlers = {}   # tile -> the nations settling there
+    for nation, c, r in settling:
+        settlers.setdefault(int(state.at[r]), set()).add(nation)
+    for nation, c, r in settling:
+        if len(settlers[int(state.at[r])]) > 1:
+            reject(nation, c, f"another nation settled {orders.tile_name(state.at[r])} in the same turn")
             continue
-        plan = orders.plan_move(state.at[r], state.toward[r], state.progress[r], orders.tile_index(c["to"]))
-        at[r], toward[r], progress[r], destination[r] = plan["at"], plan["toward"], plan["progress"], plan["destination"]
+        leaders[r].update(type=lrules["commands"][c["type"]]["becomes"], title=c["title"], name=c["title"])
         applied.append({"nation": nation, **c})
-    founders = {}   # tile -> the nations founding kingdoms there
-    for nation, c, r in founding:
-        founders.setdefault(int(state.at[r]), set()).add(nation)
-    becomes = lrules["commands"]["found_kingdom"]["becomes"]
-    for nation, c, r in founding:
-        if len(founders[int(state.at[r])]) > 1:
-            reject(nation, c, f"another nation founded a kingdom on {orders.tile_name(state.at[r])} in the same turn")
-            continue
-        leaders[r].update(type=becomes, title=c["title"], name=c["title"])
-        applied.append({"nation": nation, **c})
-    return leaders, at, toward, progress, destination, applied, rejected
+    new = []   # (row it splits from, share)
+    for nation, c, r in forming:
+        kind = lrules["commands"]["form_settlers"]["becomes"]
+        title = lrules["types"][kind]["title"]
+        share = c["people"] / float(people[r].sum())
+        leaders.append({"id": next_id, "name": title, "type": kind, "title": title, "nation": nation,
+                        "parent": c["leader"], "founded_turn": turn})
+        new.append((r, share))
+        applied.append({"nation": nation, **c, "new_leader": next_id})
+        next_id += 1
+    if new:
+        src = np.array([r for r, _ in new])
+        share = np.array([f for _, f in new])
+        here = state.at[src]   # a standing segment: at == toward == destination
+        at, toward, destination = (np.concatenate([a, here]).astype(a.dtype) for a in (at, toward, destination))
+        progress = np.concatenate([progress, np.zeros(len(src))])
+        part_people, part_stock = people[src] * share[:, None], stock[src] * share[:, None]
+        for (r, _), p, k in zip(new, part_people, part_stock):   # one at a time: a leader may form only once a turn
+            people[r] -= p
+            stock[r] -= k
+        people, stock = np.concatenate([people, part_people]), np.concatenate([stock, part_stock])
+        hours = np.concatenate([hours, hours[src]])
+    return {"leaders": leaders, "at": at, "toward": toward, "progress": progress, "destination": destination,
+            "people": people, "hours": hours, "stock": stock, "next_leader_id": next_id,
+            "applied": applied, "rejected": rejected}
 
 
 def travel_km(people, hours, activities, rules):
@@ -877,25 +915,28 @@ def step_locked(args):
             if cur.activities != ACTIVITIES:
                 sys.exit(f"the state's activities {cur.activities} aren't the engine's {ACTIVITIES}; start a new state")
             commands = orders.read_turn(args.state, cur.turn)
-            leaders, at, toward, progress, destination, applied, rejected = apply_orders(
-                cur, commands, orders.walkable(world), lrules)
+            year = apply_orders(cur, commands, orders.walkable(world), lrules, cur.turn + 1)
+            leaders, at, toward, progress, destination = (year[k] for k in ("leaders", "at", "toward", "progress", "destination"))
+            applied, rejected, start_people, stock = year["applied"], year["rejected"], year["people"], year["stock"]
+            nation = np.array([lead["nation"] for lead in leaders], dtype=np.uint16)
             # Last year's hours set how far a segment can go this year.
             at, toward, progress, destination, arrived = move_segments(
-                at, toward, progress, destination, travel_km(cur.people, cur.hours, cur.activities, mrules))
+                at, toward, progress, destination, travel_km(start_people, year["hours"], cur.activities, mrules))
             tiles = cs.segment_tile(at, toward, progress)
-            # Production and consumption: the year that is ending, so this turn's people, before they age.
+            # Production and consumption: the year that is ending, so this turn's people (with any settling
+            # parties split off), before they age.
             # The year's hours are what it took to feed them (allocate()).
             fp = names.index(rules["farming"]["product"])
             if fp != names.index(rules["foraging"]["product"]):
                 sys.exit("economy.json: farming and foraging must make the same product")
             rates = consumption_rates(names, rules)
-            need = (cur.people[:, :, None] * rates[None, :, :]).sum(axis=1) * 365
+            need = (start_people[:, :, None] * rates[None, :, :]).sum(axis=1) * 365
             hours, food, food_labor, food_received, food_top = allocate(
-                cur.people, leaders, lrules, tiles, need[:, fp], cur.stock[:, fp], world, rules)
-            production, labor, prod_max, received = (np.zeros_like(cur.stock) for _ in range(4))
+                start_people, leaders, lrules, tiles, need[:, fp], stock[:, fp], world, rules)
+            production, labor, prod_max, received = (np.zeros_like(stock) for _ in range(4))
             production[:, fp], labor[:, fp], prod_max[:, fp], received[:, fp] = food, food_labor, food_top, food_received
-            held = cur.stock + production + received
-            need, consumed = consume(cur.people, held, rates)
+            held = stock + production + received
+            need, consumed = consume(start_people, held, rates)
             decay = economy_modifiers(len(tiles), rules)
             economy = {"production": production, "labor": labor, "production_max": prod_max, "need": need,
                        "consumed": consumed, "received": received, "decay": decay,
@@ -904,20 +945,20 @@ def step_locked(args):
             # Demographics: the year's births and deaths, among the people who lived it.
             demo = load_demography()
             settled = np.array([bool(lrules["types"][lead["type"]]["settled"]) for lead in leaders], dtype=bool)
-            born = births(cur.people, birth_rates(cur.people, settled, demo))
+            born = births(start_people, birth_rates(start_people, settled, demo))
             fc = names.index(demo["deaths"]["starvation"]["product"])
             food_met = np.divide(consumed[:, fc], need[:, fc], out=np.ones(len(tiles)), where=need[:, fc] > 0)
-            survivors, born_alive, deaths = mortality(cur.people, born, hours, cur.activities, tiles, world,
+            survivors, born_alive, deaths = mortality(start_people, born, hours, cur.activities, tiles, world,
                                                       food_met, settled, demo)
 
             people = age_one_year(survivors)
             people[:, 0] = born_alive
-            tile_owner = update_ownership(cur.owner, tiles, cur.nation, people, at == toward)
+            tile_owner = update_ownership(cur.owner, tiles, nation, people, at == toward)
             vrules = load_visibility()
-            visible = active_visibility(tiles, cur.nation, people, len(cur.nations) + 1, vrules["radius_tiles"])
+            visible = active_visibility(tiles, nation, people, len(cur.nations) + 1, vrules["radius_tiles"])
             state = cs.State(leaders, at, toward, progress, destination, people, hours, cur.activities,
                              tile_owner, cur.nations, visible, cur.explored | visible, products, economy, CAUSES,
-                             deaths, cur.leader_types, cur.next_leader_id)
+                             deaths, cur.leader_types, year["next_leader_id"])
             extra = {k: v for k, v in cur.manifest.items() if k.startswith("initial_")}
             m = cs.write_turn(args.state, cur.turn + 1, state,
                               extra={**extra, **economy_extra(rules), **demography_extra(demo),

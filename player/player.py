@@ -34,7 +34,9 @@ Endpoints:
     /api/nation/<id>/view  what the nation knows at the current turn (see view_json()) (JSON)
     POST /api/nation/<id>/orders  {"turn": t, "leader": id, "direction": "nw"} orders a leader to move
                            their segment to the neighbouring tile that way; {"turn": t, "leader": id,
-                           "found_kingdom": "King"} to found a kingdom where they are, under that title;
+                           "found_kingdom": "King"} to found a kingdom where they are, under that title
+                           ("establish_settlement": "Lord" likewise for a pioneer); "form_settlers": 250
+                           to send out a settling party of that many people;
                            "direction": null takes the order back. Returns the leader's segment as /view
                            lists it; 400 if the order isn't possible, 409 if turn t isn't accepting
                            orders (JSON)
@@ -154,17 +156,28 @@ class Player(Game):
         lead = t.leaders[r]
         return f"{self.nation_name(t, lead['nation'])} {lead['title']}" if lead["nation"] else lead["title"]
 
-    def found_kingdom(self, t, r) -> dict:
-        """Whether the segment can found a kingdom now: {"ok", "why": a sentence if not, "title": the
-        default title, "max_length"}. orders.check() is the rule; this puts it in the player's words."""
+    def settle(self, t, r, kind: str) -> dict:
+        """Whether the segment can settle now (found a kingdom or establish a settlement, `kind`): {"ok",
+        "why": a sentence if not, "title": the default title, "max_length"}. orders.check() is the rule;
+        this puts it in the player's words."""
         rules = t.manifest["leader_rules"]
-        spec = rules["commands"]["found_kingdom"]
+        spec = rules["commands"][kind]
         why = None
         if t.at[r] != t.toward[r]:
             why = "They are on the move. They must be wholly on one tile to settle."
         elif orders.settled_by_others(t, rules, t.leaders[r]["nation"], int(t.at[r])):
             why = "Another people have already settled here."
         return {"ok": why is None, "why": why, "title": spec["default_title"], "max_length": spec["max_title_length"]}
+
+    def form_settlers(self, t, r) -> dict:
+        """Whether the segment can send out a settling party now: {"ok", "why", "min", "max": the most
+        people it can send, keeping min_left}."""
+        spec = t.manifest["leader_rules"]["commands"]["form_settlers"]
+        have = int(np.floor(float(np.asarray(t.people[r]).sum())))
+        most = have - spec["min_left"]
+        why = None if most >= spec["min_people"] else \
+            f"They need at least {spec['min_people'] + spec['min_left']} people to send out settlers."
+        return {"ok": why is None, "why": why, "min": spec["min_people"], "max": max(most, spec["min_people"])}
 
     def moves(self, t, r):
         """[{"direction", "ok"}] for the 8 tiles around the tile the segment counts as being in. Every
@@ -182,16 +195,21 @@ class Player(Game):
             to = orders.tile_index(c["to"])
             order = {"type": "move",
                      "direction": next((d for d, i in orders.neighbours(int(t.tile[r])) if i == to), None)}
-        elif c and c["type"] == "found_kingdom":
-            order = {"type": "found_kingdom", "title": c["title"]}
+        elif c and c["type"] in orders.SETTLE:
+            order = {"type": c["type"], "title": c["title"]}
+        elif c and c["type"] == "form_settlers":
+            order = {"type": "form_settlers", "people": c["people"]}
         can = t.manifest["leader_rules"]["types"][t.leaders[r]["type"]]["commands"]
         out = {"leader": lid, "own": True, **self.leader_ref(t, r),
                "people": round(float(np.asarray(t.people[r]).sum())), "situation": situation(t, r, rules),
                "moving": bool(t.at[r] != t.toward[r]), "order": order, "commands": can}
         if "move" in can:
             out["moves"] = self.moves(t, r)
-        if "found_kingdom" in can:
-            out["found_kingdom"] = self.found_kingdom(t, r)
+        for kind in orders.SETTLE:
+            if kind in can:
+                out[kind] = self.settle(t, r, kind)
+        if "form_settlers" in can:
+            out["form_settlers"] = self.form_settlers(t, r)
         return out
 
     def foreign_segment(self, t, r, rules) -> dict:
@@ -215,11 +233,10 @@ class Player(Game):
                     cover_types, largest share first}] for every tile it has explored,
          "segments": [...] on the tiles it can see now: its own with "people", "situation", "order" and
                     "moves"; other nations' with what it knows of them,
-         "camps": [{"tile", "nation": {"id", "name", "flag"}, "own", "tepees", "settled"}]: one per nation
-                    per tile it can see, drawn as that many tepees (or, if any of the nation's segments
-                    there is settled, round huts): all of the nation's people there (on the tile
-                    or counted as on it while moving) added up, so a camp's size shows roughly how many
-                    live there without giving the number}."""
+         "camps": [{"tile", "nation": {"id", "name", "flag"}, "own", "look", "count", "small"}]: one per
+                    nation and way of drawing its people per tile it can see (camps.py): that many
+                    tepees, huts or wagons for all those people there added up, so a camp's size shows
+                    roughly how many live there without giving the number}."""
         t = self.current_turn()
         if t is None or not 1 <= nid <= len(t.nations):
             return None
@@ -238,7 +255,7 @@ class Player(Game):
         segments = [self.segment_json(t, r, nid, commands, rules) for r in rows]
         camps = [{**c, "tile": orders.tile_name(c["tile"]), "own": c["nation"] == nid,
                   "nation": self.nation_ref(t, c["nation"]) if c["nation"] else None}
-                 for c in campsmod.camps(t, rows, rules["camp"])]
+                 for c in campsmod.camps(t, rows, campsmod.rules_from(rules))]
         root = t.nations[nid - 1]["leader"]
         rr = t.row_of().get(root)
         own = [r for r in rows if t.leaders[r]["nation"] == nid]
@@ -250,8 +267,9 @@ class Player(Game):
                            "segments": segments, "camps": camps}, separators=(",", ":")).encode()
 
     def order(self, nid: int, body: dict):
-        """Turn a direction into a move command, or a title into a found_kingdom command, and give it
-        (Game.give_order()). Returns (status, dict)."""
+        """Turn a direction into a move command, a title into a found_kingdom or establish_settlement
+        command, or a number of people into a form_settlers command, and give it (Game.give_order()).
+        Returns (status, dict)."""
         t = self.current_turn()
         if t is None:
             return 409, {"error": "no game state"}
@@ -260,16 +278,25 @@ class Player(Game):
         if r is None or t.leaders[r]["nation"] != nid:
             return 400, {"error": "that isn't one of your leaders"}
         command = None
-        if "found_kingdom" in body:
-            spec = t.manifest["leader_rules"]["commands"]["found_kingdom"]
-            title = body["found_kingdom"]
+        kind = next((k for k in orders.SETTLE if k in body), None)
+        if kind:
+            spec = t.manifest["leader_rules"]["commands"][kind]
+            title = body[kind]
             try:
                 title = names.clean(spec["default_title"] if title is None else title, spec["max_title_length"], "title")
             except ValueError as e:
                 return 400, {"error": str(e)[0].upper() + str(e)[1:] + "."}
-            if not self.found_kingdom(t, r)["ok"]:
-                return 400, {"error": self.found_kingdom(t, r)["why"]}
-            command = {"type": "found_kingdom", "title": title}
+            can = self.settle(t, r, kind)
+            if not can["ok"]:
+                return 400, {"error": can["why"]}
+            command = {"type": kind, "title": title}
+        elif "form_settlers" in body:
+            n, can = body["form_settlers"], self.form_settlers(t, r)
+            if not can["ok"]:
+                return 400, {"error": can["why"]}
+            if not isinstance(n, int) or isinstance(n, bool) or not can["min"] <= n <= can["max"]:
+                return 400, {"error": f"The party must be from {can['min']} to {can['max']} people."}
+            command = {"type": "form_settlers", "people": n}
         elif direction is not None:
             to = dict(orders.neighbours(int(t.tile[r]))).get(direction)
             if to is None:
@@ -277,8 +304,8 @@ class Player(Game):
             command = {"type": "move", "to": orders.tile_name(to)}
         status, out = self.give_order(nid, body.get("turn"), lid, command)
         if status == 400:   # orders.check()'s reasons name tiles, which a player doesn't know
-            return status, {"error": "They can't do that." if command and command["type"] == "found_kingdom"
-                            else "They can't go that way."}
+            return status, {"error": "They can't go that way." if command and command["type"] == "move"
+                            else "They can't do that."}
         if status != 200:
             return status, out
         commands = {c["leader"]: c for c in out["commands"]}

@@ -231,6 +231,8 @@
     if (!c) return '<span class="none">None</span>';
     if (c.type === "move") return `Move to ${esc(c.to)}`;
     if (c.type === "found_kingdom") return `Found a kingdom (${esc(c.title)})`;
+    if (c.type === "establish_settlement") return `Establish a settlement (${esc(c.title)})`;
+    if (c.type === "form_settlers") return `Form settlers (${esc(c.people)} people)`;
     return esc(c.type);
   }
 

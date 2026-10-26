@@ -230,7 +230,9 @@ class Player(Game):
          "terrain_types": [...], "cover_types": [...],
          "tiles": [{"id", "seen": whether it can see the tile now, "terrain": its landforms and "cover":
                     what covers its land (and frozen water), each as indices into terrain_types or
-                    cover_types, largest share first}] for every tile it has explored,
+                    cover_types, largest share first; "terrain_size" and "cover_size": for each, how big
+                    a share it is, roughly (0: half or more, 1: a quarter to a half, 2: less), which the
+                    page shows as the icon's size}] for every tile it has explored,
          "segments": [...] on the tiles it can see now: its own with "people", "situation", "order" and
                     "moves"; other nations' with what it knows of them,
          "camps": [{"tile", "nation": {"id", "name", "flag"}, "own", "look", "count", "small"}]: one per
@@ -246,9 +248,13 @@ class Player(Game):
         tiles = []
         def largest_first(share):
             return sorted((k for k in range(len(share)) if share[k] > 0), key=lambda k: (-share[k], k))
+        def sizes(share, order):   # shares are percentages
+            return [0 if share[k] >= 50 else 1 if share[k] >= 25 else 2 for k in order]
         for i in explored.tolist():
+            terrain, cover = largest_first(self.terrain[:, i]), largest_first(self.cover[:, i])
             tiles.append({"id": orders.tile_name(i), "seen": bool(visible[i]),
-                          "terrain": largest_first(self.terrain[:, i]), "cover": largest_first(self.cover[:, i])})
+                          "terrain": terrain, "terrain_size": sizes(self.terrain[:, i], terrain),
+                          "cover": cover, "cover_size": sizes(self.cover[:, i], cover)})
         commands = {c["leader"]: c for c in orders.read_nation(self.state_dir, t.turn, nid)}
         rows = np.flatnonzero(visible[t.tile])
         rows = sorted(rows.tolist(), key=lambda r: (t.leaders[r]["nation"] != nid, r))   # own first

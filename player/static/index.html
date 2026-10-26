@@ -49,9 +49,12 @@
   #side { width: 250px; flex: none; display: flex; flex-direction: column; padding: 12px; gap: 12px; }
   #tile { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
   #terrain { padding: 6px 8px; min-height: 2.6em; display: flex; flex-direction: column; gap: 5px; }
-  #terrain .types { display: flex; flex-wrap: wrap; gap: 4px; }
+  #terrain .types { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 4px; }
   .ticon { display: inline-block; width: 24px; height: 24px; border: 1px solid rgba(0, 0, 0, 0.6); }
   .ticon svg { display: block; width: 100%; height: 100%; }
+  /* A landform or cover's icon is smaller the less of the tile it covers: a quarter to a half, less. */
+  .ticon.size1 { width: 19px; height: 19px; }
+  .ticon.size2 { width: 14px; height: 14px; }
   #segments { display: flex; flex-direction: column; gap: 5px; }
   .seg.shown { outline: 2px solid var(--ink); outline-offset: -5px; }
   #info { padding: 6px 8px; font-size: 14px; display: flex; flex-direction: column; gap: 4px; }
@@ -242,10 +245,10 @@ const TYPE_ICONS = {
   tundra: ["#bccfd1", `<path d="M2 15q2.5-4 5 0M8 16q2.5-4 5 0M13 13q2.5-4 5 0" stroke="#3f5a43" stroke-width="1.4" fill="#6f8a6f"/><g fill="#fff"><circle cx="5" cy="5" r="0.9"/><circle cx="11" cy="7" r="0.9"/><circle cx="16" cy="4" r="0.9"/></g>`],
   ice: ["#eaf4f8", `<path d="M3 5 8 9 6 14M8 9 14 8 17 13M14 8 16 3" stroke="#6f98ae" stroke-width="1.3" fill="none"/>`],
 };
-function typeIcon(name) {
+function typeIcon(name, size = 0) {   // size: 0 for half the tile or more, 1 for a quarter to a half, 2 for less
   const icon = TYPE_ICONS[name];
   if (!icon) return `<span>${esc(name)}</span>`;
-  return `<span class="ticon" title="${esc(name)}" role="img" aria-label="${esc(name)}"><svg viewBox="0 0 20 20"><rect width="20" height="20" fill="${icon[0]}"/>${icon[1]}</svg></span>`;
+  return `<span class="ticon${size ? ` size${size}` : ""}" title="${esc(name)}" role="img" aria-label="${esc(name)}"><svg viewBox="0 0 20 20"><rect width="20" height="20" fill="${icon[0]}"/>${icon[1]}</svg></span>`;
 }
 
 // Small drawn symbols that stand in for words, each with the word as its tooltip.
@@ -820,9 +823,10 @@ const SETTLE = {
 };
 function renderSide() {
   const t = selected ? known.get(selected) : null;
-  // Landforms, then what covers the land, each largest first, as rows of icons without the shares.
-  $("terrain").innerHTML = t ? [t.terrain.map(k => VIEW.terrain_types[k]), t.cover.map(k => VIEW.cover_types[k])]
-    .filter(list => list.length).map(list => `<div class="types">${list.map(typeIcon).join("")}</div>`).join("") : "";
+  // Landforms, then what covers the land, each largest first, as rows of icons sized roughly by share.
+  $("terrain").innerHTML = t ? [t.terrain.map((k, j) => typeIcon(VIEW.terrain_types[k], t.terrain_size[j])),
+                                t.cover.map((k, j) => typeIcon(VIEW.cover_types[k], t.cover_size[j]))]
+    .filter(list => list.length).map(list => `<div class="types">${list.join("")}</div>`).join("") : "";
   const segs = t && t.seen ? segsByTile.get(t.id) || [] : [];
   $("segments").innerHTML = segs.map(s => `<button class="btn seg" data-leader="${s.leader}">
       ${leaderLabel(s)}${s.own ? `<span class="people">${s.people.toLocaleString()} ${glyph("people", s.people === 1 ? "person" : "people")}</span>` : ""}

@@ -1,4 +1,4 @@
-# Game state format (`capita/cohort-state-8`)
+# Game state format (`capita/cohort-state-9`)
 
 People belong to **segments**. A segment is the people directly under one **leader**: a leader marshals
 their segment toward some purpose, whether as a band, a town, an army or a settling party. Leaders form
@@ -21,7 +21,9 @@ added consumption (`need.npy`, `consumed.npy`); version 6 added deaths (`deaths.
 the manifest); version 7 made rows segments instead of tiles (`leaders.json`, `leader.npy`, `tile.npy`,
 `at.npy`, `toward.npy`, `progress.npy`, and `leader_types` and `next_leader_id` in the manifest, replacing
 `tiles.npy` and `nation.npy`; nations gained `leader`); version 8 added `destination.npy`, so a move
-can take a segment one step past the tile it is heading for. Older states can't be read; delete the state
+can take a segment one step past the tile it is heading for; version 9 added leaders' `title`,
+`received.npy` (food shared between segments) and the `farming` activity, and made `hours.npy` the
+hours actually spent in the year. Older states can't be read; delete the state
 folder and run `engine.py init` again.
 
 ## Directory layout
@@ -65,7 +67,7 @@ Turn directories are named `turn_` + the turn number as 5 digits, zero-padded.
 ## `current.json`
 
 ```json
-{ "format": "capita/cohort-state-8", "turn": 7, "dir": "turn_00007" }
+{ "format": "capita/cohort-state-9", "turn": 7, "dir": "turn_00007" }
 ```
 
 Readers open the directory named by `dir`. Writers replace this file atomically: write
@@ -74,7 +76,7 @@ Readers open the directory named by `dir`. Writers replace this file atomically:
 ## `phase.json`
 
 ```json
-{ "format": "capita/cohort-state-8", "turn": 7, "phase": "resolving", "since": "2026-10-21T20:28:13Z" }
+{ "format": "capita/cohort-state-9", "turn": 7, "phase": "resolving", "since": "2026-10-21T20:28:13Z" }
 ```
 
 Each turn goes through two phases:
@@ -113,15 +115,16 @@ is the number of products. A tile is named by its flat grid index: `row * 720 + 
 | `progress.npy` | `<f8` (float64) | `[S]` | How far it has gone from the centre of `at` to the centre of `toward`, as a share of that distance: at least 0 and below 1, and 0 when it isn't moving. |
 | `destination.npy` | `<u4` (uint32) | `[S]` | Where its move ends: `toward`, or one of the 8 neighbours of `toward`, which it goes on to once it gets there. **Equal to `at` when it isn't moving.** |
 | `people.npy` | `<f8` (float64) | `[S, 101]` | People in the segment by single year of age. Column `a` holds age `a` for `a` = 0..99; **column 100 is "100 and over"**. Fractions are allowed and are rounded only for display. |
-| `hours.npy` | `<f4` (float32) | `[S, 101, A]` | For each segment, age and activity: the mean hours per person per day spent on that activity, averaged over the year. Activities are in `manifest.activities` order. They needn't sum to 24; any remainder is unassigned time. |
+| `hours.npy` | `<f4` (float32) | `[S, 101, A]` | For each segment, age and activity: the mean hours per person per day spent on that activity, averaged over the **year that ended with this turn** (at turn 0, the starting schedule). Activities are in `manifest.activities` order. They needn't sum to 24; any remainder is unassigned time. |
 | `owner.npy` | `<u2` (uint16) | `[259200]` | The id of the nation that **owns** each tile of the whole grid (flat index), 0 = nobody. Ownership belongs to tiles, not segments, and nations can own tiles nobody is on. |
 | `visible.npy` | `<u1` (uint8) | `[M, 32400]` | **Active visibility**: tiles the nation can see this turn. Row `k` is nation id `k`, one bit per tile (below). |
 | `explored.npy` | `<u1` (uint8) | `[M, 32400]` | **Explored** tiles: every tile the nation has ever actively seen, including this turn. A tile that is explored but not visible is **passively** visible: its geography is known, nothing else. |
 | `production.npy` | `<f8` (float64) | `[S, P]` | How much of each product the segment made in the **year that ended with this turn**, in the product's unit. All zeros at turn 0, which follows no year. |
 | `labor.npy` | `<f8` (float64) | `[S, P]` | Person-hours of work that went into each product that year. |
-| `production_max.npy` | `<f8` (float64) | `[S, P]` | The most the segment's tile can produce of each product in a year: production levels off here however much labor goes in. **Shared** by every segment on the tile, so add it up once per tile, not per segment. |
+| `production_max.npy` | `<f8` (float64) | `[S, P]` | The most the segment's tile could produce of each product in a year by the segment's activity (farming, or foraging on the land the farms leave): production levels off here however much labor goes in. **Shared** by every segment on the tile that does the same, so add it up once per tile and activity, not per segment. |
 | `need.npy` | `<f8` (float64) | `[S, P]` | How much of each product the segment's people needed that year: people × the per-person daily amount for their age × 365. 0 for products nobody consumes. |
 | `consumed.npy` | `<f8` (float64) | `[S, P]` | How much they actually consumed: the need, or all the segment held if that was less. A shortfall is shared evenly, so people of every age consumed `consumed / need` of their need. |
+| `received.npy` | `<f8` (float64) | `[S, P]` | How much of each product other segments gave the segment that year, less what it gave them (negative for a giver). The segment held its stock + production + received. |
 | `decay.npy` | `<f4` (float32) | `[S, P]` | The share of the segment's holdings of each product lost at the end of that year, 0–1. Per segment, so that future rules can change it locally. |
 | `stock.npy` | `<f8` (float64) | `[S, P]` | How much of each product the segment holds at the start of this turn, after decay. Holdings belong to the segment and travel with it. |
 | `deaths.npy` | `<f8` (float64) | `[S, C]` | How many people of the segment died of each cause in the **year that ended with this turn**, newborns included; `C` is the number of causes, in `manifest.causes` order. Fractions are allowed: people die in fractions, even below one. All zeros at turn 0. |
@@ -201,8 +204,8 @@ indexed by nation id instead.
 
 ```json
 { "leaders": [
-  { "id": 1, "name": "Chieftain of ISL", "type": "chieftain", "nation": 20, "parent": 0, "founded_turn": 0 },
-  { "id": 2, "name": "Chieftain of FIN", "type": "chieftain", "nation": 14, "parent": 0, "founded_turn": 0 }
+  { "id": 1, "name": "Chieftain of ISL", "type": "chieftain", "title": "Chieftain", "nation": 20, "parent": 0, "founded_turn": 0 },
+  { "id": 2, "name": "High King", "type": "king", "title": "High King", "nation": 14, "parent": 0, "founded_turn": 0 }
 ] }
 ```
 
@@ -213,7 +216,8 @@ don't age or die.
 |-----|---------|
 | `id` | The leader's number. **Strictly increasing** down the list, and never reused: `manifest.next_leader_id` is the next one to hand out, so a leader that is removed (say, merged back into another segment) leaves a gap. |
 | `name` | What the leader is called. |
-| `type` | One of `manifest.leader_types`: `chieftain`, `mayor`, `superintendent`, `admiral`, `general` or `king`. |
+| `type` | The leader's internal type, one of `manifest.leader_types`: `chieftain`, `mayor`, `superintendent`, `admiral`, `general` or `king`. It decides what they can do (`engine/leaders.json`). |
+| `title` | What a leader of their type is called: the type's `title` in `leaders.json` (`Chieftain`), or one their player chose on founding a kingdom (at most 20 characters). The pages show it; nothing in the rules reads it. |
 | `nation` | The id of the leader's nation, and so of their segment's people; 0 = no nation. |
 | `parent` | The id of the leader they report to, of the same nation, or 0 for none. Following parents never loops. A nation's root leader has none; so may leaders with no nation. |
 | `founded_turn` | The turn the leader was created. |
@@ -223,11 +227,11 @@ Every record has exactly these keys.
 
 ```json
 {
-  "format": "capita/cohort-state-8",
+  "format": "capita/cohort-state-9",
   "turn": 7,
   "grid": { "tile_size_degrees": 0.5, "width": 720, "height": 360 },
   "ages": { "count": 101, "last_is_open_ended": true },
-  "activities": ["sleep", "subsistence", "childcare", "other"],
+  "activities": ["sleep", "subsistence", "farming", "childcare", "other"],
   "hours_unit": "mean hours per person per day, averaged over the year",
   "products": [{ "name": "food", "unit": "kcal" }],
   "causes": ["starvation", "predation_and_accidents", "cancer", "other_age_related", "infection", "child_mortality"],
@@ -242,7 +246,7 @@ Every record has exactly these keys.
     "progress": { "file": "progress.npy", "dtype": "<f8", "shape": [49910] },
     "destination": { "file": "destination.npy", "dtype": "<u4", "shape": [49910] },
     "people":   { "file": "people.npy",   "dtype": "<f8", "shape": [49910, 101] },
-    "hours":    { "file": "hours.npy",    "dtype": "<f4", "shape": [49910, 101, 4] },
+    "hours":    { "file": "hours.npy",    "dtype": "<f4", "shape": [49910, 101, 5] },
     "owner":    { "file": "owner.npy",    "dtype": "<u2", "shape": [259200] },
     "visible":  { "file": "visible.npy",  "dtype": "<u1", "shape": [225, 32400] },
     "explored": { "file": "explored.npy", "dtype": "<u1", "shape": [225, 32400] },
@@ -263,13 +267,13 @@ Every record has exactly these keys.
   "initial_population_source": "world_population_start.json",
   "initial_nations_source": "world_population_start_capitals.nations.json",
   "economy_rules_source": "engine/economy.json",
-  "economy_rules": { "products": { ... }, "foraging": { ... } },
+  "economy_rules": { "products": { ... }, "foraging": { ... }, "farming": { ... }, "sharing": { ... } },
   "demography_rules_source": "engine/demography.json",
   "demography_rules": { "births": { ... }, "deaths": { ... } },
   "leader_rules_source": "engine/leaders.json",
-  "leader_rules": { "types": { ... }, "start_type": "chieftain" },
+  "leader_rules": { "types": { ... }, "commands": { ... }, "start_type": "chieftain" },
   "movement_rules_source": "engine/movement.json",
-  "movement_rules": { "km_per_hour": 2.5, "not_travel_activities": ["sleep", "subsistence"] },
+  "movement_rules": { "km_per_hour": 2.5, "not_travel_activities": ["sleep", "subsistence", "farming"] },
   "visibility_rules_source": "engine/visibility.json",
   "visibility_rules": { "radius_tiles": 1 },
   "orders": { "turn": 6, "applied": [ { "nation": 1, "leader": 37, "type": "move", "to": "S355E1495" } ],
@@ -291,7 +295,7 @@ Every record has exactly these keys.
 - `causes` lists the causes of death, in the order of the `deaths.npy` columns.
 - `checksum.value` is the SHA-256 of the raw data bytes (not the `.npy` headers) of `leader`, `tile`,
   `at`, `toward`, `progress`, `destination`, `people`, `hours`, `owner`, `visible`, `explored`, `production`, `labor`,
-  `production_max`, `need`, `consumed`, `decay`, `stock` and `deaths`, in that order, followed by the
+  `production_max`, `need`, `consumed`, `received`, `decay`, `stock` and `deaths`, in that order, followed by the
   `nations` list and then the `leaders` list, each as canonical JSON: sorted keys, no whitespace (`","`
   and `":"` separators), UTF-8. It shows whether a deterministic replay reproduced a turn exactly.
   `segments`, `populated_tiles` (tiles that segments with people count as being in) and `total_people`
@@ -353,13 +357,19 @@ wait for it: if it is held, the step exits with status 3. Readers don't take it.
 
 ## Turn rules (`engine/engine.py`, for now)
 
-One turn is one year. First the turn's orders are applied (`orders.plan_move()`). A `move` given to a
+One turn is one year. First the turn's orders are applied (`apply_orders()`). A leader can be given only
+the commands their type lists (`engine/leaders.json`). `found_kingdom` turns a leader whose segment is
+wholly on one tile into a `king` (the type's `becomes`), with the title their player gave as both
+`title` and `name`; a king's segment is **settled**: it farms, takes no move commands, and keeps other
+nations from founding kingdoms on its tile. If leaders of two or more nations found kingdoms on the
+same tile in the same turn, none of them does. A `move` given to a
 standing segment sets `toward` and `destination` to the named neighbour. Given to a moving one, it sets
 `destination` to the named tile and either keeps the step under way or turns back (swapping `at` and
 `toward` and keeping `1 - progress`), whichever way is shorter, measuring the rest of the current step
 plus the step from its end to the destination. Then every moving segment travels `km`, which is
 `km_per_hour × 365 ×` its people-weighted mean of the hours a day not spent on `not_travel_activities`
-(`engine/movement.json`; a segment with nobody in it doesn't move). Distances are great circles between
+in the year before (`hours.npy` of the current turn; `engine/movement.json`; a segment with nobody in it
+doesn't move). Distances are great circles between
 tile centres. When it reaches `toward`, it sets `at = toward` and `progress = 0`. If that tile is its
 `destination`, it has arrived and stops for the year; otherwise `toward = destination` and it carries
 on with what is left of `km`. Whatever step it is on when `km` runs out, it is left partway along. Each segment
@@ -367,37 +377,53 @@ then lives the year on the tile it counts as being in where it ended up. There a
 create or merge segments. Each turn every surviving cohort
 moves up one year of age, and the 99-year-olds
 join the 100+ group. Age 0 holds the children born during the year who survived it (below). Activity
-hours belong to the age, not the cohort: people take on the hours of their new age, so that people
-born in the game work as adults once they grow up. The activity list and
-its starting hours are placeholders in `engine/engine.py` (`starting_hours()`): rough smooth curves by
-age, so that babies sleep more, subsistence work starts around age 10 and peaks in adulthood, and
-childcare peaks around age 30.
+hours belong to the age, not the cohort: each year's hours come from the schedule for each age, so
+that people born in the game work as adults once they grow up. The activity list and the schedules
+are placeholders in `engine/engine.py`: rough smooth curves by age, one for each way a segment can feed
+itself (its leader type's `activity`). Foragers (`starting_hours()`, also turn 0's hours) start
+`subsistence` work around age 10, peaking at 8.5 hours a day in adulthood; farmers (`farming_hours()`)
+start `farming` around 7, peak at about 9.5 hours and keep working longer. Babies sleep more, and
+childcare peaks around age 30. A schedule's hours of work are the most people give: they work only
+what their food needs (below), and the hours they don't need go to `other`.
 
-**Production, before ageing** (`produce()`): the year that is ending is worked by the current turn's
-people with their current hours, so production is computed before they age, and stored in the new
-turn. The rules and all their values are in `engine/economy.json`, which the engine reads on every
-step. For now the only product is **food**, in kcal, made by **foraging** (hunting and gathering):
+**Production, before ageing** (`allocate()`): the year that is ending is worked by the current turn's
+people, so production is computed before they age, and stored in the new turn. The rules and all their
+values are in `engine/economy.json`, which the engine reads on every step. For now the only product is
+**food**, in kcal, made by **foraging** (hunting and gathering, the `subsistence` activity) or
+**farming** (farming and herding as one activity, `farming`), whichever the segment's leader type has.
 
-- Labor `H` is the year's person-hours of the `subsistence` activity: people × hours a day × 365,
-  summed over ages.
-- A tile's production is `max × (1 − e^(−r·H / max))`, where `H` is the labor of every segment on the
-  tile. While labor is light, each hour yields about `r` kcal (`return_per_hour`, 1,000). As labor
-  approaches what the tile can sustain, extra hours yield less, and production levels off at `max`.
-  Each segment on the tile gets a share in proportion to its own labor.
-- `max` (`production_max.npy`) is the tile's sustainable yearly yield (`foraging_max()`): its land area
-  × the yield per km² of its land cover (from 15,000 kcal for tundra to 400,000 for wetlands, worked back
-  from observed forager densities) × a landform factor (hills 0.8, mountains 0.5) × a climate factor
-  (falling from 1 at 40° latitude to 0.4 at 70°), plus its water area × a near-shore fishing yield, all
-  × 1.2 if a navigable river runs through it.
+- Labor `H` is a year's person-hours of the activity: people × hours a day × 365, summed over ages. Its
+  most is what the segment's schedule allows.
+- Each activity on a tile has a curve, `max × (1 − e^(−r·H / max))`, where `H` is the labor of every
+  segment working it there. While labor is light, each hour yields about `r` kcal (`return_per_hour`:
+  1,000 foraging, 1,200 farming). As labor approaches what the tile can sustain, extra hours yield less,
+  and production levels off at `max`. Each segment gets a share in proportion to its own labor.
+- Foraging's `max` (`foraging_max()`) is the tile's sustainable yearly yield: its land area × the yield
+  per km² of its land cover (from 15,000 kcal for tundra to 400,000 for wetlands, worked back from
+  observed forager densities) × a landform factor (hills 0.8, mountains 0.5) × a climate factor (falling
+  from 1 at 40° latitude to 0.4 at 70°), plus its water area × a near-shore fishing yield, all × 1.2 if
+  a navigable river runs through it.
+- Farming's `max` (`farming_max()`) is a Neolithic baseline: its land area × farming's yield per km² of
+  the cover (12 million kcal for grassland, about 15 people a km², down to none for tundra and ice) × a
+  landform factor (hills 0.6, mountains 0.2), plus 2 million kcal per km² of the whole tile if a
+  navigable river runs through it, all × a climate factor (1 to 40° latitude, 0.05 at 65°), plus the
+  same fishing as foragers. `yield_modifiers()` is where technology will raise both.
+- People work only the hours their food needs. Each segment first counts what it holds. On each tile,
+  a nation's farmers farm for what all of that nation's segments there still need, as far as their hours
+  allow; they keep what they need and give the rest to the others in proportion to their needs
+  (`received.npy`). Then every forager there works for what it still needs, all of them, of every
+  nation, sharing the foraging curve on the land the farms leave: foraging's `max` × (1 − the share of
+  farming's `max` produced). Segments of different nations never share food. The labor each segment
+  needs is found by bisection on the curve's average return per hour, since that falls as the labor on
+  it rises. The hours of work they don't need go to `other` in `hours.npy`.
 
 **Consumption** (`consume()`): the same people (before ageing) consume each product listed under
 `consumption` in `economy.json`. Each product has a table of `[age, amount per person per day]` points,
 filled in linearly between them; food starts at 700 kcal a day for infants (standing for their mothers'
 extra intake), peaks at 2,700 at 18 and falls to 1,800 at 100, about 2,200 on average across a forager
 age structure. A segment's `need` is its people × those amounts × 365. It consumes its need, or, if
-it holds less (its stock plus the year's production), everything it holds: everyone's consumption is
-cut by the same share. Segments don't share food with each other, even on the same tile. The
-shortfall, `need − consumed`, drives starvation.
+it holds less (its stock plus the year's production plus what it received), everything it holds:
+everyone's consumption is cut by the same share. The shortfall, `need − consumed`, drives starvation.
 
 **Decay, at the end of the year** (`end_of_year()`): what each segment holds of each product after
 consumption loses that product's decay rate, and the rest is the new turn's `stock`. The base rate is
@@ -414,20 +440,22 @@ summed over ages (`births()`), and become age 0 of the same segment in the new t
 `[age, rate]` points, filled in linearly, that counts men and women alike, with each birth counting
 half to each parent at their own ages. Over a lifetime it adds up to half the children per woman,
 about 5.8 for foragers, and gives about 38 births per 1,000 people a year at the turn-0 age structure.
+Settled segments have 1.25 times as many (`settled.birth_factor`).
 `birth_rates()` is where a decision model will choose instead.
 
 Then **deaths** (`mortality()`), among the same people. Each cause is a yearly hazard (deaths per
 person-year) for every segment and age (`death_hazards()`), and the causes add: a cohort's share dying in
 the year is `1 − e^(−total)`, and its deaths are split among the causes in proportion to their
 hazards. Each cohort lives the year at its mid-year age; children born during the year face half a
-year at age 0.25. People die in fractions. `mortality_modifiers()` multiplies each cause per segment; all
-1 for now, it is where future infrastructure will reduce them. The causes, with their rules and values
+year at age 0.25. People die in fractions. `mortality_modifiers()` multiplies each cause per segment:
+infection × 1.5 for settled segments (`settled.infection_factor`), else 1; it is where future
+infrastructure will reduce them. The causes, with their rules and values
 in the `deaths` section of `engine/demography.json`:
 
 | cause | depends on | rule |
 |---|---|---|
 | `starvation` | the year's food | Hazard by the segment's share of food need met (`consumed / need`): none at 90% or more, about 20% dying a year at half the need, about 60% at a quarter, filled in linearly. Doubled for children under 5 and people 65 and older. Includes infections that kill people because they are starving. |
-| `predation_and_accidents` | hours of work | Animal attacks, snakebite, falls, drowning: 1.3 × 10⁻⁶ per hour of the `subsistence` activity, about 0.4% a year for an adult foraging 8.5 hours a day. |
+| `predation_and_accidents` | hours of work | Animal attacks, snakebite, falls, drowning: 1.3 × 10⁻⁶ per hour of `subsistence` and 0.7 × 10⁻⁶ per hour of `farming`, about 0.4% a year for an adult foraging 8.5 hours a day. |
 | `cancer` | age | `a × e^(b × age)`: a fifth of the Siler ageing term. |
 | `other_age_related` | age | Heart disease, organ failure, frailty...: the other four fifths of it. |
 | `infection` | terrain | Infections that kill otherwise healthy people: 0.009 × a climate factor (1 in the tropics, falling to 0.6 at 60° latitude and beyond) × (1 + 0.5 × the wetland share of the segment's tile). |
@@ -449,7 +477,7 @@ code is the tile's country code, and codes not in the seed get no nation.
 
 **Leaders at turn 0** (`make_leaders()`): every populated tile becomes one segment, standing on it, with
 leader ids 1, 2, 3... in grid order. Every leader has `start_type` from `engine/leaders.json`
-(`chieftain`). Each nation's root leader leads the segment on its capital (or its most populous segment
+(`chieftain`), titled as that type is (`Chieftain`). Each nation's root leader leads the segment on its capital (or its most populous segment
 if nobody lives on the capital) and is named after the nation, such as `Chieftain of AUS`; the nation's
 other leaders report to the root and are named after their tile. Leaders of segments with no nation
 have no parent.

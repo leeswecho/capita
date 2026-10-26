@@ -19,18 +19,23 @@ leader leads the segment on its capital, and the nation's other leaders report t
 starting visibility.
 
 `step` advances one year per turn. For now the rules are:
-- Orders: the players' commands for the turn (server/orders.py, written by the control server) are
-  checked again and applied (apply_orders()). A move sends a leader's segment toward a neighbouring
-  tile; given to a segment already between two tiles, it first finishes that step or walks back,
-  whichever makes the whole way shorter.
+- Orders: the players' commands for the turn (server/orders.py, written by the control and player
+  servers) are checked again and applied (apply_orders()); a leader takes only the commands their type
+  lists (leaders.json). A move sends a leader's segment toward a neighbouring tile; given to a segment
+  already between two tiles, it first finishes that step or walks back, whichever makes the whole way
+  shorter. Founding a kingdom makes the leader a king, under the title their player gave, and their
+  segment settled: it farms and stays put, and no other nation can found a kingdom on its tile.
 - Movement (move_segments()): every moving segment covers a distance set by its people's travel hours
   and the pace in movement.json, along the rest of its step and then the step on to its destination,
   and arrives, stopping there, if that is enough; otherwise it is left partway and goes on next turn. Each segment then lives the year on the tile it counts as being in
   (cohort_state.segment_tile()) where it ends up.
-- Production, from the year's people and activity hours before they age (produce()): foraging turns
-  the year's subsistence hours into food (kcal), saturating at what the tile's land cover, landform,
-  climate, water and rivers can sustain (foraging_max()). Segments on the same tile share that limit,
-  in proportion to their hours. The rules and their values are in economy.json, read on every step.
+- Production, from the year's people before they age (allocate()): each segment feeds itself by its
+  leader type's activity, foraging (subsistence) or farming, each a curve that turns hours into food
+  (kcal), saturating at what the tile's land cover, landform, climate, water and rivers can sustain for
+  it (foraging_max(), farming_max()). People work only the hours their food needs, up to their
+  schedule's (SCHEDULES); a nation's farmers on a tile farm for all its segments there and give away
+  what they don't need, then every forager there works the land the farms leave. Segments working the
+  same curve share it in proportion to their hours. The rules and their values are in economy.json.
 - Consumption (consume()): the same people consume each product at a rate per person per day that
   depends on age (economy.json). If a segment holds less than its people need (its stock plus the
   year's production), everyone's consumption is cut by the same share. The need and what was consumed
@@ -40,7 +45,8 @@ starting visibility.
   Base rates come from economy.json; economy_modifiers() is where future products and infrastructure
   will change them per segment. Food decays completely for now, so none carries over.
 - Demographics, after production and consumption, so they can respond to the year's food: births
-  (births()) from a rate per person per year by age (demography.json, read on every step), joining
+  (births()) from a rate per person per year by age (demography.json, read on every step; more for
+  settled segments), joining
   their parents' segment. The rate is a placeholder; birth_rates() is where a decision model will
   choose instead. Then deaths (mortality()): several causes, each a yearly hazard by segment and age,
   which add (death_hazards()): starvation from the food shortfall, predation and accidents from hours
@@ -48,8 +54,8 @@ starting visibility.
   tile, and child mortality from age and the childcare shortfall. mortality_modifiers() is where future
   infrastructure will reduce them. Fractions of people die; the deaths by segment and cause are stored.
 - Ageing: each cohort moves up one year and the 99-year-olds join the open-ended 100-and-over group.
-  The year's surviving newborns become age 0. Activity hours belong to the age, not the cohort: people
-  take on the hours of their new age (age_one_year()).
+  The year's surviving newborns become age 0 (age_one_year()). Activity hours belong to the age, not
+  the cohort: each year's are worked out afresh from the schedules.
 - Ownership, recomputed every turn (update_ownership()): first come, first served, claimed only by
   segments that aren't moving. A nation owns a tile from the turn it is the first to have such a
   segment with people there, and loses it when it has none there any more.
@@ -100,7 +106,9 @@ VISIBILITY = os.path.join(HERE, "visibility.json")
 MAP = os.path.join(SERVER, "world_map.json")
 
 # Placeholder activities. Replace with the real list; the state files carry the names, so readers adapt.
-ACTIVITIES = ["sleep", "subsistence", "childcare", "other"]
+# A segment feeds itself by one of them, its leader type's "activity" (leaders.json): subsistence (hunting
+# and gathering) or farming (farming and herding).
+ACTIVITIES = ["sleep", "subsistence", "farming", "childcare", "other"]
 
 
 def starting_age_shares():
@@ -122,23 +130,44 @@ def starting_age_shares():
     return shares / shares.sum()
 
 
-def starting_hours():
-    """Hours per person per day for each age at turn 0, as float32 [AGES, len(ACTIVITIES)].
+def _rise(x):   # smooth 0 -> 1 step
+    return 1 / (1 + np.exp(-x))
 
-    Rough, smooth shapes (not data): babies sleep about 14 h, falling to about 7.4 h by 20 and rising
-    slowly to 8.5 h at 100; subsistence work starts around age 10, reaches 8.5 h in the 20s and eases
-    to about 5.5 h by 100; childcare peaks around 30 (parents) with a smaller bump around 60
-    (grandparents); "other" is whatever is left of the 24 hours. Every age gets slightly different values.
-    """
+
+def _schedule(work_activity, work):
+    """Hours per person per day for each age, float32 [AGES, len(ACTIVITIES)], with `work` [AGES] hours of
+    `work_activity` and the shapes every way of life shares: babies sleep about 14 h, falling to about
+    7.4 h by 20 and rising slowly to 8.5 h at 100; childcare peaks around 30 (parents) with a smaller
+    bump around 60 (grandparents); "other" is whatever is left of the 24 hours."""
     a = np.arange(AGES, dtype=np.float64)
-    rise = lambda x: 1 / (1 + np.exp(-x))   # smooth 0 -> 1 step
-    sleep = 7.0 + 7.0 * np.exp(-a / 5) + 0.015 * a
-    subsistence = 8.5 * rise((a - 14) / 3) * (1 - 0.35 * np.clip((a - 50) / 50, 0, 1) ** 2)
-    childcare = rise((a - 11) / 1.5) * (3.0 * np.exp(-((a - 30) / 11) ** 2) + 0.8 * np.exp(-((a - 62) / 14) ** 2))
-    other = 24 - sleep - subsistence - childcare
-    hours = np.stack([sleep, subsistence, childcare, other], axis=1)
-    assert hours.shape == (AGES, len(ACTIVITIES)) and (hours >= 0).all()
+    cols = {"sleep": 7.0 + 7.0 * np.exp(-a / 5) + 0.015 * a,
+            "childcare": _rise((a - 11) / 1.5) * (3.0 * np.exp(-((a - 30) / 11) ** 2) + 0.8 * np.exp(-((a - 62) / 14) ** 2))}
+    cols[work_activity] = work
+    hours = np.stack([cols.get(k, np.zeros(AGES)) for k in ACTIVITIES], axis=1)
+    hours[:, ACTIVITIES.index("other")] = 24 - hours.sum(axis=1)
+    assert (hours >= 0).all()
     return hours.astype(np.float32)
+
+
+def starting_hours():
+    """Hours per person per day for each age at turn 0, as float32 [AGES, len(ACTIVITIES)]: the foragers'
+    schedule. Rough, smooth shapes (not data): subsistence work starts around age 10, reaches 8.5 h in the
+    20s and eases to about 5.5 h by 100 (_schedule() has the rest). Every age gets slightly different values.
+    These are the most hours people will work for food; allocate() takes only what their food needs."""
+    a = np.arange(AGES, dtype=np.float64)
+    return _schedule("subsistence", 8.5 * _rise((a - 14) / 3) * (1 - 0.35 * np.clip((a - 50) / 50, 0, 1) ** 2))
+
+
+def farming_hours():
+    """The farmers' schedule, float32 [AGES, len(ACTIVITIES)]: rough shapes like starting_hours()'s, but
+    farming and herding takes more of the day (about 9.5 h for adults), children start helping earlier
+    (from about 7, minding animals, weeding and scaring birds) and the old keep working longer."""
+    a = np.arange(AGES, dtype=np.float64)
+    return _schedule("farming", 9.5 * _rise((a - 10) / 2.2) * (1 - 0.3 * np.clip((a - 55) / 45, 0, 1) ** 2))
+
+
+# Each activity a segment can feed itself by, and the schedule of the people who live by it.
+SCHEDULES = {"subsistence": starting_hours, "farming": farming_hours}
 
 
 def make_nations(counts, country, seed):
@@ -168,11 +197,22 @@ def make_nations(counts, country, seed):
 
 
 def load_leader_rules(path=LEADERS):
-    """leaders.json: {"types": {name: {...}}, "start_type": name}."""
+    """leaders.json: {"types": {name: {"title", "commands", "activity", "settled"}}, "commands": {...},
+    "start_type": name}."""
     with open(path, encoding="utf-8") as f:
         rules = json.load(f)
+    name = os.path.basename(path)
     if rules["start_type"] not in rules["types"]:
-        sys.exit(f"{os.path.basename(path)}: start_type {rules['start_type']!r} isn't one of the types")
+        sys.exit(f"{name}: start_type {rules['start_type']!r} isn't one of the types")
+    for k, t in rules["types"].items():
+        if t.get("activity") not in SCHEDULES:
+            sys.exit(f"{name}: type {k!r} has activity {t.get('activity')!r}, not one of {list(SCHEDULES)}")
+        if any(c not in orders.COMMAND_TYPES for c in t.get("commands", [None])):
+            sys.exit(f"{name}: type {k!r}'s commands must be some of {orders.COMMAND_TYPES}")
+        if not isinstance(t.get("title"), str) or not isinstance(t.get("settled"), bool):
+            sys.exit(f"{name}: type {k!r} needs a title and settled true or false")
+    if rules["commands"]["found_kingdom"]["becomes"] not in rules["types"]:
+        sys.exit(f"{name}: found_kingdom becomes an unknown type")
     return rules
 
 
@@ -184,7 +224,7 @@ def leaders_extra(rules):
     return {"leader_rules_source": os.path.relpath(LEADERS, REPO).replace(os.sep, "/"), "leader_rules": rules}
 
 
-def make_leaders(tiles, nation, people, nations, start_type):
+def make_leaders(tiles, nation, people, nations, start_type, title):
     """Turn-0 leaders: one per segment (row), with ids 1, 2, ... in row order. Each nation's root leader
     (the player) leads the segment on its capital, or its most populous one if nobody lives on the
     capital; the nation's other leaders report to the root. Segments with no nation get leaders with
@@ -199,12 +239,11 @@ def make_leaders(tiles, nation, people, nations, start_type):
         root_row[n["id"]] = int(at_capital[0] if len(at_capital) else rows[np.argmax(people_per_row[rows])])
         n["leader"] = root_row[n["id"]] + 1
     codes = {n["id"]: n["code"] for n in nations}
-    title = start_type.capitalize()
     leaders = []
     for r, (t, k) in enumerate(zip(tiles.tolist(), nation.tolist())):
         root = root_row.get(k)
         place = codes[k] if root == r else grid.tile_id(*grid.corner(*divmod(t, grid.WIDTH)))
-        leaders.append({"id": r + 1, "name": f"{title} of {place}", "type": start_type, "nation": k,
+        leaders.append({"id": r + 1, "name": f"{title} of {place}", "type": start_type, "title": title, "nation": k,
                         "parent": 0 if root is None or root == r else root + 1, "founded_turn": 0})
     return leaders
 
@@ -219,30 +258,48 @@ def movement_extra(rules):
     return {"movement_rules_source": os.path.relpath(MOVEMENT, REPO).replace(os.sep, "/"), "movement_rules": rules}
 
 
-def apply_orders(state, commands, can_walk):
-    """Apply the turn's commands to the segments' positions.
+def apply_orders(state, commands, can_walk, lrules):
+    """Apply the turn's commands to the segments' positions and leaders.
 
     commands: [(nation id, command)] (orders.read_turn()). Each is checked again (orders.check()) against
     the turn they were given for; invalid ones are skipped. A move sets where the segment is heading
     (orders.plan_move()): a standing segment steps straight to the named neighbour; a moving one first
-    finishes its step or walks back, whichever makes the whole way shorter. Returns (at, toward,
-    progress, destination, applied, rejected): new position arrays and the commands, the rejected ones
-    with a "reason".
+    finishes its step or walks back, whichever makes the whole way shorter. Founding a kingdom changes the
+    leader's type (leaders.json "commands"), and their title and name to the title given; if leaders of
+    more than one nation found kingdoms on the same tile, none of them does. Returns (leaders, at, toward,
+    progress, destination, applied, rejected): new leader records, new position arrays and the commands,
+    the rejected ones with a "reason".
     """
     at, toward, progress = state.at.copy(), state.toward.copy(), state.progress.copy()
     destination = state.destination.copy()
+    leaders = [dict(lead) for lead in state.leaders]
     rows = state.row_of()
-    applied, rejected = [], []
+    applied, rejected, founding = [], [], []
+    reject = lambda nation, c, why: rejected.append(
+        {"nation": nation, **(c if isinstance(c, dict) else {"command": c}), "reason": why})
     for nation, c in commands:
-        why = orders.check(state, rows, nation, c, can_walk)
+        why = orders.check(state, rows, nation, c, can_walk, lrules)
         if why:
-            rejected.append({"nation": nation, **(c if isinstance(c, dict) else {"command": c}), "reason": why})
+            reject(nation, c, why)
             continue
         r = rows[c["leader"]]
+        if c["type"] == "found_kingdom":
+            founding.append((nation, c, r))
+            continue
         plan = orders.plan_move(state.at[r], state.toward[r], state.progress[r], orders.tile_index(c["to"]))
         at[r], toward[r], progress[r], destination[r] = plan["at"], plan["toward"], plan["progress"], plan["destination"]
         applied.append({"nation": nation, **c})
-    return at, toward, progress, destination, applied, rejected
+    founders = {}   # tile -> the nations founding kingdoms there
+    for nation, c, r in founding:
+        founders.setdefault(int(state.at[r]), set()).add(nation)
+    becomes = lrules["commands"]["found_kingdom"]["becomes"]
+    for nation, c, r in founding:
+        if len(founders[int(state.at[r])]) > 1:
+            reject(nation, c, f"another nation founded a kingdom on {orders.tile_name(state.at[r])} in the same turn")
+            continue
+        leaders[r].update(type=becomes, title=c["title"], name=c["title"])
+        applied.append({"nation": nation, **c})
+    return leaders, at, toward, progress, destination, applied, rejected
 
 
 def travel_km(people, hours, activities, rules):
@@ -363,8 +420,25 @@ def product_list(rules):
     return [{"name": name, "unit": p["unit"]} for name, p in rules["products"].items()]
 
 
+def _tile_parts(tiles, world):
+    """What the yields of each row's tile are made of: (terrain shares {name: [S]}, cover shares {name: [S]},
+    area km2 [S], latitude of the tile centre north or south [S], whether a navigable river runs through it [S])."""
+    idx = tiles.astype(np.int64)
+    terrain = {t: np.asarray(c, dtype=np.float64)[idx] / 100 for t, c in zip(world.terrain_types, world.terrain)}
+    cover = {t: np.asarray(c, dtype=np.float64)[idx] / 100 for t, c in zip(world.cover_types, world.cover)}
+    rows = idx // grid.WIDTH
+    lat = np.abs(90 - (rows + 0.5) * grid.TILE)
+    river = np.array([grid.tile_id(*grid.corner(*divmod(int(i), grid.WIDTH))) in world.rivers_at for i in idx], dtype=bool)
+    return terrain, cover, grid.area_km2(rows), lat, river
+
+
+def _climate(lat, c):
+    cold = np.clip((lat - c["full_to_latitude"]) / (c["min_at_latitude"] - c["full_to_latitude"]), 0, 1)
+    return 1 - (1 - c["min_factor"]) * cold
+
+
 def foraging_max(tiles, world, rules):
-    """The most food each row's tile can sustainably yield in a year, float64 [S] (kcal).
+    """The most food each row's tile can sustainably yield to foragers in a year, float64 [S] (kcal).
 
     Land: its area x the cover-weighted yield per km2 x the landform factor (plains, hills, mountains)
     x a climate factor that falls with latitude. Water: its area x a near-shore fishing yield. The total
@@ -372,53 +446,140 @@ def foraging_max(tiles, world, rules):
     frozen water (world_map_schema.md), so ice on frozen sea simply yields nothing.
     """
     f = rules["foraging"]
-    idx = tiles.astype(np.int64)
-    terrain = {t: np.asarray(c, dtype=np.float64)[idx] / 100 for t, c in zip(world.terrain_types, world.terrain)}
-    cover = {t: np.asarray(c, dtype=np.float64)[idx] / 100 for t, c in zip(world.cover_types, world.cover)}
-    rows = idx // grid.WIDTH
-    area = grid.area_km2(rows)
+    terrain, cover, area, lat, river = _tile_parts(tiles, world)
     landform = sum(terrain[t] * k for t, k in f["landform_factor"].items())   # land share x landform factor
     cover_yield = sum(cover[t] * f["yield_per_km2"][t] for t in world.cover_types)
-    c = f["climate"]
-    lat = np.abs(90 - (rows + 0.5) * grid.TILE)   # tile centre
-    cold = np.clip((lat - c["full_to_latitude"]) / (c["min_at_latitude"] - c["full_to_latitude"]), 0, 1)
-    climate = 1 - (1 - c["min_factor"]) * cold
-    on_land = area * landform * cover_yield * climate
+    on_land = area * landform * cover_yield * _climate(lat, f["climate"])
     on_water = area * terrain["water"] * f["water_yield_per_km2"]
-    river = np.array([grid.tile_id(*grid.corner(*divmod(int(i), grid.WIDTH))) in world.rivers_at for i in idx], dtype=bool)
     return (on_land + on_water) * np.where(river, f["river_factor"], 1.0)
 
 
+def farming_max(tiles, world, rules):
+    """The most food each row's tile can yield to farmers and herders in a year, float64 [S] (kcal): the
+    land as foraging_max() reckons it, with farming's yields, plus river_yield_per_km2 over the whole tile
+    where a navigable river runs through it, both x farming's climate factor; plus fishing on the water."""
+    f = rules["farming"]
+    terrain, cover, area, lat, river = _tile_parts(tiles, world)
+    landform = sum(terrain[t] * k for t, k in f["landform_factor"].items())
+    cover_yield = sum(cover[t] * f["yield_per_km2"][t] for t in world.cover_types)
+    on_land = area * (landform * cover_yield + np.where(river, f["river_yield_per_km2"], 0.0)) * _climate(lat, f["climate"])
+    return on_land + area * terrain["water"] * f["water_yield_per_km2"]
+
+
+def yield_modifiers(nation, rules):
+    """A multiplier on each segment's yields by each way of feeding itself, {activity: float64 [S]}.
+    All 1 for now: economy.json's figures are a Neolithic baseline, which technology will raise here,
+    nation by nation. (Segments working the same tile's curve should share a multiplier.)"""
+    return {rules[k]["activity"]: np.ones(len(nation)) for k in ("foraging", "farming")}
+
+
+def _work_for(want, cap, group, top, rate):
+    """How much labor each segment puts in, when the segments of each group work one curve
+    P = top x (1 - exp(-rate H / top)) and share its output in proportion to their labor.
+
+    want [S]: the food each still needs; cap [S]: the most person-hours a year it can give; group [S]:
+    0..G-1, the curve each works; top [S]: the curve's maximum (the same across a group). Each works only
+    the hours its need takes at the curve's average return, up to its cap. The average return falls as
+    the group's labor rises, so it is found by bisection, a fixed number of steps for every group.
+    Returns (labor [S], production [S], the share of the row's curve that was used [S]).
+    """
+    n = int(group.max()) + 1 if len(group) else 0
+    peak = np.zeros(n)
+    peak[group[::-1]] = top[::-1]                        # each group's maximum, from its first row
+    working = (want > 0) & (cap > 0) & (peak[group] > 0)
+
+    def labor_at(rho):                                   # rho: each group's average return per hour
+        return np.where(working, np.minimum(cap, np.divide(want, rho[group], out=cap.copy(), where=rho[group] > 0)), 0.0)
+
+    def average(h):
+        total = np.bincount(group, weights=h, minlength=n)
+        made = peak * -np.expm1(-np.divide(rate * total, peak, out=np.zeros(n), where=peak > 0))
+        return total, made, np.divide(made, total, out=np.full(n, float(rate)), where=total > 0)
+
+    lo, hi = np.full(n, rate * 1e-9), np.full(n, float(rate))
+    for _ in range(60):
+        mid = np.sqrt(lo * hi)
+        up = average(labor_at(mid))[2] > mid             # the curve pays more than that: they can work less
+        lo, hi = np.where(up, mid, lo), np.where(up, hi, mid)
+    labor = labor_at(lo)                                 # the side on which needs are met
+    total, made, _ = average(labor)
+    share = np.divide(labor, total[group], out=np.zeros(len(labor)), where=total[group] > 0)
+    used = np.divide(made, peak, out=np.zeros(n), where=peak > 0)
+    return labor, made[group] * share, used[group]
+
+
+def allocate(people, leaders, lrules, tiles, need, stock, world, rules):
+    """How the segments on each tile feed themselves in the year (economy.json "sharing").
+
+    Each segment's leader type sets the activity it feeds itself by and its schedule (SCHEDULES), whose
+    hours of that activity are the most its people will work. Each first eats from its stock. On each
+    tile the farmers of each nation farm for the food that all their nation's segments there still need,
+    keep what they need of it and give the rest to the others in proportion to their needs (food beyond
+    everyone's need stays with the farmers who made it). Then every forager works for what it still needs,
+    all of them sharing the foraging curve on the land the farms leave (x 1 - the share of the farming
+    curve they used). Segments of no nation share with nobody. People work only the hours they need;
+    the rest of their schedule's hours go to "other".
+
+    need, stock: food [S]. Returns (hours actually spent [S, AGES, A] float32, food produced [S], its
+    labor in person-hours [S], food received less food given [S], the maximum of the curve each worked [S]).
+    """
+    n = len(tiles)
+    fa, fo = rules["farming"], rules["foraging"]
+    kinds = [lrules["types"][lead["type"]]["activity"] for lead in leaders]
+    nation = np.array([lead["nation"] for lead in leaders], dtype=np.int64)
+    schedule = np.zeros((n, AGES, len(ACTIVITIES)))
+    for k, make in SCHEDULES.items():
+        schedule[[i for i in range(n) if kinds[i] == k]] = make()
+    work_col = np.array([ACTIVITIES.index(k) for k in kinds], dtype=np.int64)
+    work_hours = schedule[np.arange(n), :, work_col]                                  # [S, AGES]
+    cap = (people * work_hours).sum(axis=1) * 365
+    want = np.maximum(need - stock, 0)
+    farmer = np.array([k == fa["activity"] for k in kinds], dtype=bool)
+    forager = np.array([k == fo["activity"] for k in kinds], dtype=bool)
+    mods = yield_modifiers(nation, rules)
+    _, on_tile = np.unique(tiles, return_inverse=True)
+    _, pool = np.unique(np.where(nation > 0, tiles.astype(np.int64) * 65536 + nation, -1 - np.arange(n)),
+                        return_inverse=True)                                         # a nation's segments on a tile
+    pooled = lambda x: np.bincount(pool, weights=x, minlength=int(pool.max()) + 1 if n else 0)
+    part = lambda x, whole: np.divide(x, whole[pool], out=np.zeros(n), where=whole[pool] > 0)
+
+    # Farming, for the whole pool's need, split among its farmers by the hours they can give.
+    farm_top = farming_max(tiles, world, rules) * mods[fa["activity"]]
+    farm_cap = np.where(farmer, cap, 0.0)
+    farm_labor, farmed, farm_used = _work_for(pooled(want)[pool] * part(farm_cap, pooled(farm_cap)), farm_cap,
+                                              on_tile, farm_top, fa["return_per_hour"])
+    # The farmers keep what they need, the pool's others get the rest by need, and anything left over
+    # stays with the farmers, by what each made.
+    made, farmers_want, others_want = pooled(farmed), pooled(np.where(farmer, want, 0)), pooled(np.where(farmer, 0, want))
+    kept = np.minimum(made, farmers_want)
+    given = np.minimum(made - kept, others_want)
+    food = np.where(farmer, kept[pool] * part(want, farmers_want) + (made - kept - given)[pool] * part(farmed, made),
+                    given[pool] * part(want, others_want))
+    received = food - farmed
+
+    # Foraging, on the land the farms leave.
+    used = np.zeros(int(on_tile.max()) + 1 if n else 0)
+    np.maximum.at(used, on_tile, farm_used)
+    forage_top = foraging_max(tiles, world, rules) * mods[fo["activity"]] * (1 - used[on_tile])
+    forage_labor, foraged, _ = _work_for(np.maximum(want - received, 0), np.where(forager, cap, 0.0), on_tile,
+                                         forage_top, fo["return_per_hour"])
+
+    labor = farm_labor + forage_labor
+    worked = np.divide(labor, cap, out=np.zeros(n), where=cap > 0)                    # share of the schedule's hours
+    spent = work_hours * worked[:, None]
+    hours = schedule.copy()
+    hours[np.arange(n), :, work_col] = spent
+    hours[:, :, ACTIVITIES.index("other")] += work_hours - spent
+    top = np.where(farmer, farm_top, np.where(forager, forage_top, 0.0))
+    return hours.astype(np.float32), farmed + foraged, labor, received, top
+
+
 def production_max(tiles, products, rules, world):
-    """The most each row's tile can produce of each product in a year, float64 [S, P] in products order."""
+    """The most each row's tile can produce of each product in a year by foraging, float64 [S, P] in
+    products order (turn 0's figures, as everyone forages then)."""
     m = np.zeros((len(tiles), len(products)))
     m[:, products.index(rules["foraging"]["product"])] = foraging_max(tiles, world, rules)
     return m
-
-
-def produce(people, hours, activities, tiles, prod_max, products, rules):
-    """The year's production and the labor behind it, each float64 [S, P] in products order.
-
-    Foraging: labor H is person-hours a year of the foraging activity (people x hours per day x 365,
-    summed over ages). A tile yields max x (1 - exp(-r H / max)) for the labor of every segment on it,
-    about r kcal per hour while labor is light, levelling off at the tile's maximum; each segment gets
-    a share in proportion to its own labor. (A sum over ages and exp() could differ in the last bit
-    between NumPy builds or CPUs; checksums compare replays on the same machine.)
-    """
-    f = rules["foraging"]
-    if f["activity"] not in activities:
-        sys.exit(f"foraging uses the activity {f['activity']!r}, which the state doesn't have: {activities}")
-    col = products.index(f["product"])
-    labor_h = (people * hours[:, :, activities.index(f["activity"])]).sum(axis=1) * 365
-    _, inv = np.unique(tiles, return_inverse=True)
-    tile_labor = np.bincount(inv, weights=labor_h)[inv] if len(tiles) else labor_h   # all labor on each row's tile
-    m = prod_max[:, col]
-    ratio = np.divide(f["return_per_hour"] * tile_labor, m, out=np.zeros_like(m), where=m > 0)
-    share = np.divide(labor_h, tile_labor, out=np.zeros_like(m), where=tile_labor > 0)
-    production, labor = np.zeros_like(prod_max), np.zeros_like(prod_max)
-    production[:, col] = m * -np.expm1(-ratio) * share
-    labor[:, col] = labor_h
-    return production, labor
 
 
 def economy_modifiers(n, rules):
@@ -490,15 +651,17 @@ def death_causes(demo):
     return [k for k in demo["deaths"] if k != "about"]
 
 
-def birth_rates(people, demo):
+def birth_rates(people, settled, demo):
     """Births per person per year at each age, float64 [S, AGES], for each segment's people.
 
     Placeholder: the same rate by age everywhere (demography.json), averaged over men and women and
-    counting each birth half to each parent. This is where a decision model (a trained neural net,
-    say) will choose instead, from whatever it is given about each segment: food, labor, age structure...
+    counting each birth half to each parent, x the settled birth_factor for settled segments (settled
+    [S]). This is where a decision model (a trained neural net, say) will choose instead, from whatever
+    it is given about each segment: food, labor, age structure...
     """
     ages, rates = zip(*demo["births"]["per_person_per_year_by_age"])
-    return np.broadcast_to(np.interp(np.arange(AGES), ages, rates), people.shape)
+    factor = np.where(settled, demo["settled"]["birth_factor"], 1.0)
+    return np.interp(np.arange(AGES), ages, rates)[None, :] * factor[:, None]
 
 
 def births(people, rates):
@@ -532,11 +695,12 @@ def childcare_shortfall(people, hours, activities, spec):
     return np.clip(1 - ratio, 0, 1)
 
 
-def death_hazards(cause, x, work_hours, food_met, care_short, infection, demo):
+def death_hazards(cause, x, work_risk, food_met, care_short, infection, demo):
     """One cause's yearly hazard, broadcastable to [S, K], for exact ages x [K].
 
-    work_hours: [S, K] hours a day of the predation activity at those ages; food_met: [S] share of food
-    need met in the year; care_short: [S] childcare shortfall; infection: [S] terrain factor.
+    work_risk: [S, K] the predation and accidents hazard of a day's work at those ages (each activity's
+    hours a day x its hazard per hour, added up); food_met: [S] share of food need met in the year;
+    care_short: [S] childcare shortfall; infection: [S] terrain factor.
     """
     d = demo["deaths"][cause]
     x = x[None, :]
@@ -544,7 +708,7 @@ def death_hazards(cause, x, work_hours, food_met, care_short, infection, demo):
         vulnerable = np.where((x < d["vulnerable_under_age"]) | (x >= d["vulnerable_over_age"]), d["vulnerable_factor"], 1.0)
         return interp_table(food_met, d["hazard_by_share_of_need_met"])[:, None] * vulnerable
     if cause == "predation_and_accidents":
-        return work_hours * 365 * d["hazard_per_hour"]
+        return work_risk * 365
     if cause in ("cancer", "other_age_related"):
         return d["a"] * np.exp(d["b"] * x)
     if cause == "infection":
@@ -554,13 +718,16 @@ def death_hazards(cause, x, work_hours, food_met, care_short, infection, demo):
     raise ValueError(f"no hazard for cause {cause!r}")
 
 
-def mortality_modifiers(n, causes):
-    """Multiplier on each segment's hazard for each cause, float64 [S, C]. All 1 for now; this is where
-    future infrastructure will reduce causes segment by segment (medicine for infection, say)."""
-    return np.ones((n, len(causes)))
+def mortality_modifiers(settled, causes, demo):
+    """Multiplier on each segment's hazard for each cause, float64 [S, C]: infection x the settled
+    infection_factor for settled segments (settled [S]), else 1. This is where future infrastructure will
+    reduce causes segment by segment (medicine for infection, say)."""
+    mods = np.ones((len(settled), len(causes)))
+    mods[:, causes.index("infection")] = np.where(settled, demo["settled"]["infection_factor"], 1.0)
+    return mods
 
 
-def mortality(people, born, hours, activities, tiles, world, food_met, demo):
+def mortality(people, born, hours, activities, tiles, world, food_met, settled, demo):
     """The year's deaths. Returns (survivors [S, AGES], surviving newborns [S], deaths by cause [S, C]).
 
     Each cohort lives the year at its mid-year age (a + 1 for the cohort aged a at the start of the
@@ -569,14 +736,15 @@ def mortality(people, born, hours, activities, tiles, world, food_met, demo):
     Pure elementwise arithmetic and sums over ages, so results don't depend on BLAS.
     """
     d = demo["deaths"]
-    pred = d["predation_and_accidents"]["activity"]
-    work = hours[:, :, activities.index(pred)]
+    work = np.zeros(people.shape)
+    for a, h in d["predation_and_accidents"]["hazard_per_hour"].items():
+        work = work + hours[:, :, activities.index(a)] * h
     care_short = childcare_shortfall(people, hours, activities, d["child_mortality"])
     infection = infection_factor(tiles, world, d["infection"])
-    mods = mortality_modifiers(len(tiles), CAUSES)
+    mods = mortality_modifiers(settled, CAUSES, demo)
 
-    def die(count, x, work_h, exposure):
-        hz = [death_hazards(c, x, work_h, food_met, care_short, infection, demo) * mods[:, k:k + 1] * exposure
+    def die(count, x, work_risk, exposure):
+        hz = [death_hazards(c, x, work_risk, food_met, care_short, infection, demo) * mods[:, k:k + 1] * exposure
               for k, c in enumerate(CAUSES)]
         total = np.zeros(count.shape)
         for h in hz:
@@ -621,7 +789,8 @@ def init_locked(args):
     hours = np.broadcast_to(starting_hours(), (len(tiles), AGES, len(ACTIVITIES))).copy()
     nation = tile_nation[tiles]
     lrules = load_leader_rules()
-    leaders = make_leaders(tiles, nation, people, nations, lrules["start_type"])
+    leaders = make_leaders(tiles, nation, people, nations, lrules["start_type"],
+                           lrules["types"][lrules["start_type"]]["title"])
     stationary = np.ones(len(tiles), dtype=bool)
     tile_owner = update_ownership(np.zeros(grid.COUNT, dtype=np.uint16), tiles, nation, people, stationary)
     vrules = load_visibility()
@@ -630,7 +799,7 @@ def init_locked(args):
     products = product_list(rules)
     zeros = np.zeros((len(tiles), len(products)))   # turn 0 follows no year: nothing made or held yet
     economy = {"production": zeros, "labor": zeros.copy(), "stock": zeros.copy(),
-               "need": zeros.copy(), "consumed": zeros.copy(),
+               "need": zeros.copy(), "consumed": zeros.copy(), "received": zeros.copy(),
                "production_max": production_max(tiles, [p["name"] for p in products], rules, read_map(MAP)),
                "decay": economy_modifiers(len(tiles), rules)}
     demo = load_demography()
@@ -653,9 +822,8 @@ def age_one_year(people):
     group. Age 0 is left for the year's newborns. Pure elementwise arithmetic, so results don't depend
     on the CPU or on how NumPy orders a sum, which keeps replays deterministic.
 
-    Activity hours belong to the age, not the cohort, so they stay where they are: people take on the
-    hours of their new age. (Moving them with the cohort would leave everyone born in the game with a
-    newborn's hours for life, since nothing yet decides how a cohort's activities change as it grows.)
+    Activity hours belong to the age, not the cohort: allocate() works each year's out afresh from the
+    schedules for each age, so people take on the hours of their new age.
     """
     new_people = np.zeros_like(people)
     new_people[:, 1:AGES - 1] = people[:, 0:AGES - 2]
@@ -706,34 +874,48 @@ def step_locked(args):
             # where it ends up.
             world = read_map(MAP)
             mrules = load_movement()
+            if cur.activities != ACTIVITIES:
+                sys.exit(f"the state's activities {cur.activities} aren't the engine's {ACTIVITIES}; start a new state")
             commands = orders.read_turn(args.state, cur.turn)
-            at, toward, progress, destination, applied, rejected = apply_orders(cur, commands, orders.walkable(world))
+            leaders, at, toward, progress, destination, applied, rejected = apply_orders(
+                cur, commands, orders.walkable(world), lrules)
+            # Last year's hours set how far a segment can go this year.
             at, toward, progress, destination, arrived = move_segments(
                 at, toward, progress, destination, travel_km(cur.people, cur.hours, cur.activities, mrules))
             tiles = cs.segment_tile(at, toward, progress)
-            # Production: the year that is ending, so this turn's people and hours, before they age.
-            prod_max = production_max(tiles, names, rules, world)
-            production, labor = produce(cur.people, cur.hours, cur.activities, tiles, prod_max, names, rules)
-            held = cur.stock + production
-            need, consumed = consume(cur.people, held, consumption_rates(names, rules))
+            # Production and consumption: the year that is ending, so this turn's people, before they age.
+            # The year's hours are what it took to feed them (allocate()).
+            fp = names.index(rules["farming"]["product"])
+            if fp != names.index(rules["foraging"]["product"]):
+                sys.exit("economy.json: farming and foraging must make the same product")
+            rates = consumption_rates(names, rules)
+            need = (cur.people[:, :, None] * rates[None, :, :]).sum(axis=1) * 365
+            hours, food, food_labor, food_received, food_top = allocate(
+                cur.people, leaders, lrules, tiles, need[:, fp], cur.stock[:, fp], world, rules)
+            production, labor, prod_max, received = (np.zeros_like(cur.stock) for _ in range(4))
+            production[:, fp], labor[:, fp], prod_max[:, fp], received[:, fp] = food, food_labor, food_top, food_received
+            held = cur.stock + production + received
+            need, consumed = consume(cur.people, held, rates)
             decay = economy_modifiers(len(tiles), rules)
             economy = {"production": production, "labor": labor, "production_max": prod_max, "need": need,
-                       "consumed": consumed, "decay": decay, "stock": end_of_year(held, consumed, decay)}
+                       "consumed": consumed, "received": received, "decay": decay,
+                       "stock": end_of_year(held, consumed, decay)}
 
             # Demographics: the year's births and deaths, among the people who lived it.
             demo = load_demography()
-            born = births(cur.people, birth_rates(cur.people, demo))
+            settled = np.array([bool(lrules["types"][lead["type"]]["settled"]) for lead in leaders], dtype=bool)
+            born = births(cur.people, birth_rates(cur.people, settled, demo))
             fc = names.index(demo["deaths"]["starvation"]["product"])
             food_met = np.divide(consumed[:, fc], need[:, fc], out=np.ones(len(tiles)), where=need[:, fc] > 0)
-            survivors, born_alive, deaths = mortality(cur.people, born, cur.hours, cur.activities, tiles, world,
-                                                      food_met, demo)
+            survivors, born_alive, deaths = mortality(cur.people, born, hours, cur.activities, tiles, world,
+                                                      food_met, settled, demo)
 
-            people, hours = age_one_year(survivors), cur.hours
+            people = age_one_year(survivors)
             people[:, 0] = born_alive
             tile_owner = update_ownership(cur.owner, tiles, cur.nation, people, at == toward)
             vrules = load_visibility()
             visible = active_visibility(tiles, cur.nation, people, len(cur.nations) + 1, vrules["radius_tiles"])
-            state = cs.State(cur.leaders, at, toward, progress, destination, people, hours, cur.activities,
+            state = cs.State(leaders, at, toward, progress, destination, people, hours, cur.activities,
                              tile_owner, cur.nations, visible, cur.explored | visible, products, economy, CAUSES,
                              deaths, cur.leader_types, cur.next_leader_id)
             extra = {k: v for k, v in cur.manifest.items() if k.startswith("initial_")}

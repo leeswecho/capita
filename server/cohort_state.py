@@ -10,8 +10,8 @@ Layout (see reference/cohort_state_schema.md for the full, language-neutral spec
       turn_00007/
         manifest.json         turn number, activity names, units, leader types, array shapes/dtypes, checksum
         nations.json          one record per nation: id, code, capital tile, root leader, founded turn, alive
-        leaders.json          one record per row (segment), in row order: id, name, type, nation, parent leader,
-                              founded turn
+        leaders.json          one record per row (segment), in row order: id, name, type (internal), title
+                              (what they are called, which a player can choose), nation, parent leader, founded turn
         leader.npy            <u4 [S]          leader id of each row, strictly increasing (= leaders.json's ids)
         tile.npy              <u4 [S]          the tile each segment counts as being in (derived from at/toward/progress)
         at.npy                <u4 [S]          the tile the segment is at, or is leaving
@@ -20,16 +20,18 @@ Layout (see reference/cohort_state_schema.md for the full, language-neutral spec
         destination.npy       <u4 [S]          where its move ends: toward, or a neighbour of toward to go on to
                               once there; equal to at when it isn't moving
         people.npy            <f8 [S, 101]     people by single year of age; column 100 is "100 and over"
-        hours.npy             <f4 [S, 101, A]  mean hours per person per day spent on each activity
+        hours.npy             <f4 [S, 101, A]  mean hours per person per day spent on each activity in the year that
+                              ended with this turn (at turn 0, the starting schedule)
         owner.npy             <u2 [259200]     nation id that owns each tile of the whole grid (0 = nobody)
         visible.npy           <u1 [M, 32400]   active visibility: row k = nation id k, one bit per tile
         explored.npy          <u1 [M, 32400]   tiles each nation has ever seen (visible is a subset)
         production.npy        <f8 [S, P]       amount of each product made in the year that ended with this turn
         labor.npy             <f8 [S, P]       person-hours of work that went into each product that year
-        production_max.npy    <f8 [S, P]       the most the segment's tile can produce in a year, shared by every
-                              segment there (production saturates here)
+        production_max.npy    <f8 [S, P]       the most the segment's tile could produce in a year by the segment's
+                              activity, shared by every segment there doing the same (production saturates here)
         need.npy              <f8 [S, P]       how much of each product the segment's people needed that year
         consumed.npy          <f8 [S, P]       how much they consumed: the need, or all there was if that fell short
+        received.npy          <f8 [S, P]       how much they were given by other segments that year, less what they gave
         decay.npy            <f4 [S, P]       share of each product's holdings lost at the end of that year
         stock.npy             <f8 [S, P]       amount of each product held at the start of this turn, after decay
         deaths.npy            <f8 [S, C]       people who died of each cause in the year that ended with this turn
@@ -57,19 +59,19 @@ import numpy as np
 
 import grid
 
-FORMAT = "capita/cohort-state-8"
+FORMAT = "capita/cohort-state-9"
 AGES = 101                      # ages 0..99, then 100 = "100 and over"
 HOURS_UNIT = "mean hours per person per day, averaged over the year"
 BITS_BYTES = (grid.COUNT + 7) // 8          # one visibility row: 259,200 tiles -> 32,400 bytes
 DTYPES = {"leader": "<u4", "tile": "<u4", "at": "<u4", "toward": "<u4", "progress": "<f8", "destination": "<u4",
           "people": "<f8", "hours": "<f4", "owner": "<u2", "visible": "<u1", "explored": "<u1",
           "production": "<f8", "labor": "<f8", "production_max": "<f8", "need": "<f8", "consumed": "<f8",
-          "decay": "<f4", "stock": "<f8", "deaths": "<f8"}
+          "received": "<f8", "decay": "<f4", "stock": "<f8", "deaths": "<f8"}
 ARRAYS = tuple(DTYPES)                      # file order, which is also checksum order
-ECONOMY = ("production", "labor", "production_max", "need", "consumed", "decay", "stock")   # [S, P] each
+ECONOMY = ("production", "labor", "production_max", "need", "consumed", "received", "decay", "stock")   # [S, P] each
 PRODUCT_KEYS = ("name", "unit")
 NATION_KEYS = ("id", "code", "capital", "leader", "founded_turn", "alive")
-LEADER_KEYS = ("id", "name", "type", "nation", "parent", "founded_turn")
+LEADER_KEYS = ("id", "name", "type", "title", "nation", "parent", "founded_turn")
 CURRENT = "current.json"
 PHASE = "phase.json"
 LOCK = ".lock"
@@ -216,6 +218,8 @@ class State:
                 raise ValueError(f"leader {rec['id']}: unknown type {rec['type']!r}")
             if not isinstance(rec["name"], str) or not rec["name"]:
                 raise ValueError(f"leader {rec['id']}: needs a name")
+            if not isinstance(rec["title"], str) or not rec["title"]:
+                raise ValueError(f"leader {rec['id']}: needs a title")
             if not 0 <= rec["nation"] < m:
                 raise ValueError(f"leader {rec['id']}: no nation {rec['nation']}")
             if rec["parent"]:

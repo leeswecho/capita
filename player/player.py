@@ -13,10 +13,11 @@ and the segments on the tiles it can see. Of its own segments it knows the peopl
 coordinates are in the data, since the page has to draw the map, but the page never shows them.
 (server.py is the developer view, which shows everything; control/control.py the developer controls.)
 
-The player chooses a nation (and may rename it, names.py), then gives its leaders orders. A move names
-a direction from the segment's tile (n, ne, e, ...); the server turns it into a move command for that
-neighbouring tile (orders.py). Orders and Commit Turn go through server/game.py, which the control
-server shares.
+The player chooses a nation (and may rename it, names.py), then gives its leaders orders: those their
+type allows (leaders.json). A move names a direction from the segment's tile (n, ne, e, ...); the
+server turns it into a move command for that neighbouring tile (orders.py). Founding a kingdom settles
+the segment where it is, under a title the player chooses. Orders and Commit Turn go through
+server/game.py, which the control server shares.
 
 Endpoints:
     /                      the player page (static/index.html)
@@ -31,9 +32,11 @@ Endpoints:
                            name); returns {"id", "name", "flag"}; 400 if the name can't be used (JSON)
     /api/nation/<id>/view  what the nation knows at the current turn (see view_json()) (JSON)
     POST /api/nation/<id>/orders  {"turn": t, "leader": id, "direction": "nw"} orders a leader to move
-                           their segment to the neighbouring tile that way; "direction": null takes the
-                           order back. Returns the leader's segment as /view lists it; 400 if the order
-                           isn't possible, 409 if turn t isn't accepting orders (JSON)
+                           their segment to the neighbouring tile that way; {"turn": t, "leader": id,
+                           "found_kingdom": "King"} to found a kingdom where they are, under that title;
+                           "direction": null takes the order back. Returns the leader's segment as /view
+                           lists it; 400 if the order isn't possible, 409 if turn t isn't accepting
+                           orders (JSON)
     POST /api/commit       {"turn": t}: commit turn t, advancing the whole world one year (JSON)
 """
 import argparse
@@ -146,16 +149,28 @@ class Player(Game):
 
     def leader_ref(self, t, r) -> dict:
         """How the page names a leader: "title" in words ("Iceland Chieftain"), and for showing the
-        nation as a flag instead, "kind" ("Chieftain") and "nation" ({"id", "name", "flag"}, or None)."""
+        nation as a flag instead, "kind" (their title, "Chieftain") and "nation" ({"id", "name", "flag"},
+        or None). Everyone sees the title a player chose."""
         lead = t.leaders[r]
-        return {"title": self.title(t, r), "kind": lead["type"].capitalize(),
+        return {"title": self.title(t, r), "kind": lead["title"],
                 "nation": self.nation_ref(t, lead["nation"]) if lead["nation"] else None}
 
     def title(self, t, r) -> str:
-        """A leader as the player page names them: their nation and type, e.g. "Iceland Chieftain"."""
+        """A leader as the player page names them: their nation and title, e.g. "Iceland Chieftain"."""
         lead = t.leaders[r]
-        kind = lead["type"].capitalize()
-        return f"{self.nation_name(t, lead['nation'])} {kind}" if lead["nation"] else kind
+        return f"{self.nation_name(t, lead['nation'])} {lead['title']}" if lead["nation"] else lead["title"]
+
+    def found_kingdom(self, t, r) -> dict:
+        """Whether the segment can found a kingdom now: {"ok", "why": a sentence if not, "title": the
+        default title, "max_length"}. orders.check() is the rule; this puts it in the player's words."""
+        rules = t.manifest["leader_rules"]
+        spec = rules["commands"]["found_kingdom"]
+        why = None
+        if t.at[r] != t.toward[r]:
+            why = "They are on the move. They must be wholly on one tile to settle."
+        elif orders.settled_by_others(t, rules, t.leaders[r]["nation"], int(t.at[r])):
+            why = "Another people have already settled here."
+        return {"ok": why is None, "why": why, "title": spec["default_title"], "max_length": spec["max_title_length"]}
 
     def moves(self, t, r):
         """[{"direction", "ok"}] for the 8 tiles around the tile the segment counts as being in. Every
@@ -173,9 +188,17 @@ class Player(Game):
             to = orders.tile_index(c["to"])
             order = {"type": "move",
                      "direction": next((d for d, i in orders.neighbours(int(t.tile[r])) if i == to), None)}
-        return {"leader": lid, "own": True, **self.leader_ref(t, r),
-                "people": round(float(np.asarray(t.people[r]).sum())), "situation": situation(t, r, rules),
-                "moving": bool(t.at[r] != t.toward[r]), "order": order, "moves": self.moves(t, r)}
+        elif c and c["type"] == "found_kingdom":
+            order = {"type": "found_kingdom", "title": c["title"]}
+        can = t.manifest["leader_rules"]["types"][t.leaders[r]["type"]]["commands"]
+        out = {"leader": lid, "own": True, **self.leader_ref(t, r),
+               "people": round(float(np.asarray(t.people[r]).sum())), "situation": situation(t, r, rules),
+               "moving": bool(t.at[r] != t.toward[r]), "order": order, "commands": can}
+        if "move" in can:
+            out["moves"] = self.moves(t, r)
+        if "found_kingdom" in can:
+            out["found_kingdom"] = self.found_kingdom(t, r)
+        return out
 
     def foreign_segment(self, t, r, rules) -> dict:
         # All a nation can tell about another's people for now is how many they look; intelligence will
@@ -198,9 +221,10 @@ class Player(Game):
                     cover_types, largest share first}] for every tile it has explored,
          "segments": [...] on the tiles it can see now: its own with "people", "situation", "order" and
                     "moves"; other nations' with what it knows of them,
-         "camps": [{"tile", "nation": {"id", "name", "flag"}, "own", "tepees"}]: one per nation per tile it
-                    can see, drawn as that many tepees: all of the nation's people there (on the tile or
-                    counted as on it while moving) added up, so a camp's size shows roughly how many
+         "camps": [{"tile", "nation": {"id", "name", "flag"}, "own", "tepees", "settled"}]: one per nation
+                    per tile it can see, drawn as that many tepees (or, if any of the nation's segments
+                    there is settled, huts among fields): all of the nation's people there (on the tile
+                    or counted as on it while moving) added up, so a camp's size shows roughly how many
                     live there without giving the number}."""
         t = self.current_turn()
         if t is None or not 1 <= nid <= len(t.nations):
@@ -218,12 +242,16 @@ class Player(Game):
         rows = np.flatnonzero(visible[t.tile])
         rows = sorted(rows.tolist(), key=lambda r: (t.leaders[r]["nation"] != nid, r))   # own first
         segments = [self.segment_json(t, r, nid, commands, rules) for r in rows]
-        people = {}
+        people, settled = {}, set()
+        is_settled = orders.settled(t, t.manifest["leader_rules"])
         for r in rows:
             key = (int(t.tile[r]), t.leaders[r]["nation"])
             people[key] = people.get(key, 0.0) + float(np.asarray(t.people[r]).sum())
+            if is_settled[r]:
+                settled.add(key)
         camps = [{"tile": orders.tile_name(i), "nation": self.nation_ref(t, k) if k else None, "own": k == nid,
-                  "tepees": tepees(p, rules)} for (i, k), p in sorted(people.items()) if p > 0]
+                  "tepees": tepees(p, rules), "settled": (i, k) in settled}
+                 for (i, k), p in sorted(people.items()) if p > 0]
         root = t.nations[nid - 1]["leader"]
         rr = t.row_of().get(root)
         own = [r for r in rows if t.leaders[r]["nation"] == nid]
@@ -235,7 +263,8 @@ class Player(Game):
                            "segments": segments, "camps": camps}, separators=(",", ":")).encode()
 
     def order(self, nid: int, body: dict):
-        """Turn a direction into a move command and give it (Game.give_order()). Returns (status, dict)."""
+        """Turn a direction into a move command, or a title into a found_kingdom command, and give it
+        (Game.give_order()). Returns (status, dict)."""
         t = self.current_turn()
         if t is None:
             return 409, {"error": "no game state"}
@@ -244,14 +273,25 @@ class Player(Game):
         if r is None or t.leaders[r]["nation"] != nid:
             return 400, {"error": "that isn't one of your leaders"}
         command = None
-        if direction is not None:
+        if "found_kingdom" in body:
+            spec = t.manifest["leader_rules"]["commands"]["found_kingdom"]
+            title = body["found_kingdom"]
+            try:
+                title = names.clean(spec["default_title"] if title is None else title, spec["max_title_length"], "title")
+            except ValueError as e:
+                return 400, {"error": str(e)[0].upper() + str(e)[1:] + "."}
+            if not self.found_kingdom(t, r)["ok"]:
+                return 400, {"error": self.found_kingdom(t, r)["why"]}
+            command = {"type": "found_kingdom", "title": title}
+        elif direction is not None:
             to = dict(orders.neighbours(int(t.tile[r]))).get(direction)
             if to is None:
                 return 400, {"error": f"there is no way {direction!r} from here"}
             command = {"type": "move", "to": orders.tile_name(to)}
         status, out = self.give_order(nid, body.get("turn"), lid, command)
         if status == 400:   # orders.check()'s reasons name tiles, which a player doesn't know
-            return status, {"error": "They can't go that way."}
+            return status, {"error": "They can't do that." if command and command["type"] == "found_kingdom"
+                            else "They can't go that way."}
         if status != 200:
             return status, out
         commands = {c["leader"]: c for c in out["commands"]}

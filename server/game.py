@@ -116,8 +116,8 @@ class Game:
             if command is not None:
                 if not isinstance(command, dict):
                     return fail(400, "command must be an object or null")
-                command = {"leader": lid, "type": command.get("type"), "to": command.get("to")}
-                why = orders.check(t, t.row_of(), nid, command, self.walkable)
+                command = orders.make(lid, command)
+                why = orders.check(t, t.row_of(), nid, command, self.walkable, t.manifest["leader_rules"])
                 if why:
                     return fail(400, why)
                 commands.append(command)

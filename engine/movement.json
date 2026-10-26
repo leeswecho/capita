@@ -1,5 +1,5 @@
 {
-  "about": "Movement rules read by engine.py on every step; a copy goes into each turn's manifest. A moving segment covers km_per_hour x its travel hours a day x 365 km in a year. Its travel hours are its people-weighted mean of the hours each age doesn't spend on not_travel_activities (for a settling party, the hours not spent subsisting or sleeping). Eventually speed will come from technology and from how many hours the segment gives to travel; for now it is on foot. Distances run between tile centres along the great circle. A segment's way is the rest of its current step and then, if its destination lies beyond, one more step; one that reaches its destination stops for the rest of the year.",
+  "about": "Movement rules read by engine.py on every step; a copy goes into each turn's manifest. A moving segment covers km_per_hour x its travel hours a day x 365 km in a year. Its travel hours are its people-weighted mean of the hours each age doesn't spend on not_travel_activities (the hours not spent feeding themselves or sleeping). Eventually speed will come from technology and from how many hours the segment gives to travel; for now it is on foot. Distances run between tile centres along the great circle. A segment's way is the rest of its current step and then, if its destination lies beyond, one more step; one that reaches its destination stops for the rest of the year.",
   "km_per_hour": 2.5,
-  "not_travel_activities": ["sleep", "subsistence"]
+  "not_travel_activities": ["sleep", "subsistence", "farming"]
 }

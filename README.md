@@ -63,8 +63,9 @@ nothing else: the map is locked to a handful of tiles, and you can't zoom or pan
 couple of tiles past what your nation has explored. Tiles you have seen before but can't see now are dimmed, and the rest are
 black. Choose a tile to see its landforms and what covers its land (each largest first) and the leaders
 there. Nations are shown by their flags, and landforms and cover by small icons; hover over one for its name. Your own leader shows
-their title and people; choosing them offers their orders (for now only **Move**, to one of the eight
-directions around). A box under the leaders tells what is known about one of them: for your own,
+their title and people; choosing them offers the orders they can take: **Move**, to one of the eight
+directions around, and **Found a kingdom**, which settles your people where they stand to farm and herd,
+and makes your chieftain a king under the title you choose. A box under the leaders tells what is known about one of them: for your own,
 their people and how they seem (from `player/descriptions.json`); for another nation's, roughly how
 big their group looks. It shows your leader with the most people there, or whichever leader you
 point at or last clicked. The side bar is only
@@ -121,8 +122,12 @@ engine.py init / step ─────────────┘
   own chieftain, reporting to the chieftain on the nation's capital. A move command sends a
   segment to a neighbouring tile that isn't all water, on foot, at a pace set by its people's free
   hours (`engine/movement.json`). That is thousands of kilometres a year, so a one-tile move finishes
-  within the turn. The segment then lives the year where it ends up. Each segment's people forage for food (kcal), with returns that level off
-  at what their tile's terrain can sustain, shared among the segments there. People eat according to
+  within the turn. The segment then lives the year where it ends up. Founding a kingdom settles a
+  segment for good: it farms instead of foraging, can't move, has more children and more infection, and
+  no other nation can found a kingdom on its tile. Each segment's people forage or farm for food (kcal),
+  with returns that level off at what their tile's terrain can sustain for each, shared among the
+  segments there, and they work only the hours their food needs. Farmers feed their nation's other
+  segments on the tile with what they don't need; foragers work the land the farms leave. People eat according to
   their age, everyone in a segment eating less when it hasn't enough, and food that isn't eaten decays
   completely. The rules and their
   values are in `engine/economy.json`. Children are born at a placeholder rate by age

@@ -53,15 +53,15 @@ The server does no rendering. It hands the browser compact data, and the browser
 | `convert_map.py` | Converts `world_map.yaml` → `world_map.json`, and verifies the result. Also defines the JSON format id and the `MapColumns` reader the server uses. |
 | `convert_population.py` | Converts `world_population.yaml` → `world_population_current.json` (the full modern world, prototype data), and verifies the result. Also defines the columnar format id the server checks and the loader other scripts use. |
 | `../engine/engine.py` | The turn engine, in its own directory and run as its own process: `init` writes turn 0 of the cohort state, `step` advances it a year at a time, `verify` checks the current turn's checksum (§4.6). It imports `cohort_state.py`, `grid.py` and `convert_map.py` from `server/` (it reads `world_map.json` for production), and by default uses the top-level `state/` folder and `server/world_population_start.json` with its nation seed. |
-| `../engine/economy.json` | The economy rules the engine reads on every step: the products (food, in kcal) with their decay rates, and the foraging model's yields and factors. |
-| `../engine/demography.json` | The demography rules the engine reads on every step: birth rates by age, and each cause of death's rule and values. |
+| `../engine/economy.json` | The economy rules the engine reads on every step: the products (food, in kcal) with their decay rates, the foraging and farming models' yields and factors, and how segments on a tile share food. |
+| `../engine/demography.json` | The demography rules the engine reads on every step: birth rates by age, settled segments' factors, and each cause of death's rule and values. |
 | `../engine/movement.json` | The movement rules the engine reads on every step: walking pace, and which activities' hours aren't free for travel. |
 | `../engine/visibility.json` | The visibility rules the engine reads on every step: how many tiles around its people a nation sees (1: the tile and the 8 around it). |
-| `orders.py` | The players' orders (`../state/orders/turn_NNNNN/nation_KKK.json`): reading and writing them, the command types (for now `move`), and `check()`, the one validation used by both servers and the engine. |
+| `orders.py` | The players' orders (`../state/orders/turn_NNNNN/nation_KKK.json`): reading and writing them, the command types (`move`, `found_kingdom`), and `check()`, the one validation used by both servers and the engine. |
 | `game.py` | What the control and player servers share: the current turn (memory-mapped), its phase, giving orders (under the state's lock, so never during a step) and Commit Turn (runs `engine.py step --expect-turn T` as its own process, so a commit for a turn that has already resolved doesn't advance the next one; 409 if another step is running). Nation names come from here too. |
 | `names.py` | The names players give their nations (`../state/names.json`), written by the player server under the state's lock and shown by every server. The engine never reads them. |
 | `../player/player.py`, `../player/static/index.html`, `../player/descriptions.json` | The player page (§4.7), a separate server on port 8000. It sends a player only what their nation knows. |
-| `../engine/leaders.json` | The leader types (chieftain, mayor, superintendent, admiral, general, king) and the type every turn-0 leader gets. Types will decide which commands a leader can be given. |
+| `../engine/leaders.json` | The leader types (chieftain, mayor, superintendent, admiral, general, king), each with its title, the commands it takes, the activity its segment feeds itself by and whether it is settled; what founding a kingdom does; and the type every turn-0 leader gets. |
 | `../control/control.py`, `../control/static/index.html` | The developer's control page, a separate server on port 8001 so control stays apart from the view. **Commit Turn** (`POST /api/commit`) runs `engine/engine.py step` as its own process. Commits are accepted only while the turn's phase is `orders`; one sent while it is `resolving`, however the step was started, gets 409. `/api/status` gives the current turn and phase. The player first chooses the nation they control (remembered by the browser, or `?nation=AUS` in the URL); Commit Turn stays disabled until they do. The player is that nation's root leader, which the page names. The page lists the nation's leaders, root first (`/api/nation/<id>/leaders`); **Move** lists where a leader's segment can go (`/api/leader/<id>/moves`: the 8 neighbouring tiles, all-water ones disabled; for a segment already moving, the tiles around both ends of its step, each with the way there and its length), and choosing one saves a move command (`POST /api/nation/<id>/orders`, checked by `orders.check()`, refused unless the turn is in `orders`). The nation's orders for the turn are listed above Commit Turn, one per leader (a new command replaces the leader's old one), each with Cancel. It then lists what each of the nation's segments produced and consumed in the year that ended with the current turn, and how much of its need was met (`/api/nation/<id>/production`: the 100 most productive segments, with totals), and how many died of each cause (`/api/nation/<id>/deaths`). It reads the state and never writes it; the only files it writes are the orders. |
 | `cohort_state.py` | Reads and writes the cohort state (`../state/`): the format id, atomic turn writing, memory-mapped reading, checksums, pruning, and the state's lock (`state_lock()`: an OS lock on `state/.lock`, held by the engine for a whole step and by the servers while they write orders or names). Shared by `engine/engine.py` and the server. |
 | `../state/` | The cohort state written by `engine/engine.py`, in its own top-level folder next to `server/` and `engine/`: `current.json` plus one `turn_NNNNN/` directory per recent turn (see `cohort_state_schema.md`). Generated; not committed. |
@@ -272,34 +272,43 @@ server.py ◄── memory-maps the arrays of the turn current.json names ◄─
   sends a segment toward a neighbouring tile that isn't all water. A segment already partway from A to
   B can be sent to any neighbour of A or B: it first finishes the step to B or walks back to A,
   whichever makes the whole way shorter (`orders.plan_move()`), and the state keeps where its move ends
-  (`destination.npy`). Every moving segment then covers
+  (`destination.npy`). **Found a kingdom** turns a chieftain whose segment is wholly on one tile into
+  a king, under a title their player chooses (internally the type stays `king`); a king's segment is
+  settled: it farms, can't move, and keeps other nations from founding kingdoms on its tile (two nations
+  founding on one tile in the same turn both fail). Which commands a leader takes comes from their type
+  (`engine/leaders.json`). Every moving segment then covers
   `km_per_hour` × its travel hours a day × 365 (`engine/movement.json`; travel hours are the
-  people-weighted mean of the hours not spent sleeping or subsisting), along the great circle between
+  people-weighted mean of the hours not spent sleeping or feeding themselves the year before), along the great circle between
   tile centres, over the rest of its step and then the step on to its destination. If that reaches the
   destination, it arrives and stops; otherwise it stays partway and goes on
   next turn. On foot that is several thousand km a year, so a one-tile move (about 55 km) always
   finishes in the turn. The segment forages, eats and claims tiles where it ends up.
-- **Production.** Each step first works out what the year produced, from the current people and their
-  activity hours before they age. Foraging turns `subsistence` hours into food (kcal), at about 1,000
-  kcal an hour while labor is light, levelling off at what the tile's land cover, landform, latitude,
-  water and rivers can sustain; segments on the same tile share that limit in proportion to their
-  hours. People then consume each product at a daily rate per person that depends on age; a segment
+- **Production.** Each step first works out what the year produced, from the current people before
+  they age (`allocate()`). A segment feeds itself by foraging (hunting and gathering) or, if settled,
+  farming (farming and herding), each a curve that yields about 1,000 or 1,200 kcal an hour while labor
+  is light and levels off at what the tile's land cover, landform, latitude, water and rivers can
+  sustain for it (farming's is a Neolithic baseline, far higher per km²); segments working the same
+  curve on a tile share it in proportion to their hours. People work only the hours their food needs,
+  up to their schedule's. A nation's farmers on a tile farm for all of that nation's segments there and
+  give what they don't need to the others; then the foragers, of every nation, work the land the farms
+  leave. Different nations never share food. People then consume each product at a daily rate per person that depends on age; a segment
   with less than its people need cuts everyone's consumption by the same share, and the need and what
   was consumed are stored. What is left loses its decay rate (food: all of it) and the rest carries
   over as the segment's stock. The rules and their values are in
   `engine/economy.json`, read on every step; `cohort_state_schema.md` gives the formulas.
 - **Demographics.** Next come births: each segment's people × a placeholder birth rate per person per
   year by age (`engine/demography.json`, averaged over men and women), joining that segment, to be
-  replaced by a decision model in `birth_rates()`. Then deaths, from six causes whose yearly hazards add: starvation (the
+  replaced by a decision model in `birth_rates()`; settled segments have a quarter more. Then deaths, from six causes whose yearly hazards add: starvation (the
   food shortfall), predation and accidents (hours of work), cancer and other age-related causes (age),
-  infection (terrain) and child mortality (age and the childcare shortfall). People die in fractions,
+  infection (terrain; half as much again for settled segments) and child mortality (age and the childcare shortfall). People die in fractions,
   and each turn stores the deaths by segment and cause (`deaths.npy`). The rules are in the `deaths`
   section of `engine/demography.json`; `mortality_modifiers()` is where infrastructure will reduce them.
 - **One turn = one year.** `engine/engine.py step` then applies ageing: every cohort moves up a
   year, the 99-year-olds join the open-ended 100+ group, and the year's surviving newborns become age 0.
-  Activity hours belong to the age, not the cohort, so people take on the hours of their new age. The activity list and the starting hours
-  for each age (rough curves in `starting_hours()`) are placeholders in `engine/engine.py`.
-- **Leaders and nations.** Each turn holds a record per leader (`leaders.json`: id, name, type,
+  Activity hours belong to the age, not the cohort: each year's come from the schedule for each age, of
+  foragers (`starting_hours()`) or farmers (`farming_hours()`). The activity list and the schedules are
+  placeholders in `engine/engine.py`, to be replaced by a decision model.
+- **Leaders and nations.** Each turn holds a record per leader (`leaders.json`: id, name, type, title,
   nation, parent, founded turn; one per segment, in row order) and per nation (`nations.json`: id,
   code, capital tile, root leader, founded turn, alive), the owner of every tile (`owner.npy`) and two
   bit grids per nation:
@@ -345,7 +354,8 @@ deliberately spartan, and `player.py` sends only what the nation knows.
   the screen as a rectangle of latitude and longitude; a screen can't be smaller than 3 tiles). Unexplored tiles are black, explored tiles not seen now are dimmed, with soft,
   slightly ragged edges between them (a fine fog patch over the explored area, 12 pixels per tile, inside
   a one-pixel-per-tile black layer for the rest of the world), and the grid is drawn only on explored tiles. Each
-  nation's people on a tile are a camp of small tepees (own ochre, others rust red): all its segments
+  nation's people on a tile are a camp of small tepees, or round huts among fields if any of them are
+  settled (own ochre, others rust red): all its segments
   there added up, 3 tepees for 200 people, growing with the square root of the people, from 1 to 10
   (`camps` in /view, worked out by the server from `descriptions.json` "camp", so other nations'
   counts stay hidden). Each nation on a tile gets a strip of it, and its tepees sit at fixed,
@@ -358,9 +368,12 @@ deliberately spartan, and `player.py` sends only what the nation knows.
   206 and a person symbol; the words are the tooltips). Under them, an info box tells what is known about one leader's segment (people and
   situation for the player's own, rough size for another nation's): the leader under the pointer, else
   the one last clicked on this tile, else the player's leader with the most people there. Clicking one
-  of the player's own leaders opens their orders (for now only **Move**: a 3 × 3 compass of
-  directions, all-water ones disabled, plus Cancel). `POST /api/nation/<id>/orders` takes a direction and turns it into a move command for
-  that neighbour (`orders.py`, through `game.py`). A small **Orders** box at the top left of the map
+  of the player's own leaders opens the orders their type takes: **Move** (a 3 × 3 compass of
+  directions, all-water ones disabled) and **Found a kingdom** (which asks for confirmation and a title,
+  King by default, at most 20 characters, and can't be confirmed while the segment is between tiles or
+  where another nation has settled), plus Cancel; a king takes none for now. `POST /api/nation/<id>/orders`
+  takes a direction and turns it into a move command for that neighbour, or a title for founding a
+  kingdom (`orders.py`, through `game.py`). Leaders are called by their title, which everyone sees. A small **Orders** box at the top left of the map
   lists every order the nation has given this turn (choosing one goes to that leader's tile; ✕ cancels
   it), and a box at the bottom left holds the turn number and **Commit Turn**, a play symbol (an hourglass
   while the year passes; `POST /api/commit` with the turn), which resolves the turn for the whole world; afterwards the page follows the leader last chosen. The page

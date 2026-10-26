@@ -8,6 +8,11 @@
       [52, 0.0148], [55, 0.01], [58, 0.0063], [61, 0.003], [64, 0], [100, 0]
     ]
   },
+  "settled": {
+    "about": "Settled segments (leaders.json: their leader's type is settled) have birth_factor x the births above and infection_factor x the infection hazard below. Settled life, as farming came in, shortened the spacing between births (stored food, weaning foods, no long treks with small children) and crowded people together with their animals and their waste. Rough: the Neolithic demographic transition is often put at about a quarter more births; technology will change both.",
+    "birth_factor": 1.25,
+    "infection_factor": 1.5
+  },
   "deaths": {
     "about": "Causes of death, each a yearly hazard (deaths per person-year) for each tile and age; they add, a cohort's share dying in the year is 1 - exp(-total), and the deaths are split among the causes in proportion to their hazards. Rates are per person over the year, evaluated at the cohort's mid-year age; children born during the year face half a year at age 0.25. Well fed, the causes together are calibrated to reproduce the Siler forager curve that turn 0's age structure comes from (Gurven & Kaplan 2007: life expectancy at birth about 34), split roughly as their cause-of-death shares. mortality_modifiers() in engine.py scales each cause per tile; that is where future infrastructure will reduce them. Listed in the order of the deaths.npy columns.",
     "starvation": {
@@ -19,9 +24,8 @@
       "vulnerable_factor": 2
     },
     "predation_and_accidents": {
-      "about": "Animal attacks, snakebite, falls, drowning and other accidents while working: hazard_per_hour x the year's hours of the activity, so about 0.4% a year for an adult foraging about 8.5 hours a day.",
-      "activity": "subsistence",
-      "hazard_per_hour": 1.3e-6
+      "about": "Animal attacks, snakebite, falls, drowning and other accidents while working: the sum over the activities of hazard_per_hour x the year's hours of that activity, so about 0.4% a year for an adult foraging about 8.5 hours a day. Farming and herding is less dangerous an hour than hunting.",
+      "hazard_per_hour": {"subsistence": 1.3e-6, "farming": 0.7e-6}
     },
     "cancer": {
       "about": "Hazard a x exp(b x age): a fifth of the Siler ageing term.",

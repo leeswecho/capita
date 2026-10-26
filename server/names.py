@@ -36,17 +36,18 @@ def read(state_dir: str) -> dict:
     return names
 
 
-def clean(name) -> str:
-    """The name as it will be saved: spaces collapsed and trimmed. Raises ValueError if it can't be one."""
+def clean(name, max_length: int = MAX_LENGTH, what: str = "name") -> str:
+    """The name as it will be saved: spaces collapsed and trimmed. Raises ValueError if it can't be one.
+    (Leaders' titles follow the same rules, with their own length, orders.py.)"""
     if not isinstance(name, str):
-        raise ValueError("a name must be text")
+        raise ValueError(f"a {what} must be text")
     name = " ".join(name.split())
     if not name:
-        raise ValueError("a name can't be empty")
-    if len(name) > MAX_LENGTH:
-        raise ValueError(f"a name can be at most {MAX_LENGTH} characters")
+        raise ValueError(f"a {what} can't be empty")
+    if len(name) > max_length:
+        raise ValueError(f"a {what} can be at most {max_length} characters")
     if any(not c.isprintable() for c in name):
-        raise ValueError("a name can't contain control characters")
+        raise ValueError(f"a {what} can't contain control characters")
     return name
 
 

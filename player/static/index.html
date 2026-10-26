@@ -93,6 +93,10 @@
   .compass { display: grid; grid-template-columns: repeat(3, 44px); gap: 3px; justify-content: center; }
   .compass .btn { width: 44px; height: 34px; padding: 0; text-align: center; }
   .compass .here { display: grid; place-items: center; }
+  #menu label { display: flex; flex-direction: column; gap: 3px; font-size: 14px; }
+  #menu input { font: inherit; color: var(--ink); padding: 4px 6px; background: rgba(255, 255, 255, 0.35);
+                border: 2px solid; border-color: var(--lo) var(--hi) var(--hi) var(--lo); outline: none; }
+  #menu .why { font-style: italic; }
 
   @media (max-width: 640px) {
     #game { flex-direction: column; }
@@ -769,11 +773,12 @@ function selectTile(tid) {
 }
 
 // Camps: each nation's people on a tile are drawn as a scatter of tepees, more for more people (the
-// server says how many: /view "camps"). The player's own are ochre, other nations' rust red. Each
+// server says how many: /view "camps"). A settled nation's people (a kingdom) are drawn as as many
+// round huts, among a few fields. The player's own are ochre, other nations' rust red. Each
 // nation on a tile gets its own strip of the tile. The tepees sit at fixed, well-spread places:
 // for each tile and nation, a seeded best-candidate sequence of spots, of which a camp of n tepees
-// takes the first n, so a tepee is added or removed only when the count changes. An ordered move is
-// drawn as a line from the segment to the tile it heads for.
+// takes the first n, so a tepee is added or removed only when the count changes; the fields have a
+// sequence of their own. An ordered move is drawn as a line from the segment to the tile it heads for.
 const TEPEE_SIZE = 0.2, TEPEE_MAX = 10;   // size in tiles
 function tepeeTexture(hide) {
   // A tepee seen from above and to the south, as in an isometric view: a cone whose base is an
@@ -806,6 +811,58 @@ function tepeeTexture(hide) {
 }
 const TEPEES = { own: new THREE.MeshBasicMaterial({ map: tepeeTexture("#d9a441"), depthTest: false, transparent: true }),
                  other: new THREE.MeshBasicMaterial({ map: tepeeTexture("#a4483a"), depthTest: false, transparent: true }) };
+function shader(hex) {   // k -> the colour hex x k, for shading
+  const n = parseInt(hex.slice(1), 16), f = (v, k) => Math.max(0, Math.min(255, Math.round(v * k)));
+  return k => `rgb(${f(n >> 16, k)},${f((n >> 8) & 255, k)},${f(n & 255, k)})`;
+}
+function hutTexture(thatch) {
+  // A round hut seen from above and to the south, like the tepees: a mud wall, a door, and a conical
+  // thatched roof (in the nation's colour) that overhangs it, lit from the upper left.
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = 64;
+  const c = cv.getContext("2d"), wall = shader("#9c7b56"), roof = shader(thatch);
+  const bx = 32, wy0 = 34, wy1 = 50, rx = 17, ry = 6;                    // wall: from the eaves down to the ground
+  c.beginPath(); c.ellipse(bx + 7, wy1 + 3, rx + 4, ry + 1, 0, 0, Math.PI * 2);   // shadow
+  c.fillStyle = "rgba(0, 0, 0, 0.35)"; c.fill();
+  const body = () => { c.beginPath(); c.moveTo(bx - rx, wy0); c.lineTo(bx - rx, wy1); c.ellipse(bx, wy1, rx, ry, 0, Math.PI, 0, true); c.lineTo(bx + rx, wy0); c.closePath(); };
+  const gw = c.createLinearGradient(bx - rx, 0, bx + rx, 0);
+  gw.addColorStop(0, wall(1.2)); gw.addColorStop(0.45, wall(1.0)); gw.addColorStop(1, wall(0.55));
+  body(); c.fillStyle = gw; c.fill();
+  c.fillStyle = "#1d1810"; c.fillRect(bx - 1, wy0 + 6, 9, wy1 - wy0 - 1);   // the door, a little right of centre
+  body(); c.lineJoin = "round"; c.lineWidth = 2.5; c.strokeStyle = "#15120d"; c.stroke();
+  const ay = 8, ex = rx + 5, ey = wy0 + 1, ery = 7;                      // roof apex; eaves ellipse
+  const cone = () => { c.beginPath(); c.moveTo(bx, ay); c.lineTo(bx - ex, ey); c.ellipse(bx, ey, ex, ery, 0, Math.PI, 0, true); c.closePath(); };
+  const gr = c.createLinearGradient(bx - ex, 0, bx + ex, 0);
+  gr.addColorStop(0, roof(1.25)); gr.addColorStop(0.45, roof(1.0)); gr.addColorStop(1, roof(0.55));
+  cone(); c.fillStyle = gr; c.fill();
+  c.save(); cone(); c.clip();                                            // the thatch's layers
+  c.strokeStyle = "rgba(21, 18, 13, 0.3)"; c.lineWidth = 1.2;
+  for (const k of [0.4, 0.7]) { c.beginPath(); c.ellipse(bx, ay + (ey - ay) * k, ex * k, ery * k, 0, 0, Math.PI); c.stroke(); }
+  c.restore();
+  cone(); c.lineWidth = 2.5; c.stroke();
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+function fieldTexture(crop) {
+  // A small field from above: a plot of furrows, a little ragged at the edges.
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = 64;
+  const c = cv.getContext("2d"), tone = shader(crop);
+  c.fillStyle = tone(1); c.fillRect(6, 9, 52, 46);
+  c.strokeStyle = tone(0.72); c.lineWidth = 2;
+  for (let y = 13; y < 54; y += 6) { c.beginPath(); c.moveTo(7, y); c.lineTo(57, y + 1); c.stroke(); }
+  c.strokeStyle = "rgba(40, 30, 15, 0.7)"; c.lineWidth = 2; c.strokeRect(6, 9, 52, 46);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+const material = tex => new THREE.MeshBasicMaterial({ map: tex, depthTest: false, transparent: true });
+const HUTS = { own: material(hutTexture("#d9a441")), other: material(hutTexture("#a4483a")) };
+const FIELDS = [material(fieldTexture("#7d9a43")), material(fieldTexture("#c8a750")), material(fieldTexture("#93a850"))];
+const FIELD_SIZE = 0.24;   // in tiles
 function campSpots(seed, x0, x1, y0, y1) {   // up to TEPEE_MAX well-spread spots in a box, the same for the same seed
   let s = seed >>> 0 || 1;
   const rand = () => (s = Math.imul(s ^ (s >>> 15), 2246822519) + 0x9e3779b9 >>> 0) / 4294967296;
@@ -842,11 +899,20 @@ function drawMarkers() {
   for (const [tid, camps] of byTile) {
     const { lat, lon } = parseTileId(tid);
     camps.forEach((c, j) => {   // strip j of the tile's width, in tile units from its south-west corner
-      const x0 = j / camps.length, x1 = (j + 1) / camps.length;
-      const spots = campSpots(tileIndex(tid) * 7919 + (c.nation?.id || 0) * 104729, x0 + m, x1 - m, m, 1 - m)
+      const x0 = j / camps.length, x1 = (j + 1) / camps.length, seed = tileIndex(tid) * 7919 + (c.nation?.id || 0) * 104729;
+      if (c.settled) {   // the fields first, under the huts
+        const f = FIELD_SIZE / 2 + 0.02;
+        campSpots(seed + 1, x0 + f, x1 - f, f, 1 - f).slice(0, Math.ceil(c.tepees / 2) + 1).forEach(([x, y], k) => {
+          const mesh = new THREE.Mesh(quad(lat + y * TILE, lon + x * TILE, TILE * FIELD_SIZE), FIELDS[k % FIELDS.length]);
+          mesh.renderOrder = 6.5;
+          markers.add(mesh);
+        });
+      }
+      const spots = campSpots(seed, x0 + m, x1 - m, m, 1 - m)
         .slice(0, c.tepees).sort((a, b) => b[1] - a[1]);   // northern ones first, so nearer ones overlap them
+      const look = c.settled ? HUTS : TEPEES;
       for (const [x, y] of spots) {
-        const mesh = new THREE.Mesh(quad(lat + y * TILE, lon + x * TILE, TILE * TEPEE_SIZE), c.own ? TEPEES.own : TEPEES.other);
+        const mesh = new THREE.Mesh(quad(lat + y * TILE, lon + x * TILE, TILE * TEPEE_SIZE), c.own ? look.own : look.other);
         mesh.renderOrder = 7 + (1 - y) * 0.5;   // drawn north to south (Three would otherwise sort these by distance)
         markers.add(mesh);
       }
@@ -868,6 +934,7 @@ function drawMarkers() {
 
 // ---------- the side bar ----------
 const DIR_LABEL = { n: "N", ne: "NE", e: "E", se: "SE", s: "S", sw: "SW", w: "W", nw: "NW" };
+const orderText = o => o.type === "found_kingdom" ? "found a kingdom" : `move ${DIR_LABEL[o.direction] || ""}`;
 function renderSide() {
   const t = selected ? known.get(selected) : null;
   // Landforms, then what covers the land, each largest first, as rows of icons without the shares.
@@ -876,7 +943,7 @@ function renderSide() {
   const segs = t && t.seen ? segsByTile.get(t.id) || [] : [];
   $("segments").innerHTML = segs.map(s => `<button class="btn seg" data-leader="${s.leader}">
       ${leaderLabel(s)}${s.own ? `<span class="people">${s.people.toLocaleString()} ${glyph("people", s.people === 1 ? "person" : "people")}</span>` : ""}
-      ${s.order ? `<span class="order">Orders: move ${DIR_LABEL[s.order.direction] || ""}</span>` : ""}</button>`).join("");
+      ${s.order ? `<span class="order">Orders: ${orderText(s.order)}</span>` : ""}</button>`).join("");
   renderInfo();
 }
 
@@ -907,7 +974,7 @@ $("segments").addEventListener("mouseleave", () => { hoverLeader = null; renderI
 function renderOrders() {
   const ordered = VIEW.segments.filter(s => s.own && s.order), box = $("ordersBox");
   const html = `<div class="head">Orders</div>` + ordered.map(s => `<div class="row">
-      <button class="who" data-leader="${s.leader}">${leaderLabel(s)}: move ${DIR_LABEL[s.order.direction] || ""}</button>
+      <button class="who" data-leader="${s.leader}">${leaderLabel(s)}: ${orderText(s.order)}</button>
       <button class="btn x" data-cancel="${s.leader}" title="Cancel this order"${canOrder() ? "" : " disabled"}>✕</button></div>`).join("");
   box.hidden = !ordered.length;
   if (box.dataset.html !== html) { box.innerHTML = html; box.dataset.html = html; }   // not mid-click on every poll
@@ -931,13 +998,14 @@ $("segments").addEventListener("click", e => {
   const s = VIEW.segments.find(s => s.leader === +b.dataset.leader);
   pinnedLeader = s.leader;
   renderInfo();
-  if (s.own) { focusLeader = s.leader; openMenu(s, b); }
+  if (s.own && s.commands.length) { focusLeader = s.leader; openMenu(s, b); }   // a king takes no orders, for now
   else closeMenu();
 });
 
 // ---------- a leader's menus ----------
-// Clicking one of the player's own leaders opens their orders: for now only Move, to one of the 8
-// tiles around, and cancelling an order. (What is known about a leader is in the info box.)
+// Clicking one of the player's own leaders opens their orders, those their type can take: Move, to one
+// of the 8 tiles around; Found a kingdom, which asks for confirmation and a title; and cancelling an
+// order. (What is known about a leader is in the info box.)
 let menuFor = null, menuAnchor = null;
 function openMenu(s, anchor) {
   menuFor = s; menuAnchor = anchor;
@@ -949,16 +1017,24 @@ const canOrder = () => VIEW && VIEW.phase === "orders" && status.phase === "orde
 function showMenu(page) {
   const s = menuFor, m = $("menu");
   let html = `<div class="title">${leaderLabel(s)}</div>`;
+  const off = canOrder() ? "" : " disabled";
   if (page === "orders") {
-    html += `<button class="btn" data-go="move"${canOrder() ? "" : " disabled"}>Move</button>`;
-    if (s.order) html += `<button class="btn" data-cancel${canOrder() ? "" : " disabled"}>Cancel order (move ${DIR_LABEL[s.order.direction] || ""})</button>`;
+    if (s.commands.includes("move")) html += `<button class="btn" data-go="move"${off}>Move</button>`;
+    if (s.commands.includes("found_kingdom")) html += `<button class="btn" data-go="found"${off}>Found a kingdom</button>`;
+    if (s.order) html += `<button class="btn" data-cancel${off}>Cancel order (${orderText(s.order)})</button>`;
     if (!canOrder()) html += `<p>Orders can't be given while the turn is resolving.</p>`;
+  } else if (page === "found") {
+    const f = s.found_kingdom, title = s.order?.type === "found_kingdom" ? s.order.title : f.title;
+    html += `<p>Found a kingdom here? Your people will settle on this land for good, to farm it and herd animals, and will no longer move.</p>
+      <label>Your title <input id="foundTitle" maxlength="${f.max_length}" spellcheck="false" value="${esc(title)}"></label>
+      ${f.ok ? "" : `<p class="why">${esc(f.why)}</p>`}
+      <button class="btn" data-found${f.ok ? off : " disabled"}>Found the kingdom</button>`;
   } else if (page === "move") {
     const ok = Object.fromEntries(s.moves.map(mv => [mv.direction, mv.ok]));
     const cell = d => `<button class="btn${s.order?.direction === d ? " on" : ""}" data-move="${d}"${ok[d] ? "" : " disabled"}>${DIR_LABEL[d]}</button>`;
     html += `<p>Which way?</p><div class="compass">${cell("nw")}${cell("n")}${cell("ne")}${cell("w")}<span class="here">·</span>${cell("e")}${cell("sw")}${cell("s")}${cell("se")}</div>`;
   }
-  if (page === "move") html += `<button class="btn" data-go="orders">Back</button>`;
+  if (page === "move" || page === "found") html += `<button class="btn" data-go="orders">Back</button>`;
   m.innerHTML = html;
   m.hidden = false;
   const a = menuAnchor.getBoundingClientRect(), w = m.offsetWidth, h = m.offsetHeight;
@@ -967,25 +1043,38 @@ function showMenu(page) {
   if (left < 8 || innerWidth < 640) { left = Math.max(8, Math.min(a.left, innerWidth - w - 8)); top = a.top - h - 6; }
   m.style.left = `${left}px`;
   m.style.top = `${Math.max(8, Math.min(top, innerHeight - h - 8))}px`;
+  if (page === "found") $("foundTitle").select();
 }
 $("menu").addEventListener("click", async e => {
   const go = e.target.closest("[data-go]"), mv = e.target.closest("[data-move]"), cancel = e.target.closest("[data-cancel]");
   if (go) return showMenu(go.dataset.go);
+  if (e.target.closest("[data-found]")) return foundKingdom();
   if (mv || cancel) {
     const s = menuFor;
     closeMenu();
     await giveOrder(s, mv ? mv.dataset.move : null);
   }
 });
-async function giveOrder(s, direction) {   // direction null takes the order back
+async function giveOrder(s, direction, extra = {}) {   // direction null takes the order back
   try {
-    await api(`/api/nation/${nationId}/orders`, { turn: VIEW.turn, leader: s.leader, direction });
+    await api(`/api/nation/${nationId}/orders`, { turn: VIEW.turn, leader: s.leader, direction, ...extra });
     say("");   // the orders box shows it
+    return true;
   } catch (err) {
     say(err.message);
+    return false;
+  } finally {
+    await loadView(false);
   }
-  await loadView(false);
 }
+async function foundKingdom() {
+  const s = menuFor, title = $("foundTitle").value.trim() || s.found_kingdom.title;
+  closeMenu();
+  await giveOrder(s, null, { found_kingdom: title });
+}
+$("menu").addEventListener("keydown", e => {
+  if (e.key === "Enter" && e.target.id === "foundTitle" && !$("menu").querySelector("[data-found]").disabled) foundKingdom();
+});
 document.addEventListener("pointerdown", e => {
   if (!$("menu").hidden && !e.target.closest("#menu") && !e.target.closest("#segments")) closeMenu();
 });

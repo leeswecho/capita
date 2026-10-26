@@ -18,7 +18,7 @@
     }
   },
   "foraging": {
-    "about": "Hunting and gathering. Labor H (person-hours a year of the activity) yields P = max * (1 - exp(-return_per_hour * H / max)): about return_per_hour per hour while labor is light, levelling off at the tile's sustainable maximum. max = (land area x the cover-weighted yield_per_km2 x landform factor x climate factor + water area x water_yield_per_km2) x river_factor if the tile has a navigable river. Yields come from observed forager densities: about 800,000 kcal per person per year.",
+    "about": "Hunting and gathering, by segments whose leader's type has the activity 'subsistence' (leaders.json). Labor H (person-hours a year of the activity) yields P = max * (1 - exp(-return_per_hour * H / max)): about return_per_hour per hour while labor is light, levelling off at the tile's sustainable maximum. max = (land area x the cover-weighted yield_per_km2 x landform factor x climate factor + water area x water_yield_per_km2) x river_factor if the tile has a navigable river. Yields come from observed forager densities: about 800,000 kcal per person per year. Where settled segments farm, their farms and herds take the share of the tile they use (farming's production / its max), and the foragers there work the rest: max is multiplied by 1 - that share.",
     "product": "food",
     "activity": "subsistence",
     "return_per_hour": 1000,
@@ -44,5 +44,36 @@
     },
     "water_yield_per_km2": 50000,
     "river_factor": 1.2
+  },
+  "farming": {
+    "about": "Farming and herding, as one activity, by segments whose leader's type has the activity 'farming' (leaders.json): a Neolithic baseline, which technology will raise (yield_modifiers() in engine.py). The same curve as foraging, P = max * (1 - exp(-return_per_hour * H / max)), with max = (land area x the cover-weighted yield_per_km2 x landform factor + the tile's area x river_yield_per_km2 if a navigable river runs through it) x climate factor + water area x water_yield_per_km2 (farmers fish too). Early farming paid little better per hour than foraging, but fed far more people per km2: yield_per_km2 on grassland feeds about 15 people a km2 at 800,000 kcal a person a year, against about a quarter of a person foraging. Forest has to be cleared, so it yields less; desert next to nothing, except along a river, whose floods water a strip of the tile (river_yield_per_km2, spread over the tile's whole area); tundra and ice nothing. The growing season shortens toward the poles faster than foragers' food runs out.",
+    "product": "food",
+    "activity": "farming",
+    "return_per_hour": 1200,
+    "yield_per_km2": {
+      "grass": 12000000,
+      "forest": 4000000,
+      "desert": 150000,
+      "sand": 300000,
+      "wetlands": 6000000,
+      "tundra": 0,
+      "ice": 0
+    },
+    "landform_factor": {
+      "plains": 1.0,
+      "hills": 0.6,
+      "mountains": 0.2
+    },
+    "climate": {
+      "about": "Land and river yields fall linearly from full at full_to_latitude degrees north or south to min_factor at min_at_latitude and beyond.",
+      "full_to_latitude": 40,
+      "min_at_latitude": 65,
+      "min_factor": 0.05
+    },
+    "river_yield_per_km2": 2000000,
+    "water_yield_per_km2": 50000
+  },
+  "sharing": {
+    "about": "How the segments on a tile feed themselves each year (allocate() in engine.py). Each segment first eats from what it holds. Farmers work first: a nation's farmers on a tile farm for the food that all of that nation's segments there still need (as far as their hours allow), keep what they need of it, and give the rest to their nation's other segments there, in proportion to what each still needs. Then every segment that forages works for what it still needs, all of them sharing whatever land the farms leave, whatever their nation. Segments of different nations never share food. People work only the hours their food needs, up to their schedule's hours (starting_hours() and farming_hours() in engine.py); the hours they don't need go to 'other'."
   }
 }

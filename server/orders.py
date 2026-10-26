@@ -19,6 +19,13 @@ Command types:
             next to either: it first finishes the step to B or walks back to A, whichever makes the whole
             way to `to` shorter (plan_move()), then goes on from there. The engine moves it when the turn
             resolves (engine.py move_segments()); it keeps going on later turns until it arrives.
+    found_kingdom  {"leader": id, "type": "found_kingdom", "title": "King"}: the leader's segment settles on
+            its tile and the leader becomes a king (leaders.json "commands"), called `title`. The segment
+            must be wholly on one tile (not between two), and no other nation may have a settled segment
+            there. The engine also refuses it if a leader of another nation founds a kingdom on the same tile
+            in the same turn (engine.py apply_orders()).
+
+Which commands a leader can be given depends on their type (leaders.json "types": "commands").
 
 check() is the one place a command is validated: control.py uses it to refuse a bad command at once,
 and the engine uses it again on everything it reads, since the files could have been written by hand
@@ -31,11 +38,12 @@ import shutil
 import numpy as np
 
 import grid
+import names
 from cohort_state import _retry, _write_json_atomic, segment_latlon, turn_dir_name
 
 FORMAT = "capita/orders-1"
 DIR = "orders"
-COMMAND_TYPES = ("move",)
+COMMAND_TYPES = ("move", "found_kingdom")
 
 
 def turn_orders_dir(state_dir: str, turn: int) -> str:
@@ -180,10 +188,32 @@ def plan_move(at: int, toward: int, progress: float, to: int) -> dict:
     return min(routes, key=lambda r: r["km"])   # the first (finishing the step) wins a tie
 
 
-def check(state, rows: dict, nation: int, command: dict, can_walk) -> str:
+def make(lid: int, command: dict) -> dict:
+    """A command as it is stored: the leader, the type and that type's fields (nothing else is kept)."""
+    if command.get("type") == "found_kingdom":
+        return {"leader": lid, "type": "found_kingdom", "title": command.get("title")}
+    return {"leader": lid, "type": command.get("type"), "to": command.get("to")}
+
+
+def settled(state, rules) -> np.ndarray:
+    """Whether each row's segment is settled, bool [S]: its leader's type is (leaders.json)."""
+    types = rules["types"]
+    return np.array([bool(types[lead["type"]]["settled"]) for lead in state.leaders], dtype=bool)
+
+
+def settled_by_others(state, rules, nation: int, tile: int) -> bool:
+    """Whether another nation has a settled segment with people on a tile."""
+    here = np.flatnonzero(np.asarray(state.tile) == tile)
+    types = rules["types"]
+    return any(state.leaders[r]["nation"] != nation and types[state.leaders[r]["type"]]["settled"]
+               and float(np.asarray(state.people[r]).sum()) > 0 for r in here.tolist())
+
+
+def check(state, rows: dict, nation: int, command: dict, can_walk, rules) -> str:
     """Why a nation's command can't be carried out at this state, or None if it can.
 
-    state: a cohort_state.State (the turn the command is for); rows: state.row_of(); can_walk: walkable().
+    state: a cohort_state.State (the turn the command is for); rows: state.row_of(); can_walk: walkable();
+    rules: leaders.json's rules (the turn's manifest keeps a copy).
     """
     if not isinstance(command, dict) or command.get("type") not in COMMAND_TYPES:
         return f"unknown command type {command.get('type') if isinstance(command, dict) else command!r}"
@@ -193,6 +223,21 @@ def check(state, rows: dict, nation: int, command: dict, can_walk) -> str:
         return f"no leader {lid!r}"
     if state.leaders[r]["nation"] != nation:
         return f"leader {lid} doesn't belong to nation {nation}"
+    kind = state.leaders[r]["type"]
+    if command["type"] not in rules["types"][kind]["commands"]:
+        return f"a {kind} can't be given {command['type']} commands"
+    if command["type"] == "found_kingdom":
+        spec = rules["commands"]["found_kingdom"]
+        title = command.get("title")
+        try:
+            if names.clean(title, spec["max_title_length"], "title") != title:
+                return "a title must have no spaces at either end, nor more than one in a row"
+        except ValueError as e:
+            return str(e)
+        if state.at[r] != state.toward[r]:
+            return "a kingdom can't be founded while on the move: the segment must be on one tile"
+        if settled_by_others(state, rules, nation, int(state.at[r])):
+            return f"another nation has settled {tile_name(state.at[r])}"
     if command["type"] == "move":
         try:
             to = tile_index(command.get("to"))

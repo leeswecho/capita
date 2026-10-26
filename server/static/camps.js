@@ -2,10 +2,12 @@
 // (server/static/index.html); both servers serve this file as /camps.js. Each nation's people on a
 // tile are drawn as a scatter of tepees, round huts if settled, or covered wagons for a settling
 // party, more for more people (the server says which and how many: "camps", server/camps.py). Own
-// camps are ochre, other nations' rust red. Each camp on a tile gets its own strip of the tile, and
-// wagons are drawn smaller beside huts. They sit at fixed, well-spread places: for each tile, nation
-// and look, a seeded best-candidate sequence of spots, of which a camp of n takes the first n, so one
-// is added or removed only when the count changes.
+// camps are ochre, other nations' rust red. Each nation on a tile gets its own strip of the tile, and
+// its camps there share it, mingled (wagons are drawn smaller beside huts). They sit at fixed,
+// well-spread places: a nation's first camp on a tile (huts, else tepees, else wagons) takes the first
+// n of a seeded best-candidate sequence of spots, so one is added or removed only when its count
+// changes, and a settling party's wagons don't move the huts. Its other camps then fill in between,
+// with sequences of their own that keep away from the spots already taken.
 import * as THREE from "three";
 
 export const TEPEE_SIZE = 0.2, TEPEE_MAX = 10;   // size in tiles
@@ -117,15 +119,18 @@ function wagonTexture(body) {
   return tex;
 }
 
-export function campSpots(seed, x0, x1, y0, y1) {   // up to TEPEE_MAX well-spread spots in a box, the same for the same seed
+// Up to `n` well-spread spots in a box, the same for the same seed and `taken` (spots already used,
+// which they keep away from).
+export function campSpots(seed, x0, x1, y0, y1, taken = [], n = TEPEE_MAX) {
   let s = seed >>> 0 || 1;
   const rand = () => (s = Math.imul(s ^ (s >>> 15), 2246822519) + 0x9e3779b9 >>> 0) / 4294967296;
   const spots = [];
-  for (let i = 0; i < TEPEE_MAX; i++) {
+  for (let i = 0; i < n; i++) {
     let best = null, bestD = -1;
     for (let k = 0; k < 16; k++) {
       const p = [x0 + (x1 - x0) * rand(), y0 + (y1 - y0) * rand()];
-      const d = spots.length ? Math.min(...spots.map(q => Math.hypot(p[0] - q[0], p[1] - q[1]))) : 1;
+      const near = [...taken, ...spots];
+      const d = near.length ? Math.min(...near.map(q => Math.hypot(p[0] - q[0], p[1] - q[1]))) : 1;
       if (d > bestD) { best = p; bestD = d; }
     }
     spots.push(best);
@@ -154,19 +159,25 @@ export function drawCamps(group, camps, { tile, parseTileId, tileIndex, quad, de
   const mats = look(depthTest);
   for (const [tid, list] of byTile) {
     const { lat, lon } = parseTileId(tid);
-    list.forEach((c, j) => {   // strip j of the tile's width, in tile units from its south-west corner
-      const size = c.look === "wagons" ? (c.small ? WAGON_SMALL : WAGON_SIZE) : TEPEE_SIZE;
-      const m = size / 2 + 0.04;   // keep whole pictures inside the tile
-      const x0 = j / list.length, x1 = (j + 1) / list.length;
-      const seed = tileIndex(tid) * 7919 + (c.nation?.id || 0) * 104729 + LOOKS.indexOf(c.look) * 15485863;
-      const spots = campSpots(seed, x0 + m, Math.max(x0 + m, x1 - m), m, 1 - m)
-        .slice(0, c.count).sort((a, b) => b[1] - a[1]);   // northern ones first, so nearer ones overlap them
-      const kind = mats[c.look];
-      for (const [x, y] of spots) {
-        const mesh = new THREE.Mesh(quad(lat + y * tile, lon + x * tile, tile * size), c.own ? kind.own : kind.other);
-        mesh.renderOrder = renderOrder + (1 - y) * 0.5;   // drawn north to south (Three would otherwise sort these by distance)
-        group.add(mesh);
-        added.push(mesh);
+    const byNation = new Map();
+    for (const c of list) (byNation.get(c.nation?.id || 0) || byNation.set(c.nation?.id || 0, []).get(c.nation?.id || 0)).push(c);
+    [...byNation.values()].forEach((camps, j) => {   // strip j of the tile's width, in tile units from its south-west corner
+      const x0 = j / byNation.size, x1 = (j + 1) / byNation.size, taken = [];
+      camps.sort((a, b) => LOOKS.indexOf(a.look) - LOOKS.indexOf(b.look));
+      for (const c of camps) {
+        const size = c.look === "wagons" ? (c.small ? WAGON_SMALL : WAGON_SIZE) : TEPEE_SIZE;
+        const m = size / 2 + 0.04;   // keep whole pictures inside the tile
+        const seed = tileIndex(tid) * 7919 + (c.nation?.id || 0) * 104729 + LOOKS.indexOf(c.look) * 15485863;
+        const spots = campSpots(seed, x0 + m, Math.max(x0 + m, x1 - m), m, 1 - m, taken, taken.length ? c.count : TEPEE_MAX)
+          .slice(0, c.count);
+        taken.push(...spots);
+        const kind = mats[c.look];
+        for (const [x, y] of spots) {
+          const mesh = new THREE.Mesh(quad(lat + y * tile, lon + x * tile, tile * size), c.own ? kind.own : kind.other);
+          mesh.renderOrder = renderOrder + (1 - y) * 0.5;   // drawn north to south, so nearer ones overlap them
+          group.add(mesh);
+          added.push(mesh);
+        }
       }
     });
   }

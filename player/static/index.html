@@ -66,7 +66,6 @@
   #info:empty { display: none; }
   #info .title { font-weight: bold; }
   #info p { margin: 0; }
-  #info .counts { display: flex; flex-wrap: wrap; column-gap: 14px; }
   .seg { width: 100%; }
   .seg .people { display: flex; align-items: center; gap: 3px; font-size: 13px; }
   .glyph { display: inline-block; width: 1em; height: 1em; vertical-align: -0.12em; }
@@ -901,10 +900,10 @@ function renderInfo() {
   const s = shownSegment();
   $("segments").querySelectorAll(".seg").forEach(b => b.classList.toggle("shown", !!s && +b.dataset.leader === s.leader));
   $("info").innerHTML = !s ? "" : `<div class="title">${leaderLabel(s)}</div>` + (s.own
-    ? `<p class="counts"><span>${s.people.toLocaleString()} ${glyph("people", s.people === 1 ? "person" : "people")}</span>` +
-      (s.food == null ? "" : `<span title="Food this past year, in years of an adult's eating">${s.food.toLocaleString()} ${glyph("food", "food")}` +
-        (s.spare > 0 ? ` (+${s.spare.toLocaleString()} surplus)` : s.spare < 0 ? ` (−${(-s.spare).toLocaleString()} shortage)` : "") + `</span>`) +
-      `</p><p>${esc(s.situation)}</p>`
+    ? `<p>${s.people.toLocaleString()} ${glyph("people", s.people === 1 ? "person" : "people")}</p>` +
+      (s.food == null ? "" : `<p title="Food this past year, in years of an adult's eating">${s.food.toLocaleString()} ${glyph("food", "food")}` +
+        (s.spare < 0 ? ` (−${(-s.spare).toLocaleString()} shortage)` : ` (+${s.spare.toLocaleString()} surplus)`) + `</p>`) +
+      `<p>${esc(s.situation)}</p>`
     : `<p>They appear to be ${esc(s.known.size)}.</p>`);
 }
 $("segments").addEventListener("mouseover", e => {

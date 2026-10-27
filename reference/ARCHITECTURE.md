@@ -378,7 +378,7 @@ deliberately spartan, and `player.py` sends only what the nation knows.
   learn it, `knows_foreign_places()`), then a button per leader there (Iceland's flag, "Chieftain",
   206 and a person symbol; the words are the tooltips). Under them, an info box tells what is known about one leader's segment (people, food and
   situation for the player's own; food is the past year's, made plus received, in years of an adult's
-  eating (`descriptions.json` "food"), with any surplus or shortage against what its people needed, rough size for another nation's): the leader under the pointer, else
+  eating (`descriptions.json` "food"), with its surplus (+0 when exactly fed) or shortage against what its people needed, rough size for another nation's): the leader under the pointer, else
   the one last clicked on this tile, else the player's leader with the most people there. Clicking one
   of the player's own leaders opens the orders their type takes: **Move** (a 3 × 3 compass of
   directions, all-water ones disabled); **Found a kingdom** and **Establish a settlement** (which ask for

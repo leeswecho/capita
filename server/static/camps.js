@@ -8,13 +8,14 @@
 // n of a seeded best-candidate sequence of spots, so one is added or removed only when its count
 // changes, and a settling party's wagons don't move the huts. Its other camps then fill in between,
 // with sequences of their own that keep away from the spots already taken. A king's camp has a palace
-// besides: a hut with the nation's flag on a pole beside it, at a fixed spot of its own, which the
-// huts keep away from.
+// besides: a hut with the nation's flag on a pole beside it, its hut in the middle of the nation's
+// strip of the tile (the middle of the tile, if it has it alone), which the other huts keep away from.
 import * as THREE from "three";
 
 export const TEPEE_SIZE = 0.2, TEPEE_MAX = 10;   // size in tiles
 const WAGON_SIZE = 0.24, WAGON_SMALL = 0.14;      // a wagon alone on a tile, and beside huts
 const PALACE_SIZE = 0.34;                         // the palace's picture: a hut and a flagpole
+const PALACE_HUT = [-0.19, -0.22];                // where its hut is in the picture, in picture widths from the middle
 const FLAG_URL = "https://cdn.jsdelivr.net/npm/flag-icons@7.2.3/flags/4x3/{code}.svg";   // as the player page's flags
 const LOOKS = ["huts", "tepees", "wagons"];
 const OWN = "#d9a441", OTHER = "#a4483a";   // ochre for the nation whose map it is, rust red for others
@@ -222,12 +223,12 @@ export function drawCamps(group, camps, { tile, parseTileId, tileIndex, quad, de
       };
       camps.sort((a, b) => LOOKS.indexOf(a.look) - LOOKS.indexOf(b.look));
       const palace = camps.find(c => c.palace);
-      if (palace) {   // first, at a spot of its own, so the huts settle around it and stay put
-        const m = PALACE_SIZE / 2 + 0.02;
-        const [spot] = campSpots(tileIndex(tid) * 7919 + (palace.nation?.id || 0) * 104729 + 982451653,
-                                 x0 + m, Math.max(x0 + m, x1 - m), m, 1 - m, [], 1);
+      if (palace) {   // first, with its hut in the middle of the nation's strip, so the huts settle around it
+        const m = PALACE_SIZE / 2 + 0.02, clamp = (v, lo, hi) => Math.min(Math.max(v, lo), Math.max(lo, hi));
+        const spot = [clamp((x0 + x1) / 2 - PALACE_HUT[0] * PALACE_SIZE, x0 + m, x1 - m),
+                      clamp(0.5 - PALACE_HUT[1] * PALACE_SIZE, m, 1 - m)];
         // The others keep away from where its hut, pole and flag are drawn in the picture, not its middle.
-        for (const [dx, dy] of [[-0.19, -0.28], [0.13, 0], [0.32, 0.31]])
+        for (const [dx, dy] of [PALACE_HUT, [0.13, 0], [0.32, 0.31]])
           taken.push([spot[0] + dx * PALACE_SIZE, spot[1] + dy * PALACE_SIZE]);
         place(spot[0], spot[1], PALACE_SIZE, palaceMaterial(depthTest, palace.own, palace.nation?.flag));
       }

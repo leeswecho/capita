@@ -370,12 +370,13 @@ deliberately spartan, and `player.py` sends only what the nation knows.
   is a line from the segment to the tile it heads for. Only the globe
   image and the grid are shown: no rivers, heatmap, terrain or cover overlays.
 - **The side bar** is a tile explorer: it shows only the chosen tile (clicking a tile chooses it; it starts on the nation's root
-  leader): its landforms and then its cover as rows of small drawn icons (largest
+  leader): its place box (below), its landforms and then its cover as rows of small drawn icons (largest
   first, full size for half the tile or more, 80% for a quarter to a half, 60% for less: the server sends
-  only that size class; the name is the icon's tooltip), then the place box, the nation's own name for
+  only that size class; the name is the icon's tooltip), then a box for the developments built on the
+  tile (empty: nothing can be built yet). The place box, at the top, is the nation's own name for
   the tile ("Unnamed land" until named; clicking it edits the name, `POST /api/nation/<id>/place`, saved
   by `places.py`; what other nations call it will appear in its tooltip once a technology lets a nation
-  learn it, `knows_foreign_places()`), then a button per leader there (Iceland's flag, "Chieftain",
+  learn it, `knows_foreign_places()`). Then a button per leader there (Iceland's flag, "Chieftain",
   206 and a person symbol; the words are the tooltips). Under them, an info box tells what is known about one leader's segment (people, food and
   situation for the player's own; food is the past year's, made plus received, in years of an adult's
   eating (`descriptions.json` "food"), with its surplus (+0 when exactly fed) or shortage against what its people needed, rough size for another nation's): the leader under the pointer, else

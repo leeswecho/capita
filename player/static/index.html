@@ -55,6 +55,8 @@
   /* A landform or cover's icon is smaller the less of the tile it covers: a quarter to a half, less. */
   .ticon.size1 { width: 19px; height: 19px; }
   .ticon.size2 { width: 14px; height: 14px; }
+  /* What has been built on the tile: nothing can be yet, so the box stays empty. */
+  #developments { min-height: 2.6em; padding: 6px 8px; }
   #place { padding: 5px 8px; font-size: 14px; cursor: text; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #place:empty { display: none; }
   #place.unnamed { font-style: italic; color: var(--ink-soft); }
@@ -137,8 +139,9 @@
   </div>
   <aside id="side" class="stone">
     <div id="tile">
-      <div id="terrain" class="hole"></div>
       <div id="place" class="hole"></div>
+      <div id="terrain" class="hole"></div>
+      <div id="developments" class="hole" title="Developments" hidden></div>
       <div id="segments"></div>
       <div id="info" class="hole"></div>
     </div>
@@ -837,6 +840,7 @@ function renderSide() {
                                 t.cover.map((k, j) => typeIcon(VIEW.cover_types[k], t.cover_size[j]))]
     .filter(list => list.length).map(list => `<div class="types">${list.join("")}</div>`).join("") : "";
   renderPlace(t);
+  $("developments").hidden = !t;   // empty until developments exist
   const segs = t && t.seen ? segsByTile.get(t.id) || [] : [];
   $("segments").innerHTML = segs.map(s => `<button class="btn seg" data-leader="${s.leader}">
       ${leaderLabel(s)}${s.own ? `<span class="people">${s.people.toLocaleString()} ${glyph("people", s.people === 1 ? "person" : "people")}</span>` : ""}

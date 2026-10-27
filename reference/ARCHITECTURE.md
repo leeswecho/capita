@@ -364,7 +364,8 @@ deliberately spartan, and `player.py` sends only what the nation knows.
   red). All its segments drawn the same way there are added up into one camp: 3 for 200 people, growing
   with the square root of the people, from 1 to 10 (wagons at least 3) (`camps` in /view, worked out by
   `server/camps.py` from `descriptions.json` "camp" and "wagons", so other nations' counts stay hidden).
-  Each camp on a tile gets a strip of it, wagons are drawn smaller beside huts, and the pictures sit at
+  A king's camp also has a palace: a hut beside a flagpole flying the nation's flag (fetched from the same
+  flag CDN). Each nation on a tile gets a strip of it, its camps mingled there (wagons smaller beside huts), and the pictures sit at
   fixed, well-spread spots seeded by the tile, nation and look, so they stay put from turn to turn. An ordered move
   is a line from the segment to the tile it heads for. Only the globe
   image and the grid are shown: no rivers, heatmap, terrain or cover overlays.

@@ -48,7 +48,7 @@ just as often; a new turn is memory-mapped, and its segments' people are summed 
                            i % 8 of byte i // 8); header X-Turn
     /api/tile_at?lat=&lon= the tile containing a point (JSON)
     /api/camps             every camp at the current turn (camps.py): {"turn", "camps": [{"tile",
-                           "nation": {"id"} or null, "look", "count", "small"}]}, drawn by /camps.js (JSON)
+                           "nation": {"id", "flag"} or null, "look", "count", "small", "palace"}]}, drawn by /camps.js (JSON)
     /camps.js              the script that draws camps, shared with the player page
 """
 
@@ -71,6 +71,7 @@ import grid
 import names
 from convert_map import read_map
 from convert_population import FORMAT as POP_FORMAT
+from game import load_flag_codes
 from grid import HEIGHT, TILE_ID_RE, WIDTH, tile_at
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -242,6 +243,7 @@ class World:
         print(f"Loaded {os.path.basename(pop_path)} in {time.time() - t0:.2f}s", flush=True)
         check_grid(self.pop.meta, os.path.basename(pop_path))
         self.country_names = load_country_names(countries_path)
+        self.flag_codes = load_flag_codes(countries_path)
 
         # Cohort state written by engine/engine.py. The pointer, manifest, leaders and small arrays are read
         # here; people/hours are memory-mapped and read a tile at a time by cohorts_json().
@@ -372,8 +374,9 @@ class World:
             return json.dumps({"turn": None, "camps": []}).encode()
         cached = getattr(st, "camps_cache", None)
         if cached is None:
+            flag = lambda k: self.flag_codes.get(st.nations[k - 1]["code"])
             out = [{**c, "tile": grid.tile_id(*grid.corner(*divmod(c["tile"], WIDTH))),
-                    "nation": {"id": c["nation"]} if c["nation"] else None}
+                    "nation": {"id": c["nation"], "flag": flag(c["nation"])} if c["nation"] else None}
                    for c in camps.camps(st, range(len(st.leaders)), camps.load_rules())]
             cached = st.camps_cache = json.dumps({"turn": st.turn, "camps": out}, separators=(",", ":")).encode()
         return cached

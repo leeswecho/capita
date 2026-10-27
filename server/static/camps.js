@@ -7,11 +7,15 @@
 // well-spread places: a nation's first camp on a tile (huts, else tepees, else wagons) takes the first
 // n of a seeded best-candidate sequence of spots, so one is added or removed only when its count
 // changes, and a settling party's wagons don't move the huts. Its other camps then fill in between,
-// with sequences of their own that keep away from the spots already taken.
+// with sequences of their own that keep away from the spots already taken. A king's camp has a palace
+// besides: a hut with the nation's flag on a pole beside it, at a fixed spot of its own, which the
+// huts keep away from.
 import * as THREE from "three";
 
 export const TEPEE_SIZE = 0.2, TEPEE_MAX = 10;   // size in tiles
 const WAGON_SIZE = 0.24, WAGON_SMALL = 0.14;      // a wagon alone on a tile, and beside huts
+const PALACE_SIZE = 0.34;                         // the palace's picture: a hut and a flagpole
+const FLAG_URL = "https://cdn.jsdelivr.net/npm/flag-icons@7.2.3/flags/4x3/{code}.svg";   // as the player page's flags
 const LOOKS = ["huts", "tepees", "wagons"];
 const OWN = "#d9a441", OTHER = "#a4483a";   // ochre for the nation whose map it is, rust red for others
 function tepeeTexture(hide) {
@@ -121,6 +125,52 @@ function wagonTexture(body) {
 
 // Up to `n` well-spread spots in a box, the same for the same seed and `taken` (spots already used,
 // which they keep away from).
+function palaceTexture(thatch, code) {
+  // A hut (as hutTexture() draws it, a little smaller) with a flagpole beside it flying the nation's
+  // flag, which is fetched and drawn in once it arrives (a pennant in the hut's colour until then, or
+  // for a nation with no known flag).
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = 64;
+  const c = cv.getContext("2d"), tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  const fx = 41, fy = 3, fw = 22, fh = 16.5;                             // the flag, 4 x 3, at the top of the pole
+  const draw = img => {
+    c.clearRect(0, 0, 64, 64);
+    c.drawImage(hutTexture(thatch).image, -2, 20, 44, 44);
+    c.strokeStyle = "#15120d"; c.lineWidth = 3;                         // the pole
+    c.beginPath(); c.moveTo(fx - 1, 60); c.lineTo(fx - 1, fy - 1); c.stroke();
+    if (img) {
+      c.drawImage(img, fx, fy, fw, fh);
+    } else {
+      c.fillStyle = thatch;
+      c.beginPath(); c.moveTo(fx, fy); c.lineTo(fx + fw, fy + fh / 2); c.lineTo(fx, fy + fh); c.closePath(); c.fill();
+    }
+    c.lineWidth = 1.5; c.strokeRect(fx, fy, img ? fw : 0, fh);
+    tex.needsUpdate = true;
+  };
+  draw(null);
+  if (code) {
+    // flag-icons' files give only a viewBox, which an <img> would letterbox into 300 x 150: give it a size.
+    fetch(FLAG_URL.replace("{code}", code)).then(r => r.ok ? r.text() : Promise.reject())
+      .then(svg => new Promise((ok, fail) => {
+        const img = new Image();
+        img.onload = () => ok(img);
+        img.onerror = fail;
+        img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg.replace("<svg ", '<svg width="640" height="480" '));
+      }))
+      .then(draw, () => {});
+  }
+  return tex;
+}
+const palaces = new Map();   // "depthTest/own/flag code" -> material
+function palaceMaterial(depthTest, own, code) {
+  const key = `${depthTest}/${own}/${code || ""}`;
+  if (!palaces.has(key))
+    palaces.set(key, new THREE.MeshBasicMaterial({ map: palaceTexture(own ? OWN : OTHER, code), depthTest, depthWrite: false, transparent: true }));
+  return palaces.get(key);
+}
+
 export function campSpots(seed, x0, x1, y0, y1, taken = [], n = TEPEE_MAX) {
   let s = seed >>> 0 || 1;
   const rand = () => (s = Math.imul(s ^ (s >>> 15), 2246822519) + 0x9e3779b9 >>> 0) / 4294967296;
@@ -149,7 +199,8 @@ function look(depthTest) {
 }
 
 // Add the camps' meshes to `group`. camps: [{tile: tile id, nation: {id} or null, own, look: "tepees",
-// "huts" or "wagons", count, small: drawn smaller (wagons beside huts)}].
+// "huts" or "wagons", count, small: drawn smaller (wagons beside huts), palace: a palace besides, flying
+// the flag of nation.flag (an alpha-2 code)}].
 // The page supplies its grid helpers and quad(lat, lon, size), a flat square `size` degrees of latitude
 // across at its marker height; depthTest false draws camps over everything (the player's flat map),
 // true lets the globe hide those on its far side (the developer view). Returns the meshes added.
@@ -163,21 +214,35 @@ export function drawCamps(group, camps, { tile, parseTileId, tileIndex, quad, de
     for (const c of list) (byNation.get(c.nation?.id || 0) || byNation.set(c.nation?.id || 0, []).get(c.nation?.id || 0)).push(c);
     [...byNation.values()].forEach((camps, j) => {   // strip j of the tile's width, in tile units from its south-west corner
       const x0 = j / byNation.size, x1 = (j + 1) / byNation.size, taken = [];
+      const place = (x, y, size, material) => {
+        const mesh = new THREE.Mesh(quad(lat + y * tile, lon + x * tile, tile * size), material);
+        mesh.renderOrder = renderOrder + (1 - y) * 0.5;   // drawn north to south, so nearer ones overlap them
+        group.add(mesh);
+        added.push(mesh);
+      };
       camps.sort((a, b) => LOOKS.indexOf(a.look) - LOOKS.indexOf(b.look));
+      const palace = camps.find(c => c.palace);
+      if (palace) {   // first, at a spot of its own, so the huts settle around it and stay put
+        const m = PALACE_SIZE / 2 + 0.02;
+        const [spot] = campSpots(tileIndex(tid) * 7919 + (palace.nation?.id || 0) * 104729 + 982451653,
+                                 x0 + m, Math.max(x0 + m, x1 - m), m, 1 - m, [], 1);
+        // The others keep away from where its hut, pole and flag are drawn in the picture, not its middle.
+        for (const [dx, dy] of [[-0.19, -0.28], [0.13, 0], [0.32, 0.31]])
+          taken.push([spot[0] + dx * PALACE_SIZE, spot[1] + dy * PALACE_SIZE]);
+        place(spot[0], spot[1], PALACE_SIZE, palaceMaterial(depthTest, palace.own, palace.nation?.flag));
+      }
       for (const c of camps) {
         const size = c.look === "wagons" ? (c.small ? WAGON_SMALL : WAGON_SIZE) : TEPEE_SIZE;
         const m = size / 2 + 0.04;   // keep whole pictures inside the tile
         const seed = tileIndex(tid) * 7919 + (c.nation?.id || 0) * 104729 + LOOKS.indexOf(c.look) * 15485863;
-        const spots = campSpots(seed, x0 + m, Math.max(x0 + m, x1 - m), m, 1 - m, taken, taken.length ? c.count : TEPEE_MAX)
+        // A nation's first camp takes the first n of its own fixed sequence (fitted around the palace,
+        // which never moves); later camps fit theirs around the spots taken.
+        const first = taken.length === (palace ? 3 : 0);
+        const spots = campSpots(seed, x0 + m, Math.max(x0 + m, x1 - m), m, 1 - m, taken, first ? TEPEE_MAX : c.count)
           .slice(0, c.count);
         taken.push(...spots);
         const kind = mats[c.look];
-        for (const [x, y] of spots) {
-          const mesh = new THREE.Mesh(quad(lat + y * tile, lon + x * tile, tile * size), c.own ? kind.own : kind.other);
-          mesh.renderOrder = renderOrder + (1 - y) * 0.5;   // drawn north to south, so nearer ones overlap them
-          group.add(mesh);
-          added.push(mesh);
-        }
+        for (const [x, y] of spots) place(x, y, size, c.own ? kind.own : kind.other);
       }
     });
   }

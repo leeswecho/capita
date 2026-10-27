@@ -369,13 +369,13 @@ wait for it: if it is held, the step exits with status 3. Readers don't take it.
 One turn is one year. First the turn's orders are applied (`apply_orders()`). A leader can be given only
 the commands their type lists (`engine/leaders.json`). `found_kingdom` turns a leader whose segment is
 wholly on one tile into a `king` (the type's `becomes`), with the title their player gave as both
-`title` and `name`; a king's segment is **settled**: it farms, takes no move commands, and keeps other
-nations from settling its tile. `establish_settlement` does the same for a `pioneer`, who becomes a
-`lord`. If leaders of two or more nations settle the same tile in the same turn, none of them does.
-`form_settlers` splits a settling party of the given number of people off a king's segment (at least
+`title` and `name`; a king's segment is **settled**: it farms, takes no move commands, and keeps every
+other leader, of any nation, from settling its tile. `establish_settlement` does the same for a `pioneer`, who becomes a
+`lord`. If two or more leaders settle the same tile in the same turn, none of them does.
+`form_settlers` splits a settling party of the given number of people off a king's or lord's segment (at least
 `min_people`, leaving at least `min_left`): the same share of every age and of the stock goes to a new
-row at the end, standing on the king's tile, under a new `pioneer` (id `next_leader_id`, `parent` the
-king, `founded_turn` the new turn), which lives the year as its own segment. A leader takes one
+row at the end, standing on their tile, under a new `pioneer` (id `next_leader_id`, `parent` the
+leader, `founded_turn` the new turn), which lives the year as its own segment. A leader takes one
 command a turn. A `move` given to a
 standing segment sets `toward` and `destination` to the named neighbour. Given to a moving one, it sets
 `destination` to the named tile and either keeps the step under way or turns back (swapping `at` and

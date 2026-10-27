@@ -21,9 +21,9 @@ Command types:
             resolves (engine.py move_segments()); it keeps going on later turns until it arrives.
     found_kingdom  {"leader": id, "type": "found_kingdom", "title": "King"}: the leader's segment settles on
             its tile and the leader becomes a king (leaders.json "commands"), called `title`. The segment
-            must be wholly on one tile (not between two), and no other nation may have a settled segment
-            there. The engine also refuses it if a leader of another nation settles the same tile in the
-            same turn (engine.py apply_orders()).
+            must be wholly on one tile (not between two), and nobody, of any nation, may have a settled
+            segment there: once a leader settles a tile, it is theirs alone. The engine also refuses it if
+            another leader settles the same tile in the same turn (engine.py apply_orders()).
     establish_settlement  {"leader": id, "type": "establish_settlement", "title": "Lord"}: the same, for a
             settling party, whose leader becomes a lord.
     form_settlers  {"leader": id, "type": "form_settlers", "people": 250}: splits a settling party of that
@@ -209,12 +209,13 @@ def settled(state, rules) -> np.ndarray:
     return np.array([bool(types[lead["type"]]["settled"]) for lead in state.leaders], dtype=bool)
 
 
-def settled_by_others(state, rules, nation: int, tile: int) -> bool:
-    """Whether another nation has a settled segment with people on a tile."""
+def settled_by(state, rules, tile: int):
+    """The nation of a settled segment with people on a tile (its own nation counts too: once a leader
+    settles a tile, it is theirs alone), or None if nobody has settled it."""
     here = np.flatnonzero(np.asarray(state.tile) == tile)
     types = rules["types"]
-    return any(state.leaders[r]["nation"] != nation and types[state.leaders[r]["type"]]["settled"]
-               and float(np.asarray(state.people[r]).sum()) > 0 for r in here.tolist())
+    return next((state.leaders[r]["nation"] for r in here.tolist() if types[state.leaders[r]["type"]]["settled"]
+                 and float(np.asarray(state.people[r]).sum()) > 0), None)
 
 
 def check(state, rows: dict, nation: int, command: dict, can_walk, rules) -> str:
@@ -244,8 +245,8 @@ def check(state, rows: dict, nation: int, command: dict, can_walk, rules) -> str
             return str(e)
         if state.at[r] != state.toward[r]:
             return "a segment can't settle while on the move: it must be on one tile"
-        if settled_by_others(state, rules, nation, int(state.at[r])):
-            return f"another nation has settled {tile_name(state.at[r])}"
+        if settled_by(state, rules, int(state.at[r])) is not None:
+            return f"{tile_name(state.at[r])} is already settled"
     if command["type"] == "form_settlers":
         spec = rules["commands"]["form_settlers"]
         n, have = command.get("people"), float(np.asarray(state.people[r]).sum())

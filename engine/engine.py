@@ -24,8 +24,8 @@ starting visibility.
   lists (leaders.json). A move sends a leader's segment toward a neighbouring tile; given to a segment
   already between two tiles, it first finishes that step or walks back, whichever makes the whole way
   shorter. Founding a kingdom makes the leader a king, under the title their player gave, and their
-  segment settled: it farms and stays put, and no other nation can settle its tile. A king can form
-  settlers: a settling party split off at the start of the year under a new pioneer, who can move and
+  segment settled: it farms and stays put, and no other leader can settle its tile. A king or lord
+  can form settlers: a settling party split off at the start of the year under a new pioneer, who can move and
   establish a settlement, becoming a lord (settled in the same way).
 - Movement (move_segments()): every moving segment covers a distance set by its people's travel hours
   and the pace in movement.json, along the rest of its step and then the step on to its destination,
@@ -271,7 +271,7 @@ def apply_orders(state, commands, can_walk, lrules, turn):
     (orders.plan_move()): a standing segment steps straight to the named neighbour; a moving one first
     finishes its step or walks back, whichever makes the whole way shorter. Settling (founding a kingdom,
     establishing a settlement) changes the leader's type (leaders.json "commands"), and their title and
-    name to the title given; if leaders of more than one nation settle the same tile, none of them does.
+    name to the title given; if more than one leader settles the same tile, none of them does.
     Forming settlers splits a party off the segment, the same share of every age and of its stock, under
     a new leader (id next_leader_id, founded `turn`) who reports to the old one and stands on their tile;
     new rows go at the end, so leader ids stay increasing. Returns a dict of the start of the year: leaders,
@@ -304,12 +304,12 @@ def apply_orders(state, commands, can_walk, lrules, turn):
             plan = orders.plan_move(state.at[r], state.toward[r], state.progress[r], orders.tile_index(c["to"]))
             at[r], toward[r], progress[r], destination[r] = plan["at"], plan["toward"], plan["progress"], plan["destination"]
             applied.append({"nation": nation, **c})
-    settlers = {}   # tile -> the nations settling there
+    settlers = {}   # tile -> how many leaders are settling there
     for nation, c, r in settling:
-        settlers.setdefault(int(state.at[r]), set()).add(nation)
+        settlers[int(state.at[r])] = settlers.get(int(state.at[r]), 0) + 1
     for nation, c, r in settling:
-        if len(settlers[int(state.at[r])]) > 1:
-            reject(nation, c, f"another nation settled {orders.tile_name(state.at[r])} in the same turn")
+        if settlers[int(state.at[r])] > 1:
+            reject(nation, c, f"another leader settled {orders.tile_name(state.at[r])} in the same turn")
             continue
         leaders[r].update(type=lrules["commands"][c["type"]]["becomes"], title=c["title"], name=c["title"])
         applied.append({"nation": nation, **c})

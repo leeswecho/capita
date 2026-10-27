@@ -276,10 +276,10 @@ server.py ◄── memory-maps the arrays of the turn current.json names ◄─
   whichever makes the whole way shorter (`orders.plan_move()`), and the state keeps where its move ends
   (`destination.npy`). **Found a kingdom** turns a chieftain whose segment is wholly on one tile into
   a king, under a title their player chooses (internally the type stays `king`); a king's segment is
-  settled: it farms, can't move, and keeps other nations from settling its tile (two nations settling
-  one tile in the same turn both fail). A king can **form settlers**: at the start of the year a party
+  settled: it farms, can't move, and keeps every other leader, of any nation, from settling its tile (two
+  leaders settling one tile in the same turn both fail). A king or lord can **form settlers**: at the start of the year a party
   of the given size (at least 200, leaving at least 200), the same share of every age and of the stock,
-  splits off under a new pioneer who reports to the king and stands on their tile. A pioneer can move
+  splits off under a new pioneer who reports to them and stands on their tile. A pioneer can move
   and **establish a settlement**, becoming a lord under a chosen title, settled like a king. Which commands a leader takes comes from their type
   (`engine/leaders.json`). Every moving segment then covers
   `km_per_hour` × its travel hours a day × 365 (`engine/movement.json`; travel hours are the
@@ -382,7 +382,7 @@ deliberately spartan, and `player.py` sends only what the nation knows.
   of the player's own leaders opens the orders their type takes: **Move** (a 3 × 3 compass of
   directions, all-water ones disabled); **Found a kingdom** and **Establish a settlement** (which ask for
   confirmation and a title, King or Lord by default, at most 20 characters, and can't be confirmed while
-  the segment is between tiles or where another nation has settled); **Form settlers** (a number of
+  the segment is between tiles or on a tile someone has already settled, even the player's own); **Form settlers** (a number of
   people, from 200 up to all but 200, disabled below 400); plus Cancel. `POST /api/nation/<id>/orders`
   takes a direction and turns it into a move command for that neighbour, a title for settling, or a
   number of people for forming settlers (`orders.py`, through `game.py`). Leaders are called by their title, which everyone sees. A small **Orders** box at the top left of the map

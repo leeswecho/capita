@@ -169,8 +169,12 @@ class Player(Game):
         why = None
         if t.at[r] != t.toward[r]:
             why = "They are on the move. They must be wholly on one tile to settle."
-        elif orders.settled_by_others(t, rules, t.leaders[r]["nation"], int(t.at[r])):
-            why = "Another people have already settled here."
+        else:
+            settler = orders.settled_by(t, rules, int(t.at[r]))
+            if settler == t.leaders[r]["nation"]:
+                why = "Your own people have already settled here."
+            elif settler is not None:
+                why = "Another people have already settled here."
         return {"ok": why is None, "why": why, "title": spec["default_title"], "max_length": spec["max_title_length"]}
 
     def form_settlers(self, t, r) -> dict:

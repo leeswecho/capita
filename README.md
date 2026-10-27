@@ -68,7 +68,8 @@ their title and people; choosing them offers the orders they can take: **Move**,
 directions around, and **Found a kingdom**, which settles your people where they stand to farm and herd,
 and makes your chieftain a king under the title you choose. A king can **Form settlers**: a party of
 200 or more people (keeping at least 200) sets out under a Pioneer, drawn as covered wagons, who can
-move and **Establish a settlement**, becoming a lord under a title you choose. A box under the leaders tells what is known about one of them: for your own,
+move and **Establish a settlement**, becoming a lord under a title you choose. A lord can form
+settlers too. A box under the leaders tells what is known about one of them: for your own,
 their people and how they seem (from `player/descriptions.json`); for another nation's, roughly how
 big their group looks. It shows your leader with the most people there, or whichever leader you
 point at or last clicked. The side bar is only
@@ -127,7 +128,7 @@ engine.py init / step ─────────────┘
   hours (`engine/movement.json`). That is thousands of kilometres a year, so a one-tile move finishes
   within the turn. The segment then lives the year where it ends up. Founding a kingdom settles a
   segment for good: it farms instead of foraging, can't move, has more children and more infection, and
-  no other nation can settle its tile. A king can send out settling parties, which settle in turn. Each segment's people forage or farm for food (kcal),
+  nobody else, not even another of your own leaders, can settle its tile. Kings and lords can send out settling parties, which settle in turn. Each segment's people forage or farm for food (kcal),
   with returns that level off at what their tile's terrain can sustain for each, shared among the
   segments there, and they work only the hours their food needs. Farmers feed their nation's other
   segments on the tile with what they don't need; foragers work the land the farms leave. People eat according to

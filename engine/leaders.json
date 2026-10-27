@@ -1,12 +1,12 @@
 {
-  "about": "Leader rules read by engine.py, and by the servers from each turn's manifest copy. A leader marshals the people of their segment toward some purpose; the player is their nation's root leader. A leader's type is its internal name; 'title' is what a leader of that type is called unless their player chose another (founding a kingdom or establishing a settlement lets them). Each type lists the 'commands' its leaders can be given (orders.py), the 'activity' their segment feeds itself by (engine.py's schedules; 'subsistence' is hunting and gathering, 'farming' is farming and herding), whether it is 'settled' (a settled segment stays where it is, and keeps other nations from settling on its tile) and how the maps draw its people ('camp': tepees, huts or wagons; server/camps.py; a type with 'palace' adds a palace, a hut flying the nation's flag, to its camp). start_type is the type of every leader at turn 0. 'commands' below sets what the commands that change leaders do.",
+  "about": "Leader rules read by engine.py, and by the servers from each turn's manifest copy. A leader marshals the people of their segment toward some purpose; the player is their nation's root leader. A leader's type is its internal name; 'title' is what a leader of that type is called unless their player chose another (founding a kingdom or establishing a settlement lets them). Each type lists the 'commands' its leaders can be given (orders.py), the 'activity' their segment feeds itself by (engine.py's schedules; 'subsistence' is hunting and gathering, 'farming' is farming and herding), whether it is 'settled' (a settled segment stays where it is, and no other leader may settle its tile) and how the maps draw its people ('camp': tepees, huts or wagons; server/camps.py; a type with 'palace' adds a palace, a hut flying the nation's flag, to its camp). start_type is the type of every leader at turn 0. 'commands' below sets what the commands that change leaders do.",
   "types": {
     "chieftain": {"about": "Leads a band; the player starts as their nation's chieftain.", "title": "Chieftain",
                   "commands": ["move", "found_kingdom"], "activity": "subsistence", "settled": false, "camp": "tepees"},
     "pioneer": {"about": "Leads a settling party, sent out from a settled segment to settle elsewhere.", "title": "Pioneer",
                 "commands": ["move", "establish_settlement"], "activity": "subsistence", "settled": false, "camp": "wagons"},
     "lord": {"about": "Leads a settlement established by a settling party.", "title": "Lord",
-             "commands": [], "activity": "farming", "settled": true, "camp": "huts"},
+             "commands": ["form_settlers"], "activity": "farming", "settled": true, "camp": "huts"},
     "mayor": {"about": "Leads a settled town or city.", "title": "Mayor",
               "commands": [], "activity": "farming", "settled": true, "camp": "huts"},
     "superintendent": {"about": "Leads a district.", "title": "Superintendent",
@@ -19,7 +19,7 @@
              "commands": ["form_settlers"], "activity": "farming", "settled": true, "camp": "huts", "palace": true}
   },
   "commands": {
-    "found_kingdom": {"about": "The leader's segment settles on its tile, which it must be wholly on (not between two tiles), and the leader becomes 'becomes', under the title their player gives (default_title if none, at most max_title_length characters). A tile where another nation already has a settled segment can't be settled; if leaders of two or more nations settle the same tile in the same turn (by this command or establish_settlement), none of them does. The segment farms from the year the order resolves.",
+    "found_kingdom": {"about": "The leader's segment settles on its tile, which it must be wholly on (not between two tiles), and the leader becomes 'becomes', under the title their player gives (default_title if none, at most max_title_length characters). A tile that already has a settled segment, of any nation (the player's own included), can't be settled: once a leader settles a tile, it is theirs alone. If two or more leaders settle the same tile in the same turn (by this command or establish_settlement), none of them does. The segment farms from the year the order resolves.",
                       "becomes": "king", "default_title": "King", "max_title_length": 20},
     "establish_settlement": {"about": "As found_kingdom, but the leader becomes a lord: a settling party settles where it is.",
                              "becomes": "lord", "default_title": "Lord", "max_title_length": 20},

@@ -17,6 +17,7 @@
     "fine": "They look fine.",
     "moving": "They are on the move."
   },
+  "food": {"about": "The player sees a segment's food for the year that ended with this turn (what it made plus what others gave it, less what it gave) not in kcal but in years of an adult's eating: one unit feeds a person of adult_age for a year (economy.json's consumption), so a segment with about as much food as people is roughly fed.", "product": "food", "adult_age": 30},
   "camp": {"base": 3, "base_people": 200, "min": 1, "max": 10},
   "wagons": {"base": 3, "base_people": 200, "min": 3, "max": 10},
   "foreign_size": [

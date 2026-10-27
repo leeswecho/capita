@@ -101,6 +101,21 @@ def situation(t, r, rules) -> str:
     return " ".join(said)
 
 
+def food_units(t, r, rules):
+    """How much food the segment had in the year that ended with this turn (its production plus what it
+    was given, less what it gave), and how much more or less that was than its people needed, each in
+    years of an adult's eating (descriptions.json "food"): {"food", "spare"} (spare is negative for a
+    shortage), or None at turn 0, which follows no year."""
+    f = rules["food"]
+    if t.turn == 0:
+        return None
+    k = [p["name"] for p in t.products].index(f["product"])
+    ages, kcal = zip(*t.manifest["economy_rules"]["consumption"][f["product"]]["per_person_per_day_by_age"])
+    year = float(np.interp(f["adult_age"], ages, kcal)) * 365
+    had = max(float(t.production[r, k]) + float(t.received[r, k]), 0)
+    return {"food": round(had / year), "spare": round((had - float(t.need[r, k])) / year)}
+
+
 def foreign_size(people: float, rules) -> str:
     for rule in rules["foreign_size"]:
         if rule["below"] is None or people < rule["below"]:
@@ -209,7 +224,9 @@ class Player(Game):
             order = {"type": "form_settlers", "people": c["people"]}
         can = t.manifest["leader_rules"]["types"][t.leaders[r]["type"]]["commands"]
         out = {"leader": lid, "own": True, **self.leader_ref(t, r),
-               "people": round(float(np.asarray(t.people[r]).sum())), "situation": situation(t, r, rules),
+               "people": round(float(np.asarray(t.people[r]).sum())),
+               **(food_units(t, r, rules) or {"food": None, "spare": None}),
+               "situation": situation(t, r, rules),
                "moving": bool(t.at[r] != t.toward[r]), "order": order, "commands": can}
         if "move" in can:
             out["moves"] = self.moves(t, r)

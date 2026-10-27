@@ -66,6 +66,7 @@
   #info:empty { display: none; }
   #info .title { font-weight: bold; }
   #info p { margin: 0; }
+  #info .counts { display: flex; flex-wrap: wrap; column-gap: 14px; }
   .seg { width: 100%; }
   .seg .people { display: flex; align-items: center; gap: 3px; font-size: 13px; }
   .glyph { display: inline-block; width: 1em; height: 1em; vertical-align: -0.12em; }
@@ -261,6 +262,9 @@ function typeIcon(name, size = 0) {   // size: 0 for half the tile or more, 1 fo
 const GLYPHS = {
   people: `<circle cx="10" cy="5" r="3.2"/><path d="M4 19v-5.5a6 6 0 0 1 12 0V19Z"/>`,
   play: `<path d="M5 3 17 10 5 17Z"/>`,
+  food: `<ellipse cx="10" cy="4.6" rx="1.9" ry="3.8"/><ellipse cx="6.3" cy="6.2" rx="1.7" ry="3.4" transform="rotate(-28 6.3 6.2)"/>` +
+        `<ellipse cx="13.7" cy="6.2" rx="1.7" ry="3.4" transform="rotate(28 13.7 6.2)"/>` +
+        `<path d="M7.6 9.6 9.2 12.4 5.4 19h1.8L10 14.1l2.8 4.9h1.8l-3.8-6.6 1.6-2.8h-1.3L10 11.5 8.9 9.6Z"/><rect x="7.6" y="11.5" width="4.8" height="2" rx=".7"/>`,
   wait: `<path d="M5 2h10v1.5c0 3-2.5 4.8-4 6.5 1.5 1.7 4 3.5 4 6.5V18H5v-1.5c0-3 2.5-4.8 4-6.5-1.5-1.7-4-3.5-4-6.5Z"/>`,
 };
 const glyph = (name, title) => `<span class="glyph" title="${esc(title)}" role="img" aria-label="${esc(title)}"><svg viewBox="0 0 20 20" fill="currentColor">${GLYPHS[name]}</svg></span>`;
@@ -897,7 +901,10 @@ function renderInfo() {
   const s = shownSegment();
   $("segments").querySelectorAll(".seg").forEach(b => b.classList.toggle("shown", !!s && +b.dataset.leader === s.leader));
   $("info").innerHTML = !s ? "" : `<div class="title">${leaderLabel(s)}</div>` + (s.own
-    ? `<p>${s.people.toLocaleString()} ${glyph("people", s.people === 1 ? "person" : "people")}</p><p>${esc(s.situation)}</p>`
+    ? `<p class="counts"><span>${s.people.toLocaleString()} ${glyph("people", s.people === 1 ? "person" : "people")}</span>` +
+      (s.food == null ? "" : `<span title="Food this past year, in years of an adult's eating">${s.food.toLocaleString()} ${glyph("food", "food")}` +
+        (s.spare > 0 ? ` (+${s.spare.toLocaleString()} surplus)` : s.spare < 0 ? ` (−${(-s.spare).toLocaleString()} shortage)` : "") + `</span>`) +
+      `</p><p>${esc(s.situation)}</p>`
     : `<p>They appear to be ${esc(s.known.size)}.</p>`);
 }
 $("segments").addEventListener("mouseover", e => {

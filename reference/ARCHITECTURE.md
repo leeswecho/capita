@@ -54,6 +54,7 @@ The server does no rendering. It hands the browser compact data, and the browser
 | `convert_map.py` | Converts `world_map.yaml` → `world_map.json`, and verifies the result. Also defines the JSON format id and the `MapColumns` reader the server uses. |
 | `convert_population.py` | Converts `world_population.yaml` → `world_population_current.json` (the full modern world, prototype data), and verifies the result. Also defines the columnar format id the server checks and the loader other scripts use. |
 | `../engine/engine.py` | The turn engine, in its own directory and run as its own process: `init` writes turn 0 of the cohort state, `step` advances it a turn at a time (`engine/time.json` sets how many years a turn lasts), `verify` checks the current turn's checksum (§4.6). It imports `cohort_state.py`, `grid.py` and `convert_map.py` from `server/` (it reads `world_map.json` for production), and by default uses the top-level `state/` folder and `server/world_population_start.json` with its nation seed. |
+| `../engine/decisions.py` | The decision model's interface: what each segment's people are told of their situation each year (`Situation`), what they choose (`Decisions`: the most hours a day each age gives each activity, and birth rates by age), `decide()`, which chooses, and `check()`, which makes sure the choices are usable. `decide()` is a placeholder for now (fixed schedules by livelihood and `demography.json`'s birth rates), and the activity list and schedules live here. |
 | `../engine/economy.json` | The economy rules the engine reads on every step: the products (food, in kcal) with their decay rates, the foraging and farming models' yields and factors, and a description of how segments on a tile share food (`sharing`, which holds only its `about`: the rule itself is `allocate()` in `engine.py`). |
 | `../engine/demography.json` | The demography rules the engine reads on every step: birth rates by age, settled segments' factors, and each cause of death's rule and values. |
 | `../engine/movement.json` | The movement rules the engine reads on every step: walking pace, and which activities' hours aren't free for travel. |
@@ -314,8 +315,8 @@ server.py ◄── memory-maps the arrays of the turn current.json names ◄─
   over as the segment's stock. The rules and their values are in
   `engine/economy.json`, read on every step; `cohort_state_schema.md` gives the formulas.
 - **Demographics.** Next come births: each segment's people × a placeholder birth rate per person per
-  year by age (`engine/demography.json`, averaged over men and women), joining that segment, to be
-  replaced by a decision model in `birth_rates()`; settled segments have a quarter more. Then deaths, from six causes whose yearly hazards add: starvation (the
+  year by age (`engine/demography.json`, averaged over men and women), joining that segment, as the people choose it (`decide()` in `engine/decisions.py`, for now
+  demography.json's rates; settled segments have a quarter more). Then deaths, from six causes whose yearly hazards add: starvation (the
   food shortfall), predation and accidents (hours of work), cancer and other age-related causes (age),
   infection (terrain; half as much again for settled segments) and child mortality (age and the childcare shortfall). People die in fractions,
   and each turn stores the deaths by segment and cause (`deaths.npy`). The rules are in the `deaths`
@@ -324,7 +325,16 @@ server.py ◄── memory-maps the arrays of the turn current.json names ◄─
   year, the 99-year-olds join the open-ended 100+ group, and the year's surviving newborns become age 0.
   Activity hours belong to the age, not the cohort: each year's come from the schedule for each age, of
   foragers (`starting_hours()`) or farmers (`farming_hours()`). The activity list and the schedules are
-  placeholders in `engine/engine.py`, to be replaced by a decision model.
+  placeholders in `engine/decisions.py`, to be replaced by a decision model.
+- **Decisions.** Each year, after movement, the engine tells each segment's people their situation
+  (`observe()`: their people by age, livelihood, whether they are settled or moving, the share of last
+  year's food need met, last year's hours, their tile's foraging and farming maxima and how many people
+  share it) and `decide()` in `engine/decisions.py` returns their choices: the most hours a day each age
+  will give each activity, and birth rates by age, per year so they don't depend on the turn's length.
+  `decide()` sees nothing else and remembers nothing between years, so a trained model can replace it
+  without touching the engine; `check()` refuses unusable choices. The engine carries the choices out:
+  `allocate()` works only the hours food needs, up to the chosen ones. Not chosen yet: migration and
+  livelihood (the leader's type sets it).
 - **Turns and years.** A turn lasts `years_per_turn` years (`engine/time.json`; 1 for now). The
   turn's orders are applied once, at its start; then `live_year()` lives each of its years in turn, by
   the rules above (movement, production, consumption, demographics, ageing, ownership and visibility),

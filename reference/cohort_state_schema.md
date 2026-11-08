@@ -419,7 +419,8 @@ moves up one year of age, and the 99-year-olds
 join the 100+ group. Age 0 holds the children born during the year who survived it (below). Activity
 hours belong to the age, not the cohort: each year's hours come from the schedule for each age, so
 that people born in the game work as adults once they grow up. The activity list and the schedules
-are placeholders in `engine/engine.py`: rough smooth curves by age, one for each way a segment can feed
+are placeholders in `engine/decisions.py`, where the people choose their hours each year (`decide()`,
+from what the engine tells them of their situation): for now rough smooth curves by age, one for each way a segment can feed
 itself (its leader type's `activity`). Foragers (`starting_hours()`, also turn 0's hours) start
 `subsistence` work around age 10, peaking at 8.5 hours a day in adulthood; farmers (`farming_hours()`)
 start `farming` around 7, peak at about 9.5 hours and keep working longer. Babies sleep more, and
@@ -475,13 +476,13 @@ lost by the next turn.
 
 **Demographics, after production and consumption** (so that they can respond to the year's food):
 first births. Each segment's births are its people × a birth rate per person per year for their age,
-summed over ages (`births()`), and become age 0 of the same segment in the new turn. The rate
-(`birth_rates()`) is a placeholder from `engine/demography.json`, read on every step: one table of
+summed over ages (`births()`), and become age 0 of the same segment in the new turn. The rate is the
+people's choice (`decide()` in `engine/decisions.py`), for now a placeholder from `engine/demography.json`, read on every step: one table of
 `[age, rate]` points, filled in linearly, that counts men and women alike, with each birth counting
 half to each parent at their own ages. Over a lifetime it adds up to half the children per woman,
 about 5.8 for foragers, and gives about 38 births per 1,000 people a year at the turn-0 age structure.
 Settled segments have 1.25 times as many (`settled.birth_factor`).
-`birth_rates()` is where a decision model will choose instead.
+A decision model will choose instead.
 
 Then **deaths** (`mortality()`), among the same people. Each cause is a yearly hazard (deaths per
 person-year) for every segment and age (`death_hazards()`), and the causes add: a cohort's share dying in

@@ -20,7 +20,7 @@ two neighbouring tiles.
 |------|------------|
 | `server/` | The developer view, a globe that shows the whole game state and its mechanics: `server.py` (Python HTTP server), `static/index.html` (Three.js page), the shared tile grid (`grid.py`), the cohort-state reader/writer (`cohort_state.py`), data converters and generators, and the JSON data and globe images the server loads. |
 | `player/` | The player page: `player.py` (Python HTTP server), `static/index.html` and `descriptions.json` (how the page puts a segment's state into words). A player sees only what their nation knows, on a map locked to a handful of tiles. |
-| `engine/` | `engine.py`, the turn engine. It runs as its own process and writes the game state to `state/`. |
+| `engine/` | `engine.py`, the turn engine, which runs as its own process and writes the game state to `state/`; `decisions.py`, the interface through which its simulated people make their choices; and the rule files it reads on every step. |
 | `control/` | The developer's control page, served separately from the developer view: `control.py` (Python HTTP server) and `static/index.html`. It lists the nation's leaders, each of whom can be ordered to move, and has a **Commit Turn** button, which advances the engine one turn. |
 | `deploy/` | How the public server at `capita.leeswecho.net` is set up: systemd services for the three servers, and the Caddy config that serves them over HTTPS. |
 | `state/` | The game state, one directory per turn. The engine generates it and it isn't committed. |
@@ -144,6 +144,11 @@ engine.py init / step ─────────────┘
   Then every cohort ages one year. Ownership is first come, first served, claimed by segments that
   aren't moving. Each nation actively sees every tile where its segments have people, plus the 8 around
   each (`engine/visibility.json`). Leader types are in `engine/leaders.json`.
+- **The people's decisions** go through one interface, `engine/decisions.py`: each year the engine
+  tells each segment's people their situation and `decide()` returns how many hours a day each age
+  will give each activity and their birth rates. For now `decide()` is a placeholder (fixed schedules
+  by way of life, and the birth rates above); a decision model, such as a trained network, will
+  replace it there.
 
 ## Data
 

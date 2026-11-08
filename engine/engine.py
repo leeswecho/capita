@@ -40,7 +40,7 @@ starting visibility.
   same curve share it in proportion to their hours. The rules and their values are in economy.json.
 - Consumption (consume()): the same people consume each product at a rate per person per day that
   depends on age (economy.json). If a segment holds less than its people need (its stock plus the
-  year's production), everyone's consumption is cut by the same share. The need and what was consumed
+  year's production plus what it received), everyone's consumption is cut by the same share. The need and what was consumed
   are stored, so the shortfall can drive mortality.
 - Decay (end_of_year()): whatever each segment holds after consumption loses that product's decay
   rate, and the rest is carried to the next turn as stock.
@@ -60,7 +60,8 @@ starting visibility.
   the cohort: each year's are worked out afresh from the schedules.
 - Ownership, recomputed every turn (update_ownership()): first come, first served, claimed only by
   segments that aren't moving. A nation owns a tile from the turn it is the first to have such a
-  segment with people there, and loses it when it has none there any more.
+  segment with people there, and keeps it while it has one there; then the tile passes to the nation
+  with the most people in such segments there, or to nobody.
 - Visibility, recomputed every turn (active_visibility()): a nation actively sees every tile within
   visibility.json's radius_tiles (1: the tile and the 8 around it) of a tile where one of its segments has people.
   Tiles it has ever seen stay explored (passive visibility).
@@ -646,7 +647,8 @@ def consume(people, held, rates):
     """The year's need and consumption of each product, each float64 [S, P].
 
     need = people x the age's daily rate x 365, summed over ages. Consumption is the need, or, if the
-    segment holds less (held: its stock plus the year's production), all it holds: everyone's consumption
+    segment holds less (held: its stock plus the year's production plus what it
+    received), all it holds: everyone's consumption
     is cut by the same share, so each age eats rate x consumed / need.
     """
     need = (people[:, :, None] * rates[None, :, :]).sum(axis=1) * 365   # not people @ rates: BLAS may reorder sums

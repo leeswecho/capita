@@ -263,7 +263,7 @@ class Player(Game):
                     explored,
          "segments": [...] on the tiles it can see now: its own with "people", "situation", "order" and
                     "moves"; other nations' with what it knows of them,
-         "camps": [{"tile", "nation": {"id", "name", "flag"}, "own", "look", "count", "small"}]: one per
+         "camps": [{"tile", "nation": {"id", "name", "flag"}, "own", "look", "count", "small", "palace"}]: one per
                     nation and way of drawing its people per tile it can see (camps.py): that many
                     tepees, huts or wagons for all those people there added up, so a camp's size shows
                     roughly how many live there without giving the number}."""

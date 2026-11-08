@@ -1,6 +1,7 @@
 """Players' orders: the commands given to leaders while a turn accepts them.
 
-The control server (control/control.py) writes them during a turn's orders phase; the engine reads them
+The control and player servers (control/control.py, player/player.py, through game.py) write them
+during a turn's orders phase; the engine reads them
 when it resolves that turn and applies the valid ones. They live beside the turns:
 
     state/
@@ -75,7 +76,8 @@ def read_nation(state_dir: str, turn: int, nation: int) -> list:
 
 
 def write_nation(state_dir: str, turn: int, nation: int, commands: list):
-    """Replace one nation's commands for a turn (atomically). Only the control server calls this."""
+    """Replace one nation's commands for a turn (atomically). Only game.py calls this, for the control
+    and player servers."""
     os.makedirs(turn_orders_dir(state_dir, turn), exist_ok=True)
     commands = sorted(commands, key=lambda c: c["leader"])
     _write_json_atomic(nation_file(state_dir, turn, nation),

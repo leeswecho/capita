@@ -28,8 +28,8 @@ two neighbouring tiles.
 
 ## Requirements
 
-- Python 3 with **NumPy** (needed by the server and engine) and **PyYAML** (imported by the
-  converters).
+- Python 3 with **NumPy** and **PyYAML**, both needed by every server and the engine (PyYAML because
+  they all read the map through `convert_map.py`, which imports it).
 - A browser with WebGL. The page loads Three.js from the jsDelivr CDN, so it needs internet access
   the first time.
 
@@ -98,8 +98,9 @@ Each turn has two phases, which the engine records in `state/phase.json` and bot
 applies them and a year's passage of time to compute the next turn, which opens for orders).
 
 Useful server options: `--port` (default `9000`), `--host` (default `127.0.0.1`, local only, no
-authentication), and `--population <file>`. For example, `--population world_population_current.json`
-shows the full modern world instead of the starting scenario. Page URL options: `?texture=8192` caps
+authentication), `--state <dir>` (default the top-level `state/`) and `--population <file>`. For
+example, `--population world_population_current.json` shows the full modern world instead of the
+starting scenario. Page URL options: `?texture=8192` caps
 the globe texture size, and `?detail=0` turns off the detail-tile pyramid.
 
 ## How it fits together
@@ -156,9 +157,11 @@ The full modern population is prototype and demonstration data. The game starts 
 with one nation per start tile.
 
 The YAML files are generated. Don't edit them by hand. After regenerating one, rerun its converter
-(`convert_map.py` or `convert_population.py`) to rebuild the JSON copy the server reads. The map and
-population generators and the downloaded source datasets (`gen_map.py`, `gen_population.py`, `data/`
-and so on) aren't in this repository.
+(`convert_map.py` or `convert_population.py`) to rebuild the JSON copy the server reads. The converters
+read the YAML from `server/`, while the repository keeps its copies in `reference/`, so copy the YAML into `server/` first when converting from the committed copy. The map and
+population generators and the downloaded source datasets (`gen_map.py`, `etopo_blocks.py`,
+`validate_map.py`, `gen_population.py`, `data/` and so on) aren't in this repository; only the
+generators' raster readers, `server/ghsl.py` and `server/glwd.py`, are.
 
 ## Documentation
 
@@ -167,7 +170,7 @@ All in `reference/`:
 - [ARCHITECTURE.md](reference/ARCHITECTURE.md): how the server, page and engine work, the HTTP API,
   workflows, and limits.
 - [cohort_state_schema.md](reference/cohort_state_schema.md): the game-state format
-  (`capita/cohort-state-8`), written so an engine in any language can produce it.
+  (`capita/cohort-state-9`), written so an engine in any language can produce it.
 - [world_map_schema.md](reference/world_map_schema.md): the `world_map.yaml` and `world_map.json`
   formats, tile ids, grid order and guaranteed properties.
 - [world_map_generation.md](reference/world_map_generation.md): how the map was built, including

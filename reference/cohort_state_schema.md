@@ -56,6 +56,7 @@ state/
     production_max.npy
     need.npy
     consumed.npy
+    received.npy
     decay.npy
     stock.npy
     deaths.npy
@@ -216,9 +217,9 @@ don't age or die.
 | key | meaning |
 |-----|---------|
 | `id` | The leader's number. **Strictly increasing** down the list, and never reused: `manifest.next_leader_id` is the next one to hand out, so a leader that is removed (say, merged back into another segment) leaves a gap. |
-| `name` | What the leader is called. |
+| `name` | What the leader is called: at turn 0 their title and nation or tile (`Chieftain of AUS`, `Chieftain of N355E1495`), for a new pioneer their type's title (`Pioneer`), and after settling the title their player chose. |
 | `type` | The leader's internal type, one of `manifest.leader_types`: `chieftain`, `pioneer`, `lord`, `mayor`, `superintendent`, `admiral`, `general` or `king`. It decides what they can do (`engine/leaders.json`). |
-| `title` | What a leader of their type is called: the type's `title` in `leaders.json` (`Chieftain`), or one their player chose on founding a kingdom (at most 20 characters). The pages show it; nothing in the rules reads it. |
+| `title` | What a leader of their type is called: the type's `title` in `leaders.json` (`Chieftain`), or one their player chose on founding a kingdom or establishing a settlement (at most 20 characters). The pages show it; nothing in the rules reads it. |
 | `nation` | The id of the leader's nation, and so of their segment's people; 0 = no nation. |
 | `parent` | The id of the leader they report to, of the same nation, or 0 for none. Following parents never loops. A nation's root leader has none; so may leaders with no nation. |
 | `founded_turn` | The turn the leader was created. |
@@ -256,6 +257,7 @@ Every record has exactly these keys.
     "production_max": { "file": "production_max.npy", "dtype": "<f8", "shape": [49910, 1] },
     "need":           { "file": "need.npy",           "dtype": "<f8", "shape": [49910, 1] },
     "consumed":       { "file": "consumed.npy",       "dtype": "<f8", "shape": [49910, 1] },
+    "received":       { "file": "received.npy",       "dtype": "<f8", "shape": [49910, 1] },
     "decay":          { "file": "decay.npy",          "dtype": "<f4", "shape": [49910, 1] },
     "stock":          { "file": "stock.npy",          "dtype": "<f8", "shape": [49910, 1] },
     "deaths":         { "file": "deaths.npy",         "dtype": "<f8", "shape": [49910, 6] }
@@ -315,12 +317,22 @@ state/orders/turn_00007/nation_037.json
   "commands": [ { "leader": 37, "type": "move", "to": "S355E1495" } ] }
 ```
 
-At most one command per leader, in leader id order. The only type so far is `move`: the leader takes
-their segment to `to`, a tile id. A segment on a tile can go to any of its 8 neighbours that isn't all
-water (`water` 100 in `world_map.json`). One already moving from `at` (A) to `toward` (B) can go to A,
-B, or any neighbour of either that isn't all water: it first finishes the step to B or walks back to A,
-whichever makes the whole way to `to` shorter (finishing the step on a tie), then steps on to `to`.
-A writer checks every command against the turn it is for (`server/orders.py` `check()`),
+At most one command per leader, in leader id order. Each command has the leader, its `type` and that
+type's fields, and a leader can be given only the types their leader type lists (`engine/leaders.json`):
+
+| type | fields | what it does |
+|------|--------|--------------|
+| `move` | `to`: a tile id | The leader takes their segment to `to`. A segment on a tile can go to any of its 8 neighbours that isn't all water (`water` 100 in `world_map.json`). One already moving from `at` (A) to `toward` (B) can go to A, B, or any neighbour of either that isn't all water: it first finishes the step to B or walks back to A, whichever makes the whole way to `to` shorter (finishing the step on a tie), then steps on to `to`. |
+| `found_kingdom` | `title`: at most 20 characters | The leader's segment settles where it stands and the leader becomes a `king` called `title`. The segment must be wholly on one tile, and no settled segment with people, of any nation (the player's own included), may be on that tile. |
+| `establish_settlement` | `title` | The same, for a `pioneer`, who becomes a `lord`. |
+| `form_settlers` | `people`: a whole number | Splits a settling party of that many people off the leader's segment, under a new `pioneer`: at least `min_people` (200), leaving at least `min_left` (200). |
+
+```json
+{ "leader": 41, "type": "found_kingdom", "title": "High King" }
+{ "leader": 41, "type": "form_settlers", "people": 250 }
+```
+
+A title has no spaces at either end, nor more than one in a row, and no control characters. A writer checks every command against the turn it is for (`server/orders.py` `check()`),
 and so does the engine when it reads them, skipping any that fail. Old turns' orders may be deleted
 along with the turns.
 
@@ -387,8 +399,8 @@ doesn't move). Distances are great circles between
 tile centres. When it reaches `toward`, it sets `at = toward` and `progress = 0`. If that tile is its
 `destination`, it has arrived and stops for the year; otherwise `toward = destination` and it carries
 on with what is left of `km`. Whatever step it is on when `km` runs out, it is left partway along. Each segment
-then lives the year on the tile it counts as being in where it ended up. There are no commands yet to
-create or merge segments. Each turn every surviving cohort
+then lives the year on the tile it counts as being in where it ended up. Forming settlers is the only way a
+segment is created; there is no command yet to merge or remove one. Each turn every surviving cohort
 moves up one year of age, and the 99-year-olds
 join the 100+ group. Age 0 holds the children born during the year who survived it (below). Activity
 hours belong to the age, not the cohort: each year's hours come from the schedule for each age, so

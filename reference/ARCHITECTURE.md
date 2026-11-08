@@ -35,7 +35,8 @@ There are two programs that talk over HTTP on your machine:
 
 - **`server.py`** loads all data into memory once at startup, keeps the population data fresh, and
   answers HTTP requests. It reads only JSON; PyYAML is needed just because it imports
-  `convert_population.py` and `convert_map.py`, which also hold the YAML conversion code.
+  `convert_population.py` and `convert_map.py`, which also hold the YAML conversion code. The engine,
+  player and control servers read the map through `convert_map.py` too, so they need PyYAML as well.
 - **`static/index.html`** is a single self-contained page (HTML + CSS + one JavaScript module). It
   draws the globe with [Three.js](https://threejs.org/), loaded from the jsDelivr CDN, so the browser
   needs internet access the first time.
@@ -48,29 +49,29 @@ The server does no rendering. It hands the browser compact data, and the browser
 
 | File | Role |
 |------|------|
-| `server.py` | The web server (≈300 lines). |
-| `static/index.html` | The globe viewer page (≈650 lines). |
+| `server.py` | The web server (≈600 lines). |
+| `static/index.html` | The globe viewer page (≈1,200 lines). |
 | `convert_map.py` | Converts `world_map.yaml` → `world_map.json`, and verifies the result. Also defines the JSON format id and the `MapColumns` reader the server uses. |
 | `convert_population.py` | Converts `world_population.yaml` → `world_population_current.json` (the full modern world, prototype data), and verifies the result. Also defines the columnar format id the server checks and the loader other scripts use. |
 | `../engine/engine.py` | The turn engine, in its own directory and run as its own process: `init` writes turn 0 of the cohort state, `step` advances it a year at a time, `verify` checks the current turn's checksum (§4.6). It imports `cohort_state.py`, `grid.py` and `convert_map.py` from `server/` (it reads `world_map.json` for production), and by default uses the top-level `state/` folder and `server/world_population_start.json` with its nation seed. |
-| `../engine/economy.json` | The economy rules the engine reads on every step: the products (food, in kcal) with their decay rates, the foraging and farming models' yields and factors, and how segments on a tile share food. |
+| `../engine/economy.json` | The economy rules the engine reads on every step: the products (food, in kcal) with their decay rates, the foraging and farming models' yields and factors, and a description of how segments on a tile share food (`sharing`, which holds only its `about`: the rule itself is `allocate()` in `engine.py`). |
 | `../engine/demography.json` | The demography rules the engine reads on every step: birth rates by age, settled segments' factors, and each cause of death's rule and values. |
 | `../engine/movement.json` | The movement rules the engine reads on every step: walking pace, and which activities' hours aren't free for travel. |
 | `../engine/visibility.json` | The visibility rules the engine reads on every step: how many tiles around its people a nation sees (1: the tile and the 8 around it). |
-| `orders.py` | The players' orders (`../state/orders/turn_NNNNN/nation_KKK.json`): reading and writing them, the command types (`move`, `found_kingdom`), and `check()`, the one validation used by both servers and the engine. |
+| `orders.py` | The players' orders (`../state/orders/turn_NNNNN/nation_KKK.json`): reading and writing them, the command types (`move`, `found_kingdom`, `establish_settlement`, `form_settlers`), where a segment can be sent and the way there (`move_options()`, `plan_move()`), whether a tile is already settled (`settled_by()`), and `check()`, the one validation used by both servers and the engine. |
 | `game.py` | What the control and player servers share: the current turn (memory-mapped), its phase, giving orders (under the state's lock, so never during a step) and Commit Turn (runs `engine.py step --expect-turn T` as its own process, so a commit for a turn that has already resolved doesn't advance the next one; 409 if another step is running). Nation names come from here too. |
 | `camps.py`, `static/camps.js` | Camps, shared by the player page and the developer view: `camps.py` adds up each nation's people on a tile and how many tepees or huts they show (`../player/descriptions.json` "camp"); `camps.js` draws them (the tepee and hut pictures and their seeded placement). |
 | `places.py` | The names players give tiles (`../state/places.json`), each nation its own, written by the player server under the state's lock. The engine never reads them. |
 | `names.py` | The names players give their nations (`../state/names.json`), written by the player server under the state's lock and shown by every server. The engine never reads them. |
 | `../player/player.py`, `../player/static/index.html`, `../player/descriptions.json` | The player page (§4.7), a separate server on port 8000. It sends a player only what their nation knows. |
-| `../engine/leaders.json` | The leader types (chieftain, mayor, superintendent, admiral, general, king), each with its title, the commands it takes, the activity its segment feeds itself by and whether it is settled; what founding a kingdom does; and the type every turn-0 leader gets. |
+| `../engine/leaders.json` | The leader types (chieftain, pioneer, lord, mayor, superintendent, admiral, general, king), each with its title, the commands it takes, the activity its segment feeds itself by, whether it is settled, how the maps draw its people (`camp`: tepees, huts or wagons) and, for a king, a `palace`; what the commands that change leaders do (`found_kingdom` and `establish_settlement`: the type they become, the default title and its longest length; `form_settlers`: the type of the new leader and the fewest people to send and to keep); and the type every turn-0 leader gets. Mayor, superintendent, admiral and general take no commands yet, and nothing creates them. |
 | `../control/control.py`, `../control/static/index.html` | The developer's control page, a separate server on port 8001 so control stays apart from the view. **Commit Turn** (`POST /api/commit`) runs `engine/engine.py step` as its own process. Commits are accepted only while the turn's phase is `orders`; one sent while it is `resolving`, however the step was started, gets 409. `/api/status` gives the current turn and phase. The player first chooses the nation they control (remembered by the browser, or `?nation=AUS` in the URL); Commit Turn stays disabled until they do. The player is that nation's root leader, which the page names. The page lists the nation's leaders, root first (`/api/nation/<id>/leaders`); **Move** lists where a leader's segment can go (`/api/leader/<id>/moves`: the 8 neighbouring tiles, all-water ones disabled; for a segment already moving, the tiles around both ends of its step, each with the way there and its length), and choosing one saves a move command (`POST /api/nation/<id>/orders`, checked by `orders.check()`, refused unless the turn is in `orders`). The nation's orders for the turn are listed above Commit Turn, one per leader (a new command replaces the leader's old one), each with Cancel. It then lists what each of the nation's segments produced and consumed in the year that ended with the current turn, and how much of its need was met (`/api/nation/<id>/production`: the 100 most productive segments, with totals), and how many died of each cause (`/api/nation/<id>/deaths`). It reads the state and never writes it; the only files it writes are the orders. |
 | `cohort_state.py` | Reads and writes the cohort state (`../state/`): the format id, atomic turn writing, memory-mapped reading, checksums, pruning, and the state's lock (`state_lock()`: an OS lock on `state/.lock`, held by the engine for a whole step and by the servers while they write orders or names). Shared by `engine/engine.py` and the server. |
 | `../state/` | The cohort state written by `engine/engine.py`, in its own top-level folder next to `server/` and `engine/`: `current.json` plus one `turn_NNNNN/` directory per recent turn (see `cohort_state_schema.md`). Generated; not committed. |
 | `gen_start_capitals.py` | Writes the game's starting scenario: `world_population_start.json` (200 people in each of 38 start tiles, 0 elsewhere; the start tiles are placeholder locations at present-day capitals; country and area copied from `world_population_current.json`), `../reference/world_population_capitals.yaml` (the same as YAML) and `world_population_start_capitals.nations.json`, the nation seed (one nation per start tile, with that tile as its capital) that `engine.py init` picks up automatically. |
 | `demo_delhi.py` | Prototype demo (not in the repo): rewrites the full-world population file every second with a random population for the Delhi tile, to show live updating. Restores the original value on Ctrl+C. |
 | `grid.py` | The tile grid (0.5° tiles, ids, lookups, flat index, neighbours), shared by every script and the server. `static/index.html` has a JavaScript copy. |
-| `world_map.yaml` | Landform (`terrain`), cover including ice (`cover`), rivers and neighbour links for 259,200 tiles (see `world_map_schema.md`). Source for the JSON; the server doesn't read it. |
+| `world_map.yaml` | Landform (`terrain`), cover including ice (`cover`), rivers and neighbour links for 259,200 tiles (see `world_map_schema.md`). Source for the JSON; the server doesn't read it. Kept in `reference/`; `convert_map.py` reads it from `server/`, so copy it there to convert. |
 | `world_map.json` | Columnar copy of the map that the server reads (made by `convert_map.py`). |
 | `world_population_start.json` | **The game's starting scenario** and the server's default population file: what the server reads and watches, and what `engine.py init` seeds turn 0 from. Made by `gen_start_capitals.py`. |
 | `world_population_start_capitals.nations.json` | The starting scenario's nation seed: each nation's code and capital tile. |
@@ -83,8 +84,8 @@ The server does no rendering. It hands the browser compact data, and the browser
 | `make_globe_tiles.py` | Builds the detail-tile pyramid in `globe_tiles/` (§5.3) from NASA's 500 m Blue Marble (eight 21,600 × 21,600 images in `data/`, outside the repo), or from the 21,600 × 10,800 image if those are missing, or from any image given with `--source`. Takes about 1.5 minutes and up to about 15 GB of memory for the 500 m source. |
 | `globe_tiles/` | The detail-tile pyramid: `tiles.json` plus `<level>/<x>_<y>.jpg`. From the 500 m source: 10,922 pieces in 7 levels (313 MB). Optional: without it the page shows only the single globe image. |
 | `bmng_200407_4096x2048.jpg`, `bmng_200407_8192x4096.jpg`, `bmng_200407_16384x8192.jpg` | The image wrapped around the globe (NASA Blue Marble, July 2004) at three sizes; the page loads the largest the graphics card supports (§5.2). The 8192 one is `map.source_image` and the default. |
-| `gen_map.py`, `etopo_blocks.py`, `glwd.py`, `validate_map.py` | Build `world_map.yaml` from the datasets in `data/` (elevation blocks and GLWD wetland shares are cached there; see `world_map_generation.md`), and check it. |
-| `gen_population.py`, `ghsl.py` | Build `world_population.yaml` from the GHSL population raster in `data/` (see `world_population_schema.md`). |
+| `gen_map.py`, `etopo_blocks.py`, `glwd.py`, `validate_map.py` | (Only `glwd.py`, the GLWD reader, is in the repo.) Build `world_map.yaml` from the datasets in `data/` (elevation blocks and GLWD wetland shares are cached there; see `world_map_generation.md`), and check it. |
+| `gen_population.py`, `ghsl.py` | (Only `ghsl.py`, the GHSL raster reader that `glwd.py` also uses, is in the repo.) Build `world_population.yaml` from the GHSL population raster in `data/` (see `world_population_schema.md`). |
 | `data/` | Downloaded source datasets; `data/SOURCES.txt` lists where each came from. |
 
 ---
@@ -119,9 +120,12 @@ automatically.
 `main()` does this, in order:
 
 1. **Parse arguments**: `--host` (default `127.0.0.1`, so only your machine can connect), `--port`
-   (`9000`), `--map`, `--population`, `--countries`.
+   (`9000`), `--map`, `--population`, `--countries`, `--state` (the cohort state, default the top-level
+   `state/`).
 2. **Build a `World`** (§4.2), which loads all data. This takes about 0.6 s.
-3. **Start the reload thread** (§4.4) as a daemon thread, so it dies with the process.
+3. **Start the reload threads** as daemon threads, so they die with the process: one rereads the
+   population file (§4.4), the other checks `state/current.json` for a new turn (§4.6), each once a
+   second.
 4. **Start a `ThreadingHTTPServer`**, which handles each request on its own thread, so a slow request
    never blocks hover lookups.
 
@@ -138,6 +142,11 @@ automatically.
 | `cover_grid` | 259,200 bytes: index of each tile's largest cover type, 255 for open-sea tiles (no cover) | computed once |
 | `pop` | the current `Population` snapshot (§4.3) | the population file (`--population`, default `world_population_start.json`) |
 | `country_names` | dict `ISO code → name` | the GeoJSON (optional) |
+| `flag_codes` | dict `ISO alpha-3 code → lower-case alpha-2 code`, which names a country's flag | the GeoJSON (optional) |
+| `textures` | dict `width → file name` of every size of the globe image (§5.3) | the image files next to `map.source_image` |
+| `globe_tiles` | the detail-tile pyramid's `tiles.json`, or `None` | `globe_tiles/` (optional) |
+| `turn`, `phase` | the cohort state's current turn (a memory-mapped `Turn`, or `None`) and its phase | `state/` (§4.6) |
+| `people` | the people counts the viewer shows (a `PeopleView`: per-tile counts, heatmap bytes, ranks, total and a version): the current turn's, or the population file's when there is no game state | `turn` or `pop` |
 
 **Loading the map fast.** Parsing the 87 MB `world_map.yaml` takes about 70 s even with PyYAML's C
 loader, so the server reads `world_map.json` instead. That file stores the terrain and cover as one array of
@@ -201,10 +210,11 @@ just keeps serving the last good data and tries again a second later.
 | Route | Returns | Used for |
 |-------|---------|----------|
 | `/` | `static/index.html` | the page |
+| `/camps.js` | `static/camps.js`, the script that draws camps (shared with the player page) | the camps |
 | `/earth.jpg` | the default globe texture, `map.source_image` (browser may cache for 1 h) | fallback if no sizes are listed |
 | `/earth/<width>.jpg` | the globe texture at one of the sizes listed in `/api/meta` → `textures` (cached 1 h) | globe surface |
 | `/globe/<level>/<x>_<y>.jpg` | one piece of the detail-tile pyramid; `/api/meta` → `globe_tiles` describes the pyramid (cached 1 h) | sharper imagery when zoomed in |
-| `/api/meta` | JSON: map metadata, all rivers, population metadata, `populated_tiles`, `population_version`, `turn` (the cohort state's current turn, or `null`) | page startup, and after each population change |
+| `/api/meta` | JSON: map metadata, all rivers, population metadata, `textures`, `globe_tiles`, `populated_tiles`, `population_version`, `people` (`source`, `turn` and `total` of the people shown), `turn` (the cohort state's current turn, or `null`) and its `phase` | page startup, and after each population change |
 | `/api/terrain` | 259,200 bytes, dominant landform index per tile (into `map.terrain_types`) | terrain overlay |
 | `/api/cover` | 259,200 bytes, dominant cover index per tile (into `map.cover_types`), 255 = open sea (no cover) | cover overlay |
 | `/api/population` | 259,200 `uint32` people counts (rounded): the current turn's, or the population file's when there is no game state; headers `X-Population-Version`, `X-People-Source` (`turn` or `population file`) and `X-Turn` | heatmap; the legend's "People at turn n" |
@@ -212,8 +222,9 @@ just keeps serving the last good data and tries again a second later.
 | `/api/owners` | 259,200 little-endian `uint16`: the nation that owns each tile at the current turn, in grid order, 0 = unowned (518 KB); header `X-Turn` | ownership tint |
 | `/api/tile/<id>` | JSON: the tile record merged with its population fields (people, rank and density from the current turn, or from the population file when there is no game state; country and area from the file) and country name, plus `segments` (each segment on the tile at the current turn: its leader's id, name and type, nation, parent leader, people and whether it is moving), `nation` (the nation with the most people there) and `owner` (the nation that owns the tile), each nation with `is_capital` and `null` if none | side panel, on hover |
 | `/api/tile/<id>/cohorts` | JSON: the tile's `people` (101 values, summed over its segments) and `hours` (101 × activities, averaged over its segments weighted by their people) at the current turn, plus `turn`, `segments` (how many), `activities`, `hours_unit`; `people`/`hours` are `null` if nobody is there | the Cohorts section, only after "Show age cohorts" |
-| `/api/nations` | JSON: the current turn's nations (`id`, `code`, `name`, `capital` tile id, `alive`, `founded_turn`, `people`, `owned_tiles`, `visible_tiles`, `explored_tiles`); built once per turn | the "View as" list |
+| `/api/nations` | JSON: the current turn's nations (`id`, `code`, `name`, `capital` tile id, `alive`, `founded_turn`, `leader` (the root leader's `id`, `name` and `type`), `people`, `owned_tiles`, `visible_tiles`, `explored_tiles`); built once per turn and set of given names | the "View as" list |
 | `/api/nation/<id>/visibility` | 64,800 bytes: the nation's active-visibility bits, then its explored bits (tile i = bit i % 8 of byte i // 8); header `X-Turn` | the fog of war for "View as" |
+| `/api/camps` | JSON: `{"turn", "camps": [...]}`, every camp at the current turn (`camps.py`): its `tile` id, `nation` (`id` and `flag`, or `null`), `look` (`tepees`, `huts` or `wagons`), `count`, `small` (wagons on a tile with huts) and `palace`; built once per turn | the camps, drawn by `/camps.js` |
 | `/api/tile_at?lat=&lon=` | same as above, for the tile containing a point | convenience for scripts; the page doesn't use it |
 
 Everything except the texture is sent with `Cache-Control: no-cache`, so the browser always asks for
@@ -637,6 +648,11 @@ python gen_start_capitals.py    # writes world_population_start.json, its nation
 The running server picks up the new JSON within a second; no restart needed. Start a new game state
 (delete `state/`, run `init`) to use it in the engine.
 
+The generators below (`gen_population.py`, `gen_map.py`) and `demo_delhi.py` aren't in this
+repository, and neither is `data/`. The converters read the YAML from `server/`; to convert the
+committed copies, copy `reference/world_population.yaml` or
+`reference/world_map.yaml` into `server/` first.
+
 **After regenerating the full-world prototype data**
 
 ```
@@ -668,12 +684,14 @@ the population file need nothing.
 ## 7. Limits and things to know
 
 - **Local only.** The server listens on `127.0.0.1` and has no authentication. Pass `--host 0.0.0.0`
-  only on a network you trust.
+  only on a network you trust. The public deployment (`deploy/README.md`) does this for all three
+  servers, so anyone who can reach it can see everything and commit turns.
 - **Population JSON goes stale silently.** The server watches only its population file. Edits to
   `world_population.yaml` do nothing until you rerun `convert_population.py`, and changes to
   `gen_start_capitals.py` do nothing until you rerun it.
 - **Map JSON goes stale silently too.** Edits to `world_map.yaml` do nothing until you rerun
-  `convert_map.py` and restart the server. You get a warning only at server startup.
+  `convert_map.py` and restart the server. You get a warning only at server startup, and only if
+  the YAML sits next to the JSON in `server/`: the copies in `reference/` are never compared.
 - **`world_map.json` is not live.** It is loaded once; terrain/river changes need a restart.
 - **Write the JSON atomically.** Anything that rewrites the population file should write a
   temporary file and rename it over the original (as `demo_delhi.py` does). The server tolerates
@@ -684,6 +702,7 @@ the population file need nothing.
 - **Needs internet for Three.js.** The page loads Three.js from a CDN. For offline use, download
   `three.module.js` and `OrbitControls.js` into `static/` and point the import map at them; the
   server would then need a route to serve them.
-- **NumPy is now required** by the server and the engine (for the cohort state).
+- **NumPy and PyYAML are required** by every server and the engine: NumPy for the cohort state, PyYAML
+  because they all import `convert_map.py`.
 - **Thin lines.** WebGL draws lines one pixel wide on most systems, so rivers and the grid look thin
   on high-resolution screens.

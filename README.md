@@ -3,7 +3,7 @@
 A turn-based world simulation on a Civilization-style map of the real Earth. The planet is divided
 into a **0.5° × 0.5° grid (720 × 360 = 259,200 tiles)**. Each tile records its landform, land
 cover, rivers and population. A turn engine advances age cohorts of people, nations, tile ownership
-and visibility one year at a time. Players play from the player page, which shows only what their
+and visibility one year at a time, a turn being one or more years. Players play from the player page, which shows only what their
 nation knows; a developer view shows everything on an interactive 3D globe.
 
 A civilization is its people. People are organised under **leaders** (chieftain, king,
@@ -44,7 +44,7 @@ In a second terminal, from `server/`, start a game state and advance it:
 
 ```sh
 python ../engine/engine.py init       # turn 0 from world_population_start.json and its nation seed
-python ../engine/engine.py step       # advance one year (--turns N for more)
+python ../engine/engine.py step       # advance one turn (--turns N for more)
 python ../engine/engine.py verify     # recheck the current turn's checksum
 ```
 
@@ -95,7 +95,7 @@ cause.
 
 Each turn has two phases, which the engine records in `state/phase.json` and both pages show:
 **orders** (the turn accepts commands) and then **resolving** (commands are closed while the engine
-applies them and a year's passage of time to compute the next turn, which opens for orders).
+applies them and the turn's years of time passing to compute the next turn, which opens for orders).
 
 Useful server options: `--port` (default `9000`), `--host` (default `127.0.0.1`, local only, no
 authentication), `--state <dir>` (default the top-level `state/`) and `--population <file>`. For
@@ -123,6 +123,9 @@ engine.py init / step ─────────────┘
 - **The engine** writes each turn as NumPy `.npy` arrays plus a `manifest.json` with a SHA-256
   checksum. Turns are written atomically and never changed afterwards, so the server can read one turn
   while the engine writes the next.
+- **Turns and years**: a turn lasts `years_per_turn` years (`engine/time.json`; 1 for now). Its orders
+  are applied at its start, then each of its years is lived by the yearly rules below, every rate being
+  a rate per year; the turn keeps its last year's figures.
 - **Current turn rules** (placeholders): turn 0 has one segment per populated tile, each under its
   own chieftain, reporting to the chieftain on the nation's capital. A move command sends a
   segment to a neighbouring tile that isn't all water, on foot, at a pace set by its people's free

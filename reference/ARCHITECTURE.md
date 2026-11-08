@@ -53,11 +53,12 @@ The server does no rendering. It hands the browser compact data, and the browser
 | `static/index.html` | The globe viewer page (≈1,200 lines). |
 | `convert_map.py` | Converts `world_map.yaml` → `world_map.json`, and verifies the result. Also defines the JSON format id and the `MapColumns` reader the server uses. |
 | `convert_population.py` | Converts `world_population.yaml` → `world_population_current.json` (the full modern world, prototype data), and verifies the result. Also defines the columnar format id the server checks and the loader other scripts use. |
-| `../engine/engine.py` | The turn engine, in its own directory and run as its own process: `init` writes turn 0 of the cohort state, `step` advances it a year at a time, `verify` checks the current turn's checksum (§4.6). It imports `cohort_state.py`, `grid.py` and `convert_map.py` from `server/` (it reads `world_map.json` for production), and by default uses the top-level `state/` folder and `server/world_population_start.json` with its nation seed. |
+| `../engine/engine.py` | The turn engine, in its own directory and run as its own process: `init` writes turn 0 of the cohort state, `step` advances it a turn at a time (`engine/time.json` sets how many years a turn lasts), `verify` checks the current turn's checksum (§4.6). It imports `cohort_state.py`, `grid.py` and `convert_map.py` from `server/` (it reads `world_map.json` for production), and by default uses the top-level `state/` folder and `server/world_population_start.json` with its nation seed. |
 | `../engine/economy.json` | The economy rules the engine reads on every step: the products (food, in kcal) with their decay rates, the foraging and farming models' yields and factors, and a description of how segments on a tile share food (`sharing`, which holds only its `about`: the rule itself is `allocate()` in `engine.py`). |
 | `../engine/demography.json` | The demography rules the engine reads on every step: birth rates by age, settled segments' factors, and each cause of death's rule and values. |
 | `../engine/movement.json` | The movement rules the engine reads on every step: walking pace, and which activities' hours aren't free for travel. |
 | `../engine/visibility.json` | The visibility rules the engine reads on every step: how many tiles around its people a nation sees (1: the tile and the 8 around it). |
+| `../engine/time.json` | The time rules the engine reads on every step: how many years a turn lasts (`years_per_turn`, 1 for now). |
 | `orders.py` | The players' orders (`../state/orders/turn_NNNNN/nation_KKK.json`): reading and writing them, the command types (`move`, `found_kingdom`, `establish_settlement`, `form_settlers`), where a segment can be sent and the way there (`move_options()`, `plan_move()`), whether a tile is already settled (`settled_by()`), and `check()`, the one validation used by both servers and the engine. |
 | `game.py` | What the control and player servers share: the current turn (memory-mapped), its phase, giving orders (under the state's lock, so never during a step) and Commit Turn (runs `engine.py step --expect-turn T` as its own process, so a commit for a turn that has already resolved doesn't advance the next one; 409 if another step is running). Nation names come from here too. |
 | `camps.py`, `static/camps.js` | Camps, shared by the player page and the developer view: `camps.py` adds up each nation's people on a tile and how many tepees or huts they show (`../player/descriptions.json` "camp"); `camps.js` draws them (the tepee and hut pictures and their seeded placement). |
@@ -288,7 +289,7 @@ server.py ◄── memory-maps the arrays of the turn current.json names ◄─
   (`destination.npy`). **Found a kingdom** turns a chieftain whose segment is wholly on one tile into
   a king, under a title their player chooses (internally the type stays `king`); a king's segment is
   settled: it farms, can't move, and keeps every other leader, of any nation, from settling its tile (two
-  leaders settling one tile in the same turn both fail). A king or lord can **form settlers**: at the start of the year a party
+  leaders settling one tile in the same turn both fail). A king or lord can **form settlers**: at the start of the turn a party
   of the given size (at least 200, leaving at least 200), the same share of every age and of the stock,
   splits off under a new pioneer who reports to them and stands on their tile. A pioneer can move
   and **establish a settlement**, becoming a lord under a chosen title, settled like a king. Which commands a leader takes comes from their type
@@ -299,7 +300,7 @@ server.py ◄── memory-maps the arrays of the turn current.json names ◄─
   destination, it arrives and stops; otherwise it stays partway and goes on
   next turn. On foot that is several thousand km a year, so a one-tile move (about 55 km) always
   finishes in the turn. The segment forages, eats and claims tiles where it ends up.
-- **Production.** Each step first works out what the year produced, from the current people before
+- **Production.** Each year first works out what it produced, from the current people before
   they age (`allocate()`). A segment feeds itself by foraging (hunting and gathering) or, if settled,
   farming (farming and herding), each a curve that yields about 1,000 or 1,200 kcal an hour while labor
   is light and levels off at what the tile's land cover, landform, latitude, water and rivers can
@@ -319,11 +320,18 @@ server.py ◄── memory-maps the arrays of the turn current.json names ◄─
   infection (terrain; half as much again for settled segments) and child mortality (age and the childcare shortfall). People die in fractions,
   and each turn stores the deaths by segment and cause (`deaths.npy`). The rules are in the `deaths`
   section of `engine/demography.json`; `mortality_modifiers()` is where infrastructure will reduce them.
-- **One turn = one year.** `engine/engine.py step` then applies ageing: every cohort moves up a
+- **Ageing.** Each year ends with ageing: every cohort moves up a
   year, the 99-year-olds join the open-ended 100+ group, and the year's surviving newborns become age 0.
   Activity hours belong to the age, not the cohort: each year's come from the schedule for each age, of
   foragers (`starting_hours()`) or farmers (`farming_hours()`). The activity list and the schedules are
   placeholders in `engine/engine.py`, to be replaced by a decision model.
+- **Turns and years.** A turn lasts `years_per_turn` years (`engine/time.json`; 1 for now). The
+  turn's orders are applied once, at its start; then `live_year()` lives each of its years in turn, by
+  the rules above (movement, production, consumption, demographics, ageing, ownership and visibility),
+  every rate in the rule files being a rate per year. The new turn stores the world at the end of the
+  last year, and its yearly figures (hours, production, consumption, deaths) are that year's. Its
+  manifest records `year` (years since turn 0) and `years` (the turn's length). With no orders, a turn of
+  N years has the same checksum as N one-year turns.
 - **Leaders and nations.** Each turn holds a record per leader (`leaders.json`: id, name, type, title,
   nation, parent, founded turn; one per segment, in row order) and per nation (`nations.json`: id,
   code, capital tile, root leader, founded turn, alive), the owner of every tile (`owner.npy`) and two
@@ -617,7 +625,7 @@ python server.py            # then open http://localhost:9000/
 ```
 python ../engine/engine.py init      # turn 0 from world_population_start.json and its nation seed,
                                      # with a hunter-gatherer age structure
-python ../engine/engine.py step      # advance one year (--turns N for more)
+python ../engine/engine.py step      # advance one turn (--turns N for more)
 python ../engine/engine.py verify    # recheck the current turn's checksum
 ```
 

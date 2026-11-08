@@ -1054,8 +1054,8 @@ function renderStatus() {
   $("turnLine").textContent = status.turn == null ? "" : `Turn ${status.turn}`;
   const busy = committing || status.phase !== "orders";
   $("commit").disabled = busy || !VIEW;
-  // A play symbol; an hourglass while the year passes.
-  const label = busy && status.turn != null ? "The year passes…" : "Commit Turn";
+  // A play symbol; an hourglass while time passes.
+  const label = busy && status.turn != null ? "Time passes…" : "Commit Turn";
   if ($("commit").title !== label || !$("commit").firstChild) {
     $("commit").innerHTML = glyph(busy && status.turn != null ? "wait" : "play", label);
     $("commit").title = label;

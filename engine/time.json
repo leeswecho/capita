@@ -1,0 +1,4 @@
+{
+  "about": "Time rules read by engine.py on every step; a copy goes into each turn's manifest. A turn lasts years_per_turn years (a whole number, at least 1). The turn's orders are applied once, at its start; then the engine lives that many years one after another, each with the same yearly rules (every rate in the other rule files is per year). The turn stores the world at the end of its last year, and its figures for production, consumption, hours and deaths are that last year's. The manifest's 'year' counts the years since turn 0, and 'years' is how many the turn just resolved lasted.",
+  "years_per_turn": 1
+}

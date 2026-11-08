@@ -19,7 +19,7 @@ segments (the people directly under one of its leaders) produced and consumed in
 with the current turn, and how many of their people died.
 
 Each turn has a phase (cohort_state.read_phase()), which the engine records: "orders" while the turn
-accepts commands, and "resolving" while the engine applies them and a year's passage of time to
+accepts commands, and "resolving" while the engine applies them and a turn's passage of time to
 compute the next turn. Commands, and commits, are refused while the turn is resolving, however the
 step was started (from this page or from a terminal).
 

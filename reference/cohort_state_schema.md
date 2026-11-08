@@ -86,7 +86,7 @@ Each turn goes through two phases:
 | phase | meaning |
 |-------|---------|
 | `orders` | The turn is open: players can enter commands for it, and commit it. |
-| `resolving` | The turn's commands are closed. The engine is applying them, along with a year's passage of time, to compute the next turn. |
+| `resolving` | The turn's commands are closed. The engine is applying them, along with the turn's years of time passing, to compute the next turn. |
 
 The turn number always names a finished turn; the phase says what is happening to it. Resolving turn
 7 ends when turn 8 is written, which opens in `orders`. `since` is when the phase began (UTC, ISO 8601).
@@ -269,6 +269,8 @@ Every record has exactly these keys.
   "checksum": { "algorithm": "sha256", "of": "...", "value": "845b2053..." },
   "initial_population_source": "world_population_start.json",
   "initial_nations_source": "world_population_start_capitals.nations.json",
+  "year": 7,
+  "years": 1,
   "economy_rules_source": "engine/economy.json",
   "economy_rules": { "products": { ... }, "foraging": { ... }, "farming": { ... }, "sharing": { ... } },
   "demography_rules_source": "engine/demography.json",
@@ -279,6 +281,8 @@ Every record has exactly these keys.
   "movement_rules": { "km_per_hour": 2.5, "not_travel_activities": ["sleep", "subsistence", "farming"] },
   "visibility_rules_source": "engine/visibility.json",
   "visibility_rules": { "radius_tiles": 1 },
+  "time_rules_source": "engine/time.json",
+  "time_rules": { "years_per_turn": 1 },
   "orders": { "turn": 6, "applied": [ { "nation": 1, "leader": 37, "type": "move", "to": "S355E1495" } ],
               "rejected": [ { "nation": 23, "leader": 31, "type": "move", "to": "N100E0100",
                               "reason": "N100E0100 isn't next to N355E1395" } ] }
@@ -290,7 +294,10 @@ Every record has exactly these keys.
   (`engine/economy.json` at the time), so a replay can tell whether they changed. `demography_rules`
   is the same for births and deaths (`engine/demography.json`), `leader_rules` for leaders
   (`engine/leaders.json`), `movement_rules` for movement (`engine/movement.json`) and
-  `visibility_rules` for visibility (`engine/visibility.json`).
+  `visibility_rules` for visibility (`engine/visibility.json`) and `time_rules` for how long a turn
+  lasts (`engine/time.json`).
+- `year` is how many years have passed since turn 0 (0 at turn 0), and `years` how many the turn just
+  resolved lasted (0 at turn 0). A state written before these existed counts one year per turn.
 - `orders` (every turn after 0) lists the commands of the previous turn that the engine applied to
   compute this one, and those it rejected with the reason.
 - `leader_types` lists the types a leader can have; `next_leader_id` is the id the next new leader
@@ -378,7 +385,14 @@ wait for it: if it is held, the step exits with status 3. Readers don't take it.
 
 ## Turn rules (`engine/engine.py`, for now)
 
-One turn is one year. First the turn's orders are applied (`apply_orders()`). A leader can be given only
+A turn lasts `years_per_turn` years (`engine/time.json`; 1 for now). Its orders are applied once, at its
+start; then each of its years is lived in turn (`live_year()`) by the rules below, every rate in the rule
+files being a rate per year. The new turn holds the world at the end of its last year, and the arrays
+that describe "the year that ended with this turn" (`hours`, `production`, `labor`, `production_max`,
+`need`, `consumed`, `received`, `decay`, `deaths`) describe that last year. With no orders, a turn of N
+years gives exactly the state N one-year turns would (the same checksum).
+
+First the turn's orders are applied (`apply_orders()`). A leader can be given only
 the commands their type lists (`engine/leaders.json`). `found_kingdom` turns a leader whose segment is
 wholly on one tile into a `king` (the type's `becomes`), with the title their player gave as both
 `title` and `name`; a king's segment is **settled**: it farms, takes no move commands, and keeps every
@@ -387,7 +401,7 @@ other leader, of any nation, from settling its tile. `establish_settlement` does
 `form_settlers` splits a settling party of the given number of people off a king's or lord's segment (at least
 `min_people`, leaving at least `min_left`): the same share of every age and of the stock goes to a new
 row at the end, standing on their tile, under a new `pioneer` (id `next_leader_id`, `parent` the
-leader, `founded_turn` the new turn), which lives the year as its own segment. A leader takes one
+leader, `founded_turn` the new turn), which lives the turn as its own segment. A leader takes one
 command a turn. A `move` given to a
 standing segment sets `toward` and `destination` to the named neighbour. Given to a moving one, it sets
 `destination` to the named tile and either keeps the step under way or turns back (swapping `at` and
@@ -400,7 +414,7 @@ tile centres. When it reaches `toward`, it sets `at = toward` and `progress = 0`
 `destination`, it has arrived and stops for the year; otherwise `toward = destination` and it carries
 on with what is left of `km`. Whatever step it is on when `km` runs out, it is left partway along. Each segment
 then lives the year on the tile it counts as being in where it ended up. Forming settlers is the only way a
-segment is created; there is no command yet to merge or remove one. Each turn every surviving cohort
+segment is created; there is no command yet to merge or remove one. Each year every surviving cohort
 moves up one year of age, and the 99-year-olds
 join the 100+ group. Age 0 holds the children born during the year who survived it (below). Activity
 hours belong to the age, not the cohort: each year's hours come from the schedule for each age, so

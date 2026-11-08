@@ -19,11 +19,11 @@
              "commands": ["form_settlers"], "activity": "farming", "settled": true, "camp": "huts", "palace": true}
   },
   "commands": {
-    "found_kingdom": {"about": "The leader's segment settles on its tile, which it must be wholly on (not between two tiles), and the leader becomes 'becomes', under the title their player gives (default_title if none, at most max_title_length characters). A tile that already has a settled segment, of any nation (the player's own included), can't be settled: once a leader settles a tile, it is theirs alone. If two or more leaders settle the same tile in the same turn (by this command or establish_settlement), none of them does. The segment farms from the year the order resolves.",
+    "found_kingdom": {"about": "The leader's segment settles on its tile, which it must be wholly on (not between two tiles), and the leader becomes 'becomes', under the title their player gives (default_title if none, at most max_title_length characters). A tile that already has a settled segment, of any nation (the player's own included), can't be settled: once a leader settles a tile, it is theirs alone. If two or more leaders settle the same tile in the same turn (by this command or establish_settlement), none of them does. The segment farms from the turn the order resolves.",
                       "becomes": "king", "default_title": "King", "max_title_length": 20},
     "establish_settlement": {"about": "As found_kingdom, but the leader becomes a lord: a settling party settles where it is.",
                              "becomes": "lord", "default_title": "Lord", "max_title_length": 20},
-    "form_settlers": {"about": "Splits off a settling party of the given number of people (at least min_people, leaving the leader at least min_left) under a new leader of type 'becomes', who reports to the leader and stands on their tile. The party takes the same share of every age and of everything the segment holds. It is formed at the start of the year the order resolves, and lives that year as its own segment.",
+    "form_settlers": {"about": "Splits off a settling party of the given number of people (at least min_people, leaving the leader at least min_left) under a new leader of type 'becomes', who reports to the leader and stands on their tile. The party takes the same share of every age and of everything the segment holds. It is formed at the start of the turn the order resolves, and lives that turn as its own segment.",
                       "becomes": "pioneer", "min_people": 200, "min_left": 200}
   },
   "start_type": "chieftain"

@@ -43,7 +43,7 @@ Endpoints:
     POST /api/nation/<id>/place  {"tile": id, "name": "..."} names a tile the nation has explored, for that
                            nation only (places.py); null or "" takes the name back. Returns {"tile",
                            "place"}; 400 if the name can't be used (JSON)
-    POST /api/commit       {"turn": t}: commit turn t, advancing the whole world one year (JSON)
+    POST /api/commit       {"turn": t}: commit turn t, advancing the whole world one turn (JSON)
 """
 import argparse
 import json

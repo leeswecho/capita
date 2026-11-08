@@ -18,15 +18,20 @@ shaped by age (starting_hours()). It also creates the nations (make_nations()): 
 leader leads the segment on its capital, and the nation's other leaders report to them. Then the
 starting visibility.
 
-`step` advances one year per turn. For now the rules are:
-- Orders: the players' commands for the turn (server/orders.py, written by the control and player
+`step` advances one turn, which lasts time.json's years_per_turn years: the turn's orders are applied
+once, at its start, and then each year is lived in turn (live_year()), every rate in the rule files being
+a rate per year. The new turn stores the world at the end of its last year, with that year's production,
+consumption, hours and deaths, and its manifest records "year" (years since turn 0) and "years" (how many
+the turn lasted). For now the rules are:
+- Orders, at the start of the turn: the players' commands for the turn (server/orders.py, written by the control and player
   servers) are checked again and applied (apply_orders()); a leader takes only the commands their type
   lists (leaders.json). A move sends a leader's segment toward a neighbouring tile; given to a segment
   already between two tiles, it first finishes that step or walks back, whichever makes the whole way
   shorter. Founding a kingdom makes the leader a king, under the title their player gave, and their
   segment settled: it farms and stays put, and no other leader can settle its tile. A king or lord
-  can form settlers: a settling party split off at the start of the year under a new pioneer, who can move and
+  can form settlers: a settling party split off at the start of the turn under a new pioneer, who can move and
   establish a settlement, becoming a lord (settled in the same way).
+Then, every year of the turn:
 - Movement (move_segments()): every moving segment covers a distance set by its people's travel hours
   and the pace in movement.json, along the rest of its step and then the step on to its destination,
   and arrives, stopping there, if that is enough; otherwise it is left partway and goes on next turn. Each segment then lives the year on the tile it counts as being in
@@ -106,6 +111,7 @@ DEMOGRAPHY = os.path.join(HERE, "demography.json")
 LEADERS = os.path.join(HERE, "leaders.json")
 MOVEMENT = os.path.join(HERE, "movement.json")
 VISIBILITY = os.path.join(HERE, "visibility.json")
+TIME = os.path.join(HERE, "time.json")
 MAP = os.path.join(SERVER, "world_map.json")
 
 # Placeholder activities. Replace with the real list; the state files carry the names, so readers adapt.
@@ -275,7 +281,7 @@ def apply_orders(state, commands, can_walk, lrules, turn):
     name to the title given; if more than one leader settles the same tile, none of them does.
     Forming settlers splits a party off the segment, the same share of every age and of its stock, under
     a new leader (id next_leader_id, founded `turn`) who reports to the old one and stands on their tile;
-    new rows go at the end, so leader ids stay increasing. Returns a dict of the start of the year: leaders,
+    new rows go at the end, so leader ids stay increasing. Returns a dict of the start of the turn: leaders,
     at, toward, progress, destination, people, hours, stock, next_leader_id, and the applied and rejected
     commands (the rejected with a "reason").
     """
@@ -426,6 +432,20 @@ def active_visibility(tiles, nation, people, n_rows, radius):
     return cs.pack_tiles(flags.reshape(n_rows, grid.COUNT))
 
 
+def load_time(path=TIME):
+    """time.json: {"years_per_turn": ...}."""
+    with open(path, encoding="utf-8") as f:
+        rules = json.load(f)
+    n = rules.get("years_per_turn")
+    if not isinstance(n, int) or isinstance(n, bool) or n < 1:
+        sys.exit(f"{os.path.basename(path)}: years_per_turn must be a whole number of at least 1")
+    return rules
+
+
+def time_extra(rules):
+    return {"time_rules_source": os.path.relpath(TIME, REPO).replace(os.sep, "/"), "time_rules": rules}
+
+
 def find_seed(population_path):
     """The nation seed next to a population file: <name>.nations.json or <name>_<anything>.nations.json
     (e.g. world_population_start_capitals.nations.json for world_population_start.json), or None."""
@@ -444,6 +464,8 @@ def load_rules(path=RULES):
     name = os.path.basename(path)
     if rules["foraging"]["product"] not in rules["products"]:
         sys.exit(f"{name}: foraging makes {rules['foraging']['product']!r}, which isn't a product")
+    if rules["farming"]["product"] != rules["foraging"]["product"]:
+        sys.exit(f"{name}: farming and foraging must make the same product")
     for product, c in rules["consumption"].items():
         if product == "about":
             continue
@@ -848,8 +870,9 @@ def init_locked(args):
                      nations, visible, visible.copy(), products, economy, CAUSES, np.zeros((len(tiles), len(CAUSES))),
                      leader_types(lrules), len(leaders) + 1)
     extra = {"initial_population_source": os.path.basename(args.population),
-             "initial_nations_source": os.path.basename(seed_path), **economy_extra(rules),
-             **demography_extra(demo), **leaders_extra(lrules), **visibility_extra(vrules)}
+             "initial_nations_source": os.path.basename(seed_path), "year": 0, "years": 0, **economy_extra(rules),
+             **demography_extra(demo), **leaders_extra(lrules), **visibility_extra(vrules),
+             **time_extra(load_time())}
     m = cs.write_turn(args.state, 0, state, extra=extra)
     cs.write_phase(args.state, 0, cs.ORDERS)
     print(f"turn 0: {m['segments']} segments on {m['populated_tiles']} tiles, {m['total_people']:,.1f} people, "
@@ -890,6 +913,57 @@ class TurnMismatch(Exception):
     pass
 
 
+def live_year(s, leaders, world, rules, lrules, demo, mrules, vrules, n_rows):
+    """One year of the world, after the turn's orders: movement, production, consumption, decay, births,
+    deaths, ageing, ownership and visibility. Every rate in the rule files is a rate per year, so a turn
+    of N years (time.json) is N calls of this, each starting from the one before.
+
+    s: the start of the year, {"at", "toward", "progress", "destination" [S], "people" float64 [S, AGES],
+    "hours" (the year before's, which set how far segments travel this year), "stock" [S, P], "owner"
+    [grid.COUNT], "explored" (packed bits)}. leaders: one record per row; n_rows: rows of the visibility
+    arrays. Returns the start of the next year in the same form, plus what happened during this one:
+    "tiles", "visible", "arrived" (segments that reached their destination), "born" [S], "deaths" [S, C]
+    and the economy's "production", "labor", "production_max", "need", "consumed", "received", "decay".
+    """
+    names = [p["name"] for p in product_list(rules)]
+    nation = np.array([lead["nation"] for lead in leaders], dtype=np.uint16)
+    start_people, stock = s["people"], s["stock"]
+    # Movement: each segment lives the year on the tile it counts as being in where it ends up.
+    at, toward, progress, destination, arrived = move_segments(
+        s["at"], s["toward"], s["progress"], s["destination"], travel_km(start_people, s["hours"], ACTIVITIES, mrules))
+    tiles = cs.segment_tile(at, toward, progress)
+    # Production and consumption, by the year's people (with any settling parties split off) before
+    # they age. The year's hours are what it took to feed them (allocate()).
+    fp = names.index(rules["farming"]["product"])
+    rates = consumption_rates(names, rules)
+    need = (start_people[:, :, None] * rates[None, :, :]).sum(axis=1) * 365
+    hours, food, food_labor, food_received, food_top = allocate(
+        start_people, leaders, lrules, tiles, need[:, fp], stock[:, fp], world, rules)
+    production, labor, prod_max, received = (np.zeros_like(stock) for _ in range(4))
+    production[:, fp], labor[:, fp], prod_max[:, fp], received[:, fp] = food, food_labor, food_top, food_received
+    held = stock + production + received
+    need, consumed = consume(start_people, held, rates)
+    decay = economy_modifiers(len(tiles), rules)
+
+    # Demographics: the year's births and deaths, among the people who lived it.
+    settled = np.array([bool(lrules["types"][lead["type"]]["settled"]) for lead in leaders], dtype=bool)
+    born = births(start_people, birth_rates(start_people, settled, demo))
+    fc = names.index(demo["deaths"]["starvation"]["product"])
+    food_met = np.divide(consumed[:, fc], need[:, fc], out=np.ones(len(tiles)), where=need[:, fc] > 0)
+    survivors, born_alive, deaths = mortality(start_people, born, hours, ACTIVITIES, tiles, world,
+                                              food_met, settled, demo)
+
+    people = age_one_year(survivors)
+    people[:, 0] = born_alive
+    owner = update_ownership(s["owner"], tiles, nation, people, at == toward)
+    visible = active_visibility(tiles, nation, people, n_rows, vrules["radius_tiles"])
+    return {"at": at, "toward": toward, "progress": progress, "destination": destination, "people": people,
+            "hours": hours, "stock": end_of_year(held, consumed, decay), "owner": owner,
+            "explored": s["explored"] | visible, "tiles": tiles, "visible": visible, "arrived": arrived,
+            "born": born, "deaths": deaths, "production": production, "labor": labor, "production_max": prod_max,
+            "need": need, "consumed": consumed, "received": received, "decay": decay}
+
+
 def step_locked(args):
     for i in range(args.turns):
         ptr = cs.read_current(args.state)
@@ -905,84 +979,56 @@ def step_locked(args):
             if products != cur.products:
                 sys.exit(f"economy.json's products {[p['name'] for p in products]} don't match the state's "
                          f"{[p['name'] for p in cur.products]}; start a new state to change them")
-            names = [p["name"] for p in products]
             lrules = load_leader_rules()
             if leader_types(lrules) != cur.leader_types:
                 sys.exit(f"leaders.json's types {leader_types(lrules)} don't match the state's {cur.leader_types}; "
                          "start a new state to change them")
-            # Orders, then movement: each segment lives the year on the tile it counts as being in
-            # where it ends up.
-            world = read_map(MAP)
-            mrules = load_movement()
             if cur.activities != ACTIVITIES:
                 sys.exit(f"the state's activities {cur.activities} aren't the engine's {ACTIVITIES}; start a new state")
+            world = read_map(MAP)
+            mrules, demo, vrules, trules = load_movement(), load_demography(), load_visibility(), load_time()
+            years = trules["years_per_turn"]
+            # The turn's orders, once, at its start; then its years, one after another.
             commands = orders.read_turn(args.state, cur.turn)
-            year = apply_orders(cur, commands, orders.walkable(world), lrules, cur.turn + 1)
-            leaders, at, toward, progress, destination = (year[k] for k in ("leaders", "at", "toward", "progress", "destination"))
-            applied, rejected, start_people, stock = year["applied"], year["rejected"], year["people"], year["stock"]
-            nation = np.array([lead["nation"] for lead in leaders], dtype=np.uint16)
-            # Last year's hours set how far a segment can go this year.
-            at, toward, progress, destination, arrived = move_segments(
-                at, toward, progress, destination, travel_km(start_people, year["hours"], cur.activities, mrules))
-            tiles = cs.segment_tile(at, toward, progress)
-            # Production and consumption: the year that is ending, so this turn's people (with any settling
-            # parties split off), before they age.
-            # The year's hours are what it took to feed them (allocate()).
-            fp = names.index(rules["farming"]["product"])
-            if fp != names.index(rules["foraging"]["product"]):
-                sys.exit("economy.json: farming and foraging must make the same product")
-            rates = consumption_rates(names, rules)
-            need = (start_people[:, :, None] * rates[None, :, :]).sum(axis=1) * 365
-            hours, food, food_labor, food_received, food_top = allocate(
-                start_people, leaders, lrules, tiles, need[:, fp], stock[:, fp], world, rules)
-            production, labor, prod_max, received = (np.zeros_like(stock) for _ in range(4))
-            production[:, fp], labor[:, fp], prod_max[:, fp], received[:, fp] = food, food_labor, food_top, food_received
-            held = stock + production + received
-            need, consumed = consume(start_people, held, rates)
-            decay = economy_modifiers(len(tiles), rules)
-            economy = {"production": production, "labor": labor, "production_max": prod_max, "need": need,
-                       "consumed": consumed, "received": received, "decay": decay,
-                       "stock": end_of_year(held, consumed, decay)}
-
-            # Demographics: the year's births and deaths, among the people who lived it.
-            demo = load_demography()
-            settled = np.array([bool(lrules["types"][lead["type"]]["settled"]) for lead in leaders], dtype=bool)
-            born = births(start_people, birth_rates(start_people, settled, demo))
-            fc = names.index(demo["deaths"]["starvation"]["product"])
-            food_met = np.divide(consumed[:, fc], need[:, fc], out=np.ones(len(tiles)), where=need[:, fc] > 0)
-            survivors, born_alive, deaths = mortality(start_people, born, hours, cur.activities, tiles, world,
-                                                      food_met, settled, demo)
-
-            people = age_one_year(survivors)
-            people[:, 0] = born_alive
-            tile_owner = update_ownership(cur.owner, tiles, nation, people, at == toward)
-            vrules = load_visibility()
-            visible = active_visibility(tiles, nation, people, len(cur.nations) + 1, vrules["radius_tiles"])
-            state = cs.State(leaders, at, toward, progress, destination, people, hours, cur.activities,
-                             tile_owner, cur.nations, visible, cur.explored | visible, products, economy, CAUSES,
-                             deaths, cur.leader_types, year["next_leader_id"])
+            start = apply_orders(cur, commands, orders.walkable(world), lrules, cur.turn + 1)
+            leaders, applied, rejected = start["leaders"], start["applied"], start["rejected"]
+            y = {k: start[k] for k in ("at", "toward", "progress", "destination", "people", "hours", "stock")}
+            y.update(owner=cur.owner, explored=cur.explored)
+            born, died, arrived = 0.0, np.zeros(len(CAUSES)), 0
+            for _ in range(years):
+                y = live_year(y, leaders, world, rules, lrules, demo, mrules, vrules, len(cur.nations) + 1)
+                born, died, arrived = born + y["born"].sum(), died + y["deaths"].sum(axis=0), arrived + y["arrived"]
+            # The turn keeps its last year's figures.
+            economy = {k: y[k] for k in ("production", "labor", "production_max", "need", "consumed", "received",
+                                         "decay", "stock")}
+            state = cs.State(leaders, y["at"], y["toward"], y["progress"], y["destination"], y["people"], y["hours"],
+                             cur.activities, y["owner"], cur.nations, y["visible"], y["explored"], products, economy,
+                             CAUSES, y["deaths"], cur.leader_types, start["next_leader_id"])
             extra = {k: v for k, v in cur.manifest.items() if k.startswith("initial_")}
             m = cs.write_turn(args.state, cur.turn + 1, state,
-                              extra={**extra, **economy_extra(rules), **demography_extra(demo),
-                                     **leaders_extra(lrules), **movement_extra(mrules), **visibility_extra(vrules),
+                              extra={**extra, "year": cur.manifest.get("year", cur.turn) + years, "years": years,
+                                     **economy_extra(rules), **demography_extra(demo), **leaders_extra(lrules),
+                                     **movement_extra(mrules), **visibility_extra(vrules), **time_extra(trules),
                                      "orders": {"turn": cur.turn, "applied": applied, "rejected": rejected}})
         except BaseException:
             cs.write_phase(args.state, ptr["turn"], cs.ORDERS)   # no new turn was written; reopen this one
             raise
         cs.write_phase(args.state, m["turn"], cs.ORDERS)
         del cur
+        production, need, consumed = y["production"], y["need"], y["consumed"]
+        last = "" if years == 1 else " in its last year"
         made = ", ".join(f"{production[:, i].sum():,.0f} {p['unit']} of {p['name']}" for i, p in enumerate(products))
         short = ", ".join(f"{p['name']} {consumed[:, i].sum() / need[:, i].sum():.1%} of need met "
                           f"({np.count_nonzero(consumed[:, i] < need[:, i] * (1 - 1e-9))} segments short)"
                           for i, p in enumerate(products) if need[:, i].sum() > 0)
-        died = ", ".join(f"{c} {deaths[:, k].sum():,.1f}" for k, c in enumerate(CAUSES))
+        causes = ", ".join(f"{c} {died[k]:,.1f}" for k, c in enumerate(CAUSES))
         for c in rejected:
             print(f"turn {m['turn'] - 1}: rejected nation {c['nation']}'s command {json.dumps({k: v for k, v in c.items() if k not in ('nation', 'reason')})}: {c['reason']}")
         print(f"turn {m['turn'] - 1}: {len(applied)} commands applied, {len(rejected)} rejected; "
-              f"{int(np.count_nonzero(at != toward))} segments moving, {arrived} arrived")
-        print(f"turn {m['turn']}: {m['total_people']:,.1f} people ({born.sum():,.1f} born, {deaths.sum():,.1f} died: "
-              f"{died}), made {made}; {short}; "
-              f"checksum {m['checksum']['value'][:12]}")
+              f"{int(np.count_nonzero(y['at'] != y['toward']))} segments moving, {arrived} arrived")
+        print(f"turn {m['turn']} (year {m['year']}, after {years} year{'s' if years != 1 else ''}): "
+              f"{m['total_people']:,.1f} people ({born:,.1f} born, {died.sum():,.1f} died: {causes}), "
+              f"made {made}{last}; {short}; checksum {m['checksum']['value'][:12]}")
     gone = cs.prune(args.state, keep=KEEP_TURNS)
     cur = cs.read_current(args.state)
     gone += [f"orders/{n}" for n in orders.prune(args.state, cur["turn"] - KEEP_TURNS + 1)]

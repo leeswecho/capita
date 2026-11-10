@@ -72,7 +72,8 @@ def table(x, pts):
 
 def pick_scenarios(n, seed, arules, erules, demo):
     """n scenarios at random (rules.json "scenarios"): each a dict of its tile, way of life, the tile's
-    yield maxima and infection factor, its starting people and its own random seed."""
+    yield maxima and infection factor, its starting people, the tiles it may be relocated to (each with
+    the same fields) and its own random seed."""
     sc = arules["scenarios"]
     world = engine.read_map(engine.MAP)
     tiles = np.arange(engine.grid.COUNT)
@@ -81,15 +82,19 @@ def pick_scenarios(n, seed, arules, erules, demo):
     infection = engine.infection_factor(tiles, world, demo["deaths"]["infection"])
     kcal, least = sc["kcal_per_person_year"], sc["min_people_fed"] * sc["kcal_per_person_year"]
     ok = np.flatnonzero(forage >= least)
+    farmable = np.flatnonzero((forage >= least) & (farm >= least))
     rng = np.random.default_rng(seed)
+    place = lambda t: {"tile": int(t), "forage_max": float(forage[t]), "farm_max": float(farm[t]),
+                       "infection": float(infection[t])}
     out = []
     for k in range(n):
         t = int(rng.choice(ok))
         farming = bool(rng.random() < sc["farming_share"] and farm[t] >= least)
         top = farm[t] if farming else forage[t]
         people = int(np.clip(top / kcal * rng.uniform(*sc["start_factor"]), *sc["start_people"]))
-        out.append({"id": k, "tile": t, "farming": farming, "forage_max": float(forage[t]), "farm_max": float(farm[t]),
-                    "infection": float(infection[t]), "people": people, "seed": int(rng.integers(2 ** 31))})
+        elsewhere = rng.choice(farmable if farming else ok, size=sc["relocation_tiles"])
+        out.append({"id": k, **place(t), "farming": farming, "people": people,
+                    "relocations": [place(x) for x in elsewhere], "seed": int(rng.integers(2 ** 31))})
     return out
 
 
@@ -104,12 +109,10 @@ class Sim:
         self.settled = sc["farming"]
         live = erules["farming" if sc["farming"] else "foraging"]
         self.livelihood = ACTIVITIES.index(live["activity"])
-        self.forage_max, self.farm_max = sc["forage_max"], sc["farm_max"]
-        self.top = (sc["farm_max"] if sc["farming"] else sc["forage_max"]) / 12   # a month's curve
+        self.place(sc)
         self.r = float(live["return_per_hour"])
         self.rho = self.r                                     # food an hour yielded last month
         self.work_hazard = demo["deaths"]["predation_and_accidents"]["hazard_per_hour"][live["activity"]]
-        self.infection = sc["infection"]
         self.infection_factor = demo["settled"]["infection_factor"] if sc["farming"] else 1.0
         self.luck = arules["luck"]["sd_log"][live["activity"]]
         sh = arules["sharing"]
@@ -139,6 +142,12 @@ class Sim:
         self.prev_hours = np.zeros((AGES, len(ACTIVITIES)))   # the year before's, by age
         self.prev_met = 1.0                                   # the year before's share of food need met
         self._populate(sc["people"])
+
+    def place(self, tile):
+        """Live on this tile (a dict with forage_max, farm_max and infection, as pick_scenarios() gives)."""
+        self.tile = tile["tile"]
+        self.forage_max, self.farm_max, self.infection = tile["forage_max"], tile["farm_max"], tile["infection"]
+        self.top = (self.farm_max if self.settled else self.forage_max) / 12   # a month's curve
 
     # People and households.
 
@@ -480,7 +489,8 @@ class Sim:
         i = np.flatnonzero(self.alive[:self.n])
         people = np.bincount(np.minimum(self.age_m[i] // 12, AGES - 1), minlength=AGES).astype(np.float64)
         need = (people * self.eat_day).sum() * 365
-        row = {"people": people, "food_met": self.prev_met, "hours_prev": self.prev_hours.copy(),
+        row = {"people": people, "food_met": self.prev_met, "hours_prev": self.prev_hours.copy(), "tile": self.tile,
+               "forage_max": self.forage_max, "farm_max": self.farm_max,
                "tile_people": people.sum(), "food_target": max(need - self.store.sum(), 0.0)}
         acc = {"hours": np.zeros((AGES, len(ACTIVITIES))), "months": np.zeros(AGES), "births": np.zeros(AGES),
                "need": 0.0, "eaten": 0.0, "deaths": 0, "by_cause": np.zeros(len(engine.CAUSES)),
@@ -515,7 +525,10 @@ def run_scenario(sc):
     sim = Sim(sc, arules, erules, demo)
     rows = []
     burn_in = sc.get("burn_in_years") or s["burn_in_years"]
+    moves = np.random.default_rng(sc["seed"] + 1)
     for y in range(burn_in + s["record_years"]):
+        if y > burn_in and sc["relocations"] and moves.random() < s["relocate_per_year"]:
+            sim.place(sc["relocations"][moves.integers(len(sc["relocations"]))])
         row = sim.year()
         if row["tile_people"] == 0:
             break
@@ -554,15 +567,15 @@ def run(args):
     erate = {erules[k]["activity"]: erules[k]["return_per_hour"] for k in ("foraging", "farming")}
     col = lambda f, dtype=np.float64: np.array([f(sc, r) for sc, r in rows], dtype=dtype)
     out = {
-        "scenario": col(lambda sc, r: sc["id"], np.int64), "tile": col(lambda sc, r: sc["tile"], np.int64),
+        "scenario": col(lambda sc, r: sc["id"], np.int64), "tile": col(lambda sc, r: r["tile"], np.int64),
         "year": col(lambda sc, r: r["year"], np.int64),
         "livelihood": col(lambda sc, r: ACTIVITIES.index("farming" if sc["farming"] else "subsistence"), np.int64),
         "settled": col(lambda sc, r: sc["farming"], bool),
-        "forage_max": col(lambda sc, r: sc["forage_max"]), "farm_max": col(lambda sc, r: sc["farm_max"]),
+        "forage_max": col(lambda sc, r: r["forage_max"]), "farm_max": col(lambda sc, r: r["farm_max"]),
         "return_per_hour": col(lambda sc, r: erate["farming" if sc["farming"] else "subsistence"]),
         "people": np.stack([r["people"] for _, r in rows]),
         "hours_prev": np.stack([r["hours_prev"] for _, r in rows]).astype(np.float32),
-        "hours": np.stack([r["hours"] for _, r in rows]),
+        "hours": np.stack([r["hours"] for _, r in rows]).astype(np.float32),
         "birth_rate": np.stack([r["birth_rate"] for _, r in rows]),
         "deaths_by_cause": np.stack([r["deaths_by_cause"] for _, r in rows]),
         "traits": np.stack([r["traits"] for _, r in rows]),

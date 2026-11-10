@@ -156,3 +156,72 @@ def check(d: Decisions, s: Situation):
             raise ValueError(f"decide() gave {name} values that are negative or not finite")
     if (d.hours.sum(axis=2) > 24 + 1e-6).any():
         raise ValueError("decide() gave more than 24 hours a day")
+
+
+# The trained decision model: a small network that learns, from the agent-based model's records
+# (abm/abm.py, abm/train.py), what a segment's people do in a situation. It isn't used by the game
+# yet. features() is what it is told, as numbers; it gives, for each segment, coefficients of
+# AGE_CURVES smooth curves over age (so its choices change smoothly from one age to the next) for each
+# of OUTPUTS; network_decide() runs it with nothing but NumPy.
+
+OUTPUTS = ["sleep", "work", "childcare", "births"]   # work: hours of the segment's livelihood
+AGE_CURVES = 16
+BIRTH_SCALE = 0.1                                    # births per person per year, at a curve's value of 1
+
+
+def age_curves():
+    """The smooth curves the network's outputs are made of, float64 [AGE_CURVES, AGES]: bumps centred
+    evenly from age 0 to the last age, each as wide as the gap between centres."""
+    centres = np.linspace(0, AGES - 1, AGE_CURVES)
+    width = centres[1] - centres[0]
+    return np.exp(-0.5 * ((np.arange(AGES)[None, :] - centres[:, None]) / width) ** 2)
+
+
+def features(s: Situation) -> np.ndarray:
+    """What the network is told of each segment's situation, float32 [S, AGES x 3 + 9]: the share of its
+    people at each age; the year before's hours a day of work (at its livelihood) and of childcare at each
+    age, / 10; and, as numbers of about 1: how many people (log), whether they farm, are settled or are
+    moving, the share of last year's food need met, the most their tile yields by their livelihood (log),
+    their food target as a share of that, their share of the people on the tile, and an hour's yield
+    while labor is light / 1000."""
+    n = len(s.people)
+    total = s.people.sum(axis=1)
+    shares = np.divide(s.people, total[:, None], out=np.zeros(s.people.shape), where=total[:, None] > 0)
+    farming = s.livelihood == ACTIVITIES.index("farming")
+    top = np.where(farming, s.farm_max, s.forage_max)
+    work = s.hours[np.arange(n), :, s.livelihood] / 10
+    care = s.hours[:, :, ACTIVITIES.index("childcare")] / 10
+    scalars = np.stack([np.log1p(total) / 10, farming, s.settled, s.moving, s.food_met, np.log1p(top) / 25,
+                        np.clip(np.divide(s.food_target, top, out=np.zeros(n), where=top > 0), 0, 5),
+                        np.clip(np.divide(total, s.tile_people, out=np.zeros(n), where=s.tile_people > 0), 0, 1),
+                        s.return_per_hour / 1000], axis=1)
+    return np.concatenate([shares, work, care, scalars], axis=1).astype(np.float32)
+
+
+def load_network(path):
+    """A trained network (abm/train.py's file): {"mean", "std" (of the features it was trained on), "W0",
+    "b0", "W1", "b1", ...}."""
+    with np.load(path) as f:
+        return {k: f[k] for k in f.files}
+
+
+def network_decide(s: Situation, net) -> Decisions:
+    """What the trained network chooses for each segment, as decide() does. Layers are dense, with ReLU
+    between them; each output is softplus(its coefficients . age_curves()). Hours of sleep, work and
+    childcare are scaled down together if they come to more than 24, and the rest is "other"."""
+    n = len(s.people)
+    x = (features(s) - net["mean"]) / net["std"]
+    layers = sum(1 for k in net if k.startswith("W"))
+    for k in range(layers):
+        x = x @ net[f"W{k}"] + net[f"b{k}"]
+        if k < layers - 1:
+            x = np.maximum(x, 0)
+    v = np.logaddexp(0, x.reshape(n, len(OUTPUTS), AGE_CURVES) @ age_curves())    # softplus, [S, OUTPUTS, AGES]
+    sleep, work, care = v[:, 0], v[:, 1], v[:, 2]
+    scale = np.minimum(1, np.divide(24, sleep + work + care, out=np.ones((n, AGES)), where=sleep + work + care > 0))
+    hours = np.zeros((n, AGES, len(ACTIVITIES)))
+    hours[:, :, ACTIVITIES.index("sleep")] = sleep * scale
+    hours[np.arange(n), :, s.livelihood] = work * scale
+    hours[:, :, ACTIVITIES.index("childcare")] = care * scale
+    hours[:, :, ACTIVITIES.index("other")] = np.maximum(24 - hours.sum(axis=2), 0)
+    return Decisions(hours, v[:, 3] * BIRTH_SCALE)

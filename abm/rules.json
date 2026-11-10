@@ -57,13 +57,15 @@
     "gestation_months": 9
   },
   "scenarios": {
-    "about": "How run picks its scenarios: a random tile whose foraging can feed at least min_people_fed (at people_per_kcal_year kcal a person a year), farmed by settled people with chance farming_share, else foraged; a starting population of the tile's capacity for that way of life x a random factor in start_factor, within start_people. Each is lived burn_in_years before record_years are recorded.",
+    "about": "How run picks its scenarios: a random tile whose foraging can feed at least min_people_fed (at people_per_kcal_year kcal a person a year), farmed by settled people with chance farming_share, else foraged; a starting population of the tile's capacity for that way of life x a random factor in start_factor, within start_people. Each is lived burn_in_years before record_years are recorded. While it is recorded, each year its people move to another tile with chance relocate_per_year, one of relocation_tiles chosen with the scenario that its way of life can feed at least min_people_fed on (as if they had migrated or settled elsewhere), so the records include people out of balance with their land.",
     "min_people_fed": 30,
     "kcal_per_person_year": 800000,
     "farming_share": 0.3,
-    "start_factor": [0.3, 1.2],
+    "start_factor": [0.1, 2.0],
     "start_people": [60, 1500],
     "burn_in_years": 60,
-    "record_years": 40
+    "record_years": 40,
+    "relocate_per_year": 0.05,
+    "relocation_tiles": 8
   }
 }

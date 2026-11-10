@@ -30,6 +30,19 @@
     "partners_per_household": 2,
     "min_return": 0.2
   },
+  "learning": {
+    "about": "Social learning. Everyone carries three cultural traits, each within its range: diligence (how much of the work their household plans they actually do, up to their capacity), generosity (scales how much of its surplus their household passes along its links: the mean of its adults') and restraint (practices that space births, multiplying a woman's chance of conceiving; 1 is none). A child starts with its mother's traits, give or take inherit_sd. Once a year each person aged ages[0] to ages[1] compares themselves with another of those ages, within within_years of their own age, at random, and copies that person's traits (give or take inherit_sd) with chance per_year x (how much better the other is doing) / payoff_scale, at most per_year. Doing better means more living children per year of adult life (age - 14, at least 1): survival and children. Everyone starts at start, give or take inherit_sd.",
+    "traits": {
+      "diligence": {"start": 1.0, "range": [0.3, 1.5]},
+      "generosity": {"start": 1.0, "range": [0.0, 2.0]},
+      "restraint": {"start": 1.0, "range": [0.1, 1.0]}
+    },
+    "inherit_sd": 0.1,
+    "within_years": 5,
+    "ages": [15, 60],
+    "per_year": 0.3,
+    "payoff_scale": 0.05
+  },
   "marriage": {
     "about": "Each month, unmarried women aged women_from..women_to and unmarried men aged men_from..men_to are paired at random, and each pair marries with chance per_month (siblings don't). A couple keeps the household of whichever of them has children under 15, else sets up a new one.",
     "women_from": 17, "women_to": 45, "men_from": 18, "men_to": 60, "per_month": 0.05
@@ -50,7 +63,7 @@
     "farming_share": 0.3,
     "start_factor": [0.3, 1.2],
     "start_people": [60, 1500],
-    "burn_in_years": 60,
+    "burn_in_years": 150,
     "record_years": 40
   }
 }

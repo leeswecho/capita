@@ -1,7 +1,8 @@
 """Agent-based model (ABM) of one segment's people: individuals living month by month on one tile under
 the game's own rules, to make training data for the decision model (engine/decisions.py).
 
-    python abm/abm.py run [--scenarios 16] [--seed 1] [--workers N] [--no-sharing] [--out abm/data/run.npz]
+    python abm/abm.py run [--scenarios 16] [--seed 1] [--workers N] [--no-sharing] [--no-learning]
+                          [--burn-in YEARS] [--out abm/data/run.npz]
     python abm/abm.py compare [abm/data/run.npz ...]
 
 The game can't afford to simulate individuals, and a cohort doesn't behave like one person, so this
@@ -27,11 +28,13 @@ The interactions so far (version 1):
   partnerships to households that are short; partnerships that aren't returned end.
 - Marriage pairs people up and forms new households; births and deaths change who is in each, and so
   how many mouths each worker feeds.
-Still to come: social learning (norms that spread by imitation), which will let households weigh
-working against what sharing brings them.
+- Social learning: everyone carries cultural traits (diligence, generosity, restraint in having
+  children), starts with their mother's and copies people doing better, measured by living children
+  per year of adult life. Working less while the pot feeds you, or having fewer children who survive,
+  spreads only if it pays.
 
 `compare` puts the recorded situations to the present placeholder decide() and prints the two side by
-side (and any other runs given, such as one with --no-sharing, beside them).
+side (and any other runs given, such as one with --no-sharing or --no-learning, beside them).
 """
 import argparse
 import json
@@ -54,6 +57,7 @@ from cohort_state import AGES  # noqa: E402
 RULES = os.path.join(HERE, "rules.json")
 DATA = os.path.join(HERE, "data")
 OUT = os.path.join(DATA, "run.npz")
+TRAITS = ["diligence", "generosity", "restraint"]   # cultural traits (rules.json "learning"), columns of Sim.traits
 
 
 def load_rules(path=RULES):
@@ -116,6 +120,11 @@ class Sim:
         self.ga = self.rb = np.zeros(0, dtype=np.int64)
         self.w, self.given = np.zeros(0), np.zeros(0)        # each link's weight, and food given along it this year
         self.pair = np.zeros(0, dtype=np.int64)              # its partnership (an index into partners), -1 for kin
+        lr = arules["learning"]
+        self.learning = sc.get("learning", True)
+        self.trait_lo = np.array([lr["traits"][k]["range"][0] for k in TRAITS])
+        self.trait_hi = np.array([lr["traits"][k]["range"][1] for k in TRAITS])
+        self.trait_start = np.array([lr["traits"][k]["start"] for k in TRAITS])
         self.partners = np.zeros((0, 2), dtype=np.int64)     # partnerships: pairs of households
         names = [p["name"] for p in engine.product_list(erules)]
         self.eat_day = engine.consumption_rates(names, erules)[:, names.index(erules["foraging"]["product"])]
@@ -143,8 +152,10 @@ class Sim:
         self.mother, self.father, self.partner = (np.full(size, -1, dtype=np.int64) for _ in range(3))
         self.preg = np.full(size, -1, dtype=np.int64)         # months pregnant, -1 if not
         self.nursing_until = np.zeros(size, dtype=np.int64)   # month her nursing ends
+        self.traits = np.zeros((size, len(TRAITS)))           # cultural traits, columns in TRAITS order
         years = rng.choice(AGES, size=n, p=engine.starting_age_shares())
-        ids = self._add(n, years * 12 + rng.integers(12, size=n), rng.random(n) < 0.5, np.arange(n), -1, -1)
+        ids = self._add(n, years * 12 + rng.integers(12, size=n), rng.random(n) < 0.5, np.arange(n), -1, -1,
+                        self._vary(np.tile(self.trait_start, (n, 1))))
         age = years
         # Couples, each a household; then children to a mother of a plausible age; the rest alone.
         women = ids[self.female[ids] & (age >= 16) & (age < 45)]
@@ -166,19 +177,26 @@ class Sim:
         self.store = np.zeros(self.n_hh)                      # food each household holds
         self.food = np.ones(self.n_hh)                        # moving average of the share of need met
 
-    def _add(self, k, age_m, female, hh, mother, father):
+    def _add(self, k, age_m, female, hh, mother, father, traits):
         """k new people; returns their ids."""
         if self.n + k > len(self.alive):
             grow = max(self.n + k, 2 * len(self.alive)) - len(self.alive)
-            for name in ("age_m", "female", "alive", "hh", "mother", "father", "partner", "preg", "nursing_until"):
+            for name in ("age_m", "female", "alive", "hh", "mother", "father", "partner", "preg", "nursing_until",
+                         "traits"):
                 a = getattr(self, name)
                 fill = -1 if name in ("mother", "father", "partner", "preg") else 0
-                setattr(self, name, np.concatenate([a, np.full(grow, fill, dtype=a.dtype)]))
+                setattr(self, name, np.concatenate([a, np.full((grow,) + a.shape[1:], fill, dtype=a.dtype)]))
         ids = np.arange(self.n, self.n + k)
         self.age_m[ids], self.female[ids], self.alive[ids], self.hh[ids] = age_m, female, True, hh
         self.mother[ids], self.father[ids], self.partner[ids], self.preg[ids] = mother, father, -1, -1
+        self.traits[ids] = traits
         self.n += k
         return ids
+
+    def _vary(self, traits):
+        """Traits give or take inherit_sd (rules.json "learning"), within their ranges."""
+        sd = self.a["learning"]["inherit_sd"]
+        return np.clip(traits + self.rng.normal(0, sd, traits.shape), self.trait_lo, self.trait_hi)
 
     def _new_household(self, food):
         self.store, self.food = np.append(self.store, 0.0), np.append(self.food, food)
@@ -217,7 +235,8 @@ class Sim:
         spare = np.where(age >= h["care_from_age"], effort - care, 0.0)
         spares = per_hh(spare)
         care = care + spare * np.clip(np.divide(left, spares, out=np.zeros(H), where=spares > 0), 0, 1)[hh]
-        work = effort - care
+        diligence = self.traits[i, TRAITS.index("diligence")]
+        work = np.minimum((effort - care) * diligence, self.cap[b] - care)   # each does their share of the work, or not
 
         # Food: the tile's curve, shared in proportion to hours; each household eats from what it holds.
         labor = work.sum() * days
@@ -225,7 +244,10 @@ class Sim:
         self.rho = made / labor if labor > 0 else self.r
         hours = per_hh(work) * (rng.lognormal(-self.luck ** 2 / 2, self.luck, H) if self.luck > 0 else 1.0)
         made_h = made * hours / hours.sum() if hours.sum() > 0 else np.zeros(H)
-        held, from_others = self._share(self.store + made_h, made_h, need)
+        adult = age >= 15
+        generous = np.divide(per_hh(self.traits[i, TRAITS.index("generosity")] * adult), per_hh(adult.astype(float)),
+                             out=np.ones(H), where=per_hh(adult.astype(float)) > 0)
+        held, from_others = self._share(self.store + made_h, made_h, need, generous)
         eaten = np.minimum(need, held)
         met = np.divide(eaten, need, out=np.ones(H), where=need > 0)
         self.store = (held - eaten) * (1 - h["spoil_per_month"])
@@ -269,9 +291,10 @@ class Sim:
         self.age_m[:self.n][self.alive[:self.n]] += 1
         self.t += 1
 
-    def _share(self, held, made, need):
+    def _share(self, held, made, need, generous):
         """Food passing between households in a month (rules.json "sharing"): the common pot, then along
-        the links. held, made, need: each household's [H]. Returns (what each then holds, how much of that
+        the links. held, made, need: each household's [H]; generous: its adults' mean generosity [H], which
+        scales what it offers along its links. Returns (what each then holds, how much of that
         came from other households)."""
         H = len(held)
         put = self.pot * made
@@ -284,7 +307,7 @@ class Sim:
             lack = np.maximum(need - held, 0)
             want = self.w * lack[self.rb]
             ask = np.bincount(self.ga, weights=want, minlength=H)
-            offer = self.give * surplus[self.ga] * np.divide(want, ask[self.ga], out=np.zeros(len(want)), where=ask[self.ga] > 0)
+            offer = np.minimum(self.give * generous[self.ga], 1) * surplus[self.ga] * np.divide(want, ask[self.ga], out=np.zeros(len(want)), where=ask[self.ga] > 0)
             offered = np.bincount(self.rb, weights=offer, minlength=H)
             moved = offer * np.clip(np.divide(lack, offered, out=np.zeros(H), where=offered > 0), 0, 1)[self.rb]
             into = np.bincount(self.rb, weights=moved, minlength=H)
@@ -369,7 +392,7 @@ class Sim:
         due = expecting[self.preg[expecting] >= f["gestation_months"]]
         if len(due):
             father = np.where(self.partner[due] >= 0, self.partner[due], -1)
-            self._add(len(due), 0, rng.random(len(due)) < 0.5, self.hh[due], due, father)
+            self._add(len(due), 0, rng.random(len(due)) < 0.5, self.hh[due], due, father, self._vary(self.traits[due]))
             self.preg[due] = -1
             self.nursing_until[due] = self.t + f["nursing_months"]
             if acc is not None:
@@ -382,7 +405,8 @@ class Sim:
         w, age = w[(age >= 15) & (age < 50)], age[(age >= 15) & (age < 50)]
         p = (f["fecundability"] * table(age, f["factor_by_age"])
              * table(self.food[self.hh[w]], f["food_factor_by_share_met"])
-             * np.where(self.nursing_until[w] > self.t, f["lactation_factor"], 1.0))
+             * np.where(self.nursing_until[w] > self.t, f["lactation_factor"], 1.0)
+             * self.traits[w, TRAITS.index("restraint")])
         self.preg[w[rng.random(len(w)) < p]] = 0
 
     def _marriages(self):
@@ -410,6 +434,30 @@ class Sim:
             else:
                 self.hh[wi] = self.hh[mi] = self._new_household((self.food[self.hh[wi]] + self.food[self.hh[mi]]) / 2)
             self.partner[wi], self.partner[mi] = mi, wi
+
+    def _learn(self):
+        """A year's social learning (rules.json "learning"): each person of learning age compares
+        themselves with another of about their age, at random, and copies their traits with a chance that grows with how much
+        better the other is doing (living children per year of adult life)."""
+        lr, rng = self.a["learning"], self.rng
+        i = np.flatnonzero(self.alive[:self.n])
+        age = self.age_m[i] / 12
+        kids = np.zeros(self.n)
+        for parent in (self.mother[i], self.father[i]):
+            np.add.at(kids, parent[parent >= 0], 1)
+        learners = i[(age >= lr["ages"][0]) & (age < lr["ages"][1])]
+        if len(learners) < 2:
+            return
+        order = np.argsort(self.age_m[learners], kind="stable")
+        learners = learners[order]
+        years = self.age_m[learners] / 12
+        payoff = kids[learners] / np.maximum(years - 14, 1)
+        lo = np.searchsorted(years, years - lr["within_years"])          # someone of about their age
+        hi = np.searchsorted(years, years + lr["within_years"], side="right")
+        k = lo + (rng.random(len(learners)) * (hi - lo)).astype(np.int64)
+        better = np.clip((payoff[k] - payoff) / lr["payoff_scale"], 0, 1)
+        copy = (rng.random(len(learners)) < lr["per_year"] * better) & (k != np.arange(len(learners)))
+        self.traits[learners[copy]] = self._vary(self.traits[learners[k[copy]]])
 
     def _rehome_orphans(self):
         """Households left with nobody aged 15 or more join a random household that has someone."""
@@ -441,7 +489,11 @@ class Sim:
         for _ in range(12):
             self.month(acc)
         self._rehome_orphans()
+        if self.learning:
+            self._learn()
         months = acc["months"]
+        j = np.flatnonzero(self.alive[:self.n])
+        adults = j[self.age_m[j] >= 15 * 12]
         hours = np.divide(acc["hours"], months[:, None], out=np.zeros_like(acc["hours"]), where=months[:, None] > 0)
         births = np.divide(acc["births"], months / 12, out=np.zeros(AGES), where=months > 0)
         self.prev_hours = hours
@@ -449,7 +501,8 @@ class Sim:
         row.update(hours=hours, birth_rate=births, food_met_year=self.prev_met, deaths_year=acc["deaths"],
                    born_year=float(acc["births"].sum()), deaths_by_cause=acc["by_cause"],
                    from_others_year=acc["from_others"] / acc["eaten"] if acc["eaten"] > 0 else 0.0,
-                   short_year=acc["short_months"] / months.sum() if months.sum() > 0 else 0.0)
+                   short_year=acc["short_months"] / months.sum() if months.sum() > 0 else 0.0,
+                   traits=self.traits[adults].mean(axis=0) if len(adults) else self.trait_start.copy())
         return row
 
 
@@ -461,11 +514,12 @@ def run_scenario(sc):
     s = arules["scenarios"]
     sim = Sim(sc, arules, erules, demo)
     rows = []
-    for y in range(s["burn_in_years"] + s["record_years"]):
+    burn_in = sc.get("burn_in_years") or s["burn_in_years"]
+    for y in range(burn_in + s["record_years"]):
         row = sim.year()
         if row["tile_people"] == 0:
             break
-        if y >= s["burn_in_years"]:
+        if y >= burn_in:
             rows.append({**row, "scenario": sc["id"], "year": y})
     return sc, rows
 
@@ -483,7 +537,8 @@ def situation(d, rows=slice(None)):
 
 def run(args):
     arules, erules, demo = load_rules(), engine.load_rules(), engine.load_demography()
-    scenarios = [{**sc, "sharing": not args.no_sharing} for sc in pick_scenarios(args.scenarios, args.seed, arules, erules, demo)]
+    scenarios = [{**sc, "sharing": not args.no_sharing, "learning": not args.no_learning,
+                  "burn_in_years": args.burn_in} for sc in pick_scenarios(args.scenarios, args.seed, arules, erules, demo)]
     started, rows = time.time(), []
     with Pool(args.workers) as pool:
         for k, (sc, got) in enumerate(pool.imap_unordered(run_scenario, scenarios), 1):
@@ -510,6 +565,7 @@ def run(args):
         "hours": np.stack([r["hours"] for _, r in rows]),
         "birth_rate": np.stack([r["birth_rate"] for _, r in rows]),
         "deaths_by_cause": np.stack([r["deaths_by_cause"] for _, r in rows]),
+        "traits": np.stack([r["traits"] for _, r in rows]),
     }
     for k in ("food_met", "tile_people", "food_target", "food_met_year", "deaths_year", "born_year",
               "from_others_year", "short_year"):
@@ -518,9 +574,9 @@ def run(args):
     decisions.check(decisions.Decisions(d["hours"], d["birth_rate"]), situation(d))
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     np.savez_compressed(args.out, **out, activities=np.array(ACTIVITIES),
-                        causes=np.array(engine.CAUSES),
+                        causes=np.array(engine.CAUSES), trait_names=np.array(TRAITS),
                         meta=np.array(json.dumps({"scenarios": scenarios, "abm_rules": arules, "seed": args.seed,
-                                                  "sharing": not args.no_sharing})))
+                                                  "sharing": not args.no_sharing, "learning": not args.no_learning})))
     print(f"{len(rows)} recorded years from {len({sc['id'] for sc, _ in rows})} scenarios -> {args.out}")
 
 
@@ -567,6 +623,8 @@ def compare(args):
         line("food need met", lambda d, rows: f"{d['food_met_year'][rows].mean():.1%}")
         line("people in households <80% fed", lambda d, rows: f"{d['short_year'][rows].mean():.1%}")
         line("food from other households", lambda d, rows: f"{d['from_others_year'][rows].mean():.1%}")
+        for k, t in enumerate(TRAITS):
+            line(f"adults' mean {t}", lambda d, rows: f"{d['traits'][rows][:, k].mean():.2f}" if "traits" in d else "-")
 
 
 def main():
@@ -577,6 +635,8 @@ def main():
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--workers", type=int, default=os.cpu_count())
     p.add_argument("--no-sharing", action="store_true", help="no sharing between households (to compare)")
+    p.add_argument("--no-learning", action="store_true", help="no social learning: traits stay as they start")
+    p.add_argument("--burn-in", type=int, help="years to live before recording (default: rules.json's)")
     p.add_argument("--out", default=OUT)
     p = sub.add_parser("compare", help="compare runs' behaviour with the placeholder decide()")
     p.add_argument("files", nargs="*", default=[OUT])

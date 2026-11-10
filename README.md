@@ -148,9 +148,10 @@ engine.py init / step ─────────────┘
   each (`engine/visibility.json`). Leader types are in `engine/leaders.json`.
 - **The people's decisions** go through one interface, `engine/decisions.py`: each year the engine
   tells each segment's people their situation and `decide()` returns how many hours a day each age
-  spends on each activity and their birth rates. For now `decide()` is a placeholder (working the
-  share of fixed schedules by way of life that should make their own food, and the birth rates above);
-  a decision model, such as a trained network, will replace it there.
+  spends on each activity and their birth rates. The game uses a small network trained on the
+  agent-based model's records (`abm/`), as `engine/decisions.json` says; switching it to `placeholder`
+  uses `decide()` instead, which works the share of fixed schedules by way of life that should make
+  their own food and has children at the birth rates above.
 
 ## Data
 

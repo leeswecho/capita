@@ -1,0 +1,5 @@
+{
+  "about": "Which decision model chooses what each segment's people do each year (decisions.py), read by engine.py on every step; a copy goes into each turn's manifest, with the SHA-256 of the network's file. 'network': the trained network in the file 'network' (next to this file), made by abm/train.py from the agent-based model's records and run by decisions.network_decide(). 'placeholder': decisions.decide(), fixed schedules by way of life and demography.json's birth rates. Replays with the network reproduce exactly only on the same machine and NumPy (matrix products may round differently elsewhere).",
+  "model": "network",
+  "network": "decision_net.npz"
+}

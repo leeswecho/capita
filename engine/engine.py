@@ -36,7 +36,8 @@ Then, every year of the turn:
   and the pace in movement.json, along the rest of its step and then the step on to its destination,
   and arrives, stopping there, if that is enough; otherwise it is left partway and goes on next turn. Each segment then lives the year on the tile it counts as being in
   (cohort_state.segment_tile()) where it ends up.
-- Decisions (decisions.py): what each segment's people choose for the year, from their situation there
+- Decisions (decisions.py; decisions.json chooses the trained network or the placeholder): what each
+  segment's people choose for the year, from their situation there
   (observe(), a decisions.Situation, which includes the food it aims to make: its people's need, less
   what it holds): the hours a day each age spends on each activity, and the birth rate by age
   (decisions.decide(), a placeholder for now). The rest of the year carries them out.
@@ -88,6 +89,7 @@ accepts the players' commands, and in "resolving" while the engine computes the 
 opens that one for orders. If a step fails, the turn it was resolving goes back to orders.
 """
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -115,6 +117,7 @@ LEADERS = os.path.join(HERE, "leaders.json")
 MOVEMENT = os.path.join(HERE, "movement.json")
 VISIBILITY = os.path.join(HERE, "visibility.json")
 TIME = os.path.join(HERE, "time.json")
+DECISIONS = os.path.join(HERE, "decisions.json")
 MAP = os.path.join(SERVER, "world_map.json")
 
 def starting_age_shares():
@@ -400,6 +403,26 @@ def load_time(path=TIME):
     if not isinstance(n, int) or isinstance(n, bool) or n < 1:
         sys.exit(f"{os.path.basename(path)}: years_per_turn must be a whole number of at least 1")
     return rules
+
+
+def load_decision_model(path=DECISIONS):
+    """decisions.json: which decision model chooses. Returns (the rules, the trained network or None for
+    the placeholder, the SHA-256 of the network's file or None)."""
+    with open(path, encoding="utf-8") as f:
+        rules = json.load(f)
+    if rules.get("model") not in ("network", "placeholder"):
+        sys.exit(f"{os.path.basename(path)}: model must be 'network' or 'placeholder'")
+    if rules["model"] == "placeholder":
+        return rules, None, None
+    net_path = os.path.join(os.path.dirname(path), rules["network"])
+    with open(net_path, "rb") as f:
+        digest = hashlib.sha256(f.read()).hexdigest()
+    return rules, decisions.load_network(net_path), digest
+
+
+def decision_extra(rules, digest):
+    return {"decision_rules_source": os.path.relpath(DECISIONS, REPO).replace(os.sep, "/"), "decision_rules": rules,
+            **({"decision_network_sha256": digest} if digest else {})}
 
 
 def time_extra(rules):
@@ -835,7 +858,7 @@ def observe(year, people, leaders, lrules, settled, moving, food_met, hours, til
                                tile_people=tile_people, food_target=food_target, return_per_hour=rate)
 
 
-def live_year(year, s, leaders, world, rules, lrules, demo, mrules, vrules, n_rows):
+def live_year(year, s, leaders, world, rules, lrules, demo, mrules, vrules, n_rows, net=None):
     """One year of the world, after the turn's orders: movement, the people's decisions, production,
     consumption, decay, births, deaths, ageing, ownership and visibility. Every rate in the rule files
     and every decision is a rate per year, so a turn of N years (time.json) is N calls of this, each
@@ -845,7 +868,8 @@ def live_year(year, s, leaders, world, rules, lrules, demo, mrules, vrules, n_ro
     "progress", "destination" [S], "people" float64 [S, AGES], "hours" (the year before's, which set how
     far segments travel this year), "food_met" (the share of the year before's food need met) [S],
     "stock" [S, P], "owner" [grid.COUNT], "explored" (packed bits)}. leaders: one record per row; n_rows:
-    rows of the visibility arrays. Returns the start of the next year in the same form, plus what
+    rows of the visibility arrays; net: the trained decision network, or None for the placeholder decide()
+    (load_decision_model()). Returns the start of the next year in the same form, plus what
     happened during this one: "tiles", "visible", "arrived" (segments that reached their destination),
     "born" [S], "deaths" [S, C] and the economy's "production", "labor", "production_max", "need",
     "consumed", "received", "decay".
@@ -870,7 +894,7 @@ def live_year(year, s, leaders, world, rules, lrules, demo, mrules, vrules, n_ro
     target = np.maximum(need[:, fp] - stock[:, fp], 0)
     situation = observe(year, start_people, leaders, lrules, settled, at != toward, s["food_met"], s["hours"],
                         tiles, forage_max, farm_max, target, rules)
-    chosen = decisions.decide(situation, demo)
+    chosen = decisions.decide(situation, demo) if net is None else decisions.network_decide(situation, net)
     decisions.check(chosen, situation)
     hours = chosen.hours.astype(np.float32)
     # Production and consumption, by the year's people (with any settling parties split off) before
@@ -923,6 +947,7 @@ def step_locked(args):
                 sys.exit(f"the state's activities {cur.activities} aren't the engine's {ACTIVITIES}; start a new state")
             world = read_map(MAP)
             mrules, demo, vrules, trules = load_movement(), load_demography(), load_visibility(), load_time()
+            drules, net, net_digest = load_decision_model()
             years = trules["years_per_turn"]
             # The turn's orders, once, at its start; then its years, one after another.
             commands = orders.read_turn(args.state, cur.turn)
@@ -935,7 +960,7 @@ def step_locked(args):
             first = cur.manifest.get("year", cur.turn)
             born, died, arrived = 0.0, np.zeros(len(CAUSES)), 0
             for k in range(years):
-                y = live_year(first + k, y, leaders, world, rules, lrules, demo, mrules, vrules, len(cur.nations) + 1)
+                y = live_year(first + k, y, leaders, world, rules, lrules, demo, mrules, vrules, len(cur.nations) + 1, net)
                 born, died, arrived = born + y["born"].sum(), died + y["deaths"].sum(axis=0), arrived + y["arrived"]
             # The turn keeps its last year's figures.
             economy = {k: y[k] for k in ("production", "labor", "production_max", "need", "consumed", "received",
@@ -948,6 +973,7 @@ def step_locked(args):
                               extra={**extra, "year": first + years, "years": years,
                                      **economy_extra(rules), **demography_extra(demo), **leaders_extra(lrules),
                                      **movement_extra(mrules), **visibility_extra(vrules), **time_extra(trules),
+                                     **decision_extra(drules, net_digest),
                                      "orders": {"turn": cur.turn, "applied": applied, "rejected": rejected}})
         except BaseException:
             cs.write_phase(args.state, ptr["turn"], cs.ORDERS)   # no new turn was written; reopen this one

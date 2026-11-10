@@ -279,6 +279,9 @@ Every record has exactly these keys.
   "leader_rules": { "types": { ... }, "commands": { ... }, "start_type": "chieftain" },
   "movement_rules_source": "engine/movement.json",
   "movement_rules": { "km_per_hour": 2.5, "not_travel_activities": ["sleep", "subsistence", "farming"] },
+  "decision_rules_source": "engine/decisions.json",
+  "decision_rules": { "model": "network", "network": "decision_net.npz" },
+  "decision_network_sha256": "...",
   "visibility_rules_source": "engine/visibility.json",
   "visibility_rules": { "radius_tiles": 1 },
   "time_rules_source": "engine/time.json",
@@ -295,7 +298,10 @@ Every record has exactly these keys.
   is the same for births and deaths (`engine/demography.json`), `leader_rules` for leaders
   (`engine/leaders.json`), `movement_rules` for movement (`engine/movement.json`) and
   `visibility_rules` for visibility (`engine/visibility.json`) and `time_rules` for how long a turn
-  lasts (`engine/time.json`).
+  lasts (`engine/time.json`). `decision_rules` says which decision model chose the people's hours and
+  births (`engine/decisions.json`: the trained network or the placeholder), and
+  `decision_network_sha256` is the SHA-256 of the network's file when it was the network (every turn
+  after 0; a replay with it reproduces exactly only on the same machine and NumPy).
 - `year` is how many years have passed since turn 0 (0 at turn 0), and `years` how many the turn just
   resolved lasted (0 at turn 0). A state written before these existed counts one year per turn.
 - `orders` (every turn after 0) lists the commands of the previous turn that the engine applied to

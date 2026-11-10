@@ -8,7 +8,7 @@ same from the situation alone. Hours are fitted by squared error and births by P
 weighted by how many people it has (a handful of people make noisy figures). A tenth of the scenarios
 are held out; the report compares the network with the ABM and the placeholder decide() on them. The
 weights are saved for decisions.network_decide(), which runs them with NumPy alone, and checked against
-it.
+it. To use them in the game, copy the file to engine/decision_net.npz (engine/decisions.json names it).
 """
 import argparse
 import os
@@ -129,7 +129,7 @@ def main():
     held = np.random.default_rng(args.seed).choice(scenarios, size=max(1, len(scenarios) // 10), replace=False)
     test = np.flatnonzero(np.isin(d["scenario"], held))
     train = np.flatnonzero(~np.isin(d["scenario"], held))
-    mean, std = x[train].mean(axis=0), np.maximum(x[train].std(axis=0), 1e-3)
+    mean, std = x[train].mean(axis=0), np.maximum(x[train].std(axis=0), 0.02)   # no tiny variation blown up
     print(f"{len(d['people'])} recorded years from {len(scenarios)} scenarios: {len(train)} to train on, "
           f"{len(test)} held out ({len(held)} scenarios); {x.shape[1]} features; on {device}")
 

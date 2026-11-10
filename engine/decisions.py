@@ -25,7 +25,8 @@ Segments don't feed each other: each aims at its own food target, which for now 
 leader's command (to produce for everyone on the tile, say) will raise the target; that is where food
 for settling parties and other segments will come from.
 
-The present decide() is a placeholder: people work the hours that should meet their food target on
+The game uses the trained network (network_decide(), below) or this placeholder, as decisions.json
+says. The present decide() is a placeholder: people work the hours that should meet their food target on
 their tile's curve, up to fixed schedules by age for each livelihood (starting_hours(),
 farming_hours()), and have children at demography.json's birth rates by age, more for settled
 segments. It ignores the rest of what it is told.
@@ -159,8 +160,8 @@ def check(d: Decisions, s: Situation):
 
 
 # The trained decision model: a small network that learns, from the agent-based model's records
-# (abm/abm.py, abm/train.py), what a segment's people do in a situation. It isn't used by the game
-# yet. features() is what it is told, as numbers; it gives, for each segment, coefficients of
+# (abm/abm.py, abm/train.py), what a segment's people do in a situation. The game uses it instead of
+# decide() when decisions.json says so. features() is what it is told, as numbers; it gives, for each segment, coefficients of
 # AGE_CURVES smooth curves over age (so its choices change smoothly from one age to the next) for each
 # of OUTPUTS; network_decide() runs it with nothing but NumPy.
 
@@ -178,9 +179,10 @@ def age_curves():
 
 
 def features(s: Situation) -> np.ndarray:
-    """What the network is told of each segment's situation, float32 [S, AGES x 3 + 9]: the share of its
-    people at each age; the year before's hours a day of work (at its livelihood) and of childcare at each
-    age, / 10; and, as numbers of about 1: how many people (log), whether they farm, are settled or are
+    """What the network is told of each segment's situation, float32 [S, AGES + 2 x AGE_CURVES + 9]: the
+    share of its people at each age; the year before's hours a day of work (at its livelihood) and of
+    childcare, / 10, each averaged over each of the age curves, weighted by the curve and the people at
+    each age (so ages with nobody in them don't count); and, as numbers of about 1: how many people (log), whether they farm, are settled or are
     moving, the share of last year's food need met, the most their tile yields by their livelihood (log),
     their food target as a share of that, their share of the people on the tile, and an hour's yield
     while labor is light / 1000."""
@@ -189,8 +191,13 @@ def features(s: Situation) -> np.ndarray:
     shares = np.divide(s.people, total[:, None], out=np.zeros(s.people.shape), where=total[:, None] > 0)
     farming = s.livelihood == ACTIVITIES.index("farming")
     top = np.where(farming, s.farm_max, s.forage_max)
-    work = s.hours[np.arange(n), :, s.livelihood] / 10
-    care = s.hours[:, :, ACTIVITIES.index("childcare")] / 10
+    curves = age_curves()
+    weight = s.people[:, None, :] * curves[None, :, :]                                # [S, AGE_CURVES, AGES]
+    held = weight.sum(axis=2)
+    by_curve = lambda h: np.divide((weight * h[:, None, :]).sum(axis=2), held, out=np.zeros(held.shape),
+                                   where=held > 0) / 10
+    work = by_curve(s.hours[np.arange(n), :, s.livelihood])
+    care = by_curve(s.hours[:, :, ACTIVITIES.index("childcare")])
     scalars = np.stack([np.log1p(total) / 10, farming, s.settled, s.moving, s.food_met, np.log1p(top) / 25,
                         np.clip(np.divide(s.food_target, top, out=np.zeros(n), where=top > 0), 0, 5),
                         np.clip(np.divide(total, s.tile_people, out=np.zeros(n), where=s.tile_people > 0), 0, 1),

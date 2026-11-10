@@ -656,14 +656,15 @@ def childcare_shortfall(people, hours, activities, spec):
 
 
 def death_hazards(cause, x, work_risk, food_met, care_short, infection, demo):
-    """One cause's yearly hazard, broadcastable to [S, K], for exact ages x [K].
+    """One cause's yearly hazard, broadcastable to [S, K], for exact ages x [K] (the same for every row),
+    or x [S, K] (each row's own: the ABM's individuals, one a row).
 
     work_risk: [S, K] the predation and accidents hazard of a day's work at those ages (each activity's
     hours a day x its hazard per hour, added up); food_met: [S] share of food need met in the year;
     care_short: [S] childcare shortfall; infection: [S] terrain factor.
     """
     d = demo["deaths"][cause]
-    x = x[None, :]
+    x = x[None, :] if np.ndim(x) == 1 else x
     if cause == "starvation":
         vulnerable = np.where((x < d["vulnerable_under_age"]) | (x >= d["vulnerable_over_age"]), d["vulnerable_factor"], 1.0)
         return interp_table(food_met, d["hazard_by_share_of_need_met"])[:, None] * vulnerable

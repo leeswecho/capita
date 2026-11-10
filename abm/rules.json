@@ -1,0 +1,43 @@
+{
+  "about": "The agent-based model's own rules (abm.py), for the biology and behaviour of individual people. The physics it shares with the game (food yields, consumption, causes of death, childcare needs) come from the engine's rule files instead, so the ABM's people live under exactly the game's rules. Ages are in years; hours are per person per day.",
+  "days_per_month": 30.4375,
+  "sleep": {
+    "about": "Hours of sleep a day by age, as in the engine's placeholder schedules: about 14 h for babies, falling to about 7.4 h by 20 and rising slowly to 8.5 h at 100: base + infant x exp(-age / infant_years) + per_year x age.",
+    "base": 7.0, "infant": 7.0, "infant_years": 5, "per_year": 0.015
+  },
+  "capacity": {
+    "about": "The most hours a day a person can give to work and childcare together, by age: max_hours x the factor, filled in linearly between [age, factor] points. Children start helping around 5 and reach full strength by 18; it fades with old age.",
+    "max_hours": 10,
+    "factor_by_age": [[0, 0], [5, 0], [10, 0.3], [15, 0.8], [18, 1.0], [50, 1.0], [65, 0.7], [80, 0.35], [100, 0.1]]
+  },
+  "household": {
+    "about": "Each month a household works for its members' food for the month plus a buffer of buffer_months of it, less what it holds, at the food per hour the tile yielded last month (at first, its return while labor is light). Everyone gives the same share of their capacity, enough for that and for the household's childcare, or all of it. A child under nursing_months is cared for by its mother first; the rest of the childcare is shared among members aged care_from_age or more, in proportion to their spare effort. Food held loses spoil_per_month a month. A household's food security is a moving average of the share of need it met, over about memory_months.",
+    "buffer_months": 0.25,
+    "spoil_per_month": 0.3,
+    "care_from_age": 10,
+    "memory_months": 12
+  },
+  "marriage": {
+    "about": "Each month, unmarried women aged women_from..women_to and unmarried men aged men_from..men_to are paired at random, and each pair marries with chance per_month (siblings don't). A couple keeps the household of whichever of them has children under 15, else sets up a new one.",
+    "women_from": 17, "women_to": 45, "men_from": 18, "men_to": 60, "per_month": 0.05
+  },
+  "fertility": {
+    "about": "A married woman who isn't pregnant conceives in a month with chance fecundability x her age's factor x her household's food factor x lactation_factor while she nurses a child younger than nursing_months (breastfeeding suppresses ovulation; if the child dies, it ends). Factors are filled in linearly between [x, factor] points; the age factors follow Coale and Trussell's natural-fertility schedule, relative to ages 20-24. A pregnancy lasts gestation_months. Each birth counts half to each parent's age (the mother's twice if there is no father), as demography.json's rates do.",
+    "fecundability": 0.15,
+    "factor_by_age": [[15, 0.3], [20, 1.0], [25, 0.94], [30, 0.86], [35, 0.7], [40, 0.36], [45, 0.05], [50, 0]],
+    "food_factor_by_share_met": [[0.5, 0.2], [0.8, 0.7], [1.0, 1.0]],
+    "nursing_months": 36,
+    "lactation_factor": 0.05,
+    "gestation_months": 9
+  },
+  "scenarios": {
+    "about": "How run picks its scenarios: a random tile whose foraging can feed at least min_people_fed (at people_per_kcal_year kcal a person a year), farmed by settled people with chance farming_share, else foraged; a starting population of the tile's capacity for that way of life x a random factor in start_factor, within start_people. Each is lived burn_in_years before record_years are recorded.",
+    "min_people_fed": 30,
+    "kcal_per_person_year": 800000,
+    "farming_share": 0.3,
+    "start_factor": [0.3, 1.2],
+    "start_people": [60, 1500],
+    "burn_in_years": 60,
+    "record_years": 40
+  }
+}

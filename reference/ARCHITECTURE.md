@@ -54,8 +54,8 @@ The server does no rendering. It hands the browser compact data, and the browser
 | `convert_map.py` | Converts `world_map.yaml` → `world_map.json`, and verifies the result. Also defines the JSON format id and the `MapColumns` reader the server uses. |
 | `convert_population.py` | Converts `world_population.yaml` → `world_population_current.json` (the full modern world, prototype data), and verifies the result. Also defines the columnar format id the server checks and the loader other scripts use. |
 | `../engine/engine.py` | The turn engine, in its own directory and run as its own process: `init` writes turn 0 of the cohort state, `step` advances it a turn at a time (`engine/time.json` sets how many years a turn lasts), `verify` checks the current turn's checksum (§4.6). It imports `cohort_state.py`, `grid.py` and `convert_map.py` from `server/` (it reads `world_map.json` for production), and by default uses the top-level `state/` folder and `server/world_population_start.json` with its nation seed. |
-| `../engine/decisions.py` | The decision model's interface: what each segment's people are told of their situation each year (`Situation`), what they choose (`Decisions`: the most hours a day each age gives each activity, and birth rates by age), `decide()`, which chooses, and `check()`, which makes sure the choices are usable. `decide()` is a placeholder for now (fixed schedules by livelihood and `demography.json`'s birth rates), and the activity list and schedules live here. |
-| `../engine/economy.json` | The economy rules the engine reads on every step: the products (food, in kcal) with their decay rates, the foraging and farming models' yields and factors, and a description of how segments on a tile share food (`sharing`, which holds only its `about`: the rule itself is `allocate()` in `engine.py`). |
+| `../engine/decisions.py` | The decision model's interface: what each segment's people are told of their situation each year (`Situation`), what they choose (`Decisions`: the hours a day each age spends on each activity, and birth rates by age), `decide()`, which chooses, and `check()`, which makes sure the choices are usable. `decide()` is a placeholder for now (the share of fixed schedules by livelihood that should make the food target, and `demography.json`'s birth rates), and the activity list and schedules live here. |
+| `../engine/economy.json` | The economy rules the engine reads on every step: the products (food, in kcal) with their decay rates, the foraging and farming models' yields and factors, and a description of how segments on a tile share food (`sharing`, which holds only its `about`: the rule itself is `produce()` in `engine.py`). |
 | `../engine/demography.json` | The demography rules the engine reads on every step: birth rates by age, settled segments' factors, and each cause of death's rule and values. |
 | `../engine/movement.json` | The movement rules the engine reads on every step: walking pace, and which activities' hours aren't free for travel. |
 | `../engine/visibility.json` | The visibility rules the engine reads on every step: how many tiles around its people a nation sees (1: the tile and the 8 around it). |
@@ -302,14 +302,13 @@ server.py ◄── memory-maps the arrays of the turn current.json names ◄─
   next turn. On foot that is several thousand km a year, so a one-tile move (about 55 km) always
   finishes in the turn. The segment forages, eats and claims tiles where it ends up.
 - **Production.** Each year first works out what it produced, from the current people before
-  they age (`allocate()`). A segment feeds itself by foraging (hunting and gathering) or, if settled,
+  they age (`produce()`), from the hours its people chose. A segment feeds itself by foraging (hunting and gathering) or, if settled,
   farming (farming and herding), each a curve that yields about 1,000 or 1,200 kcal an hour while labor
   is light and levels off at what the tile's land cover, landform, latitude, water and rivers can
   sustain for it (farming's is a Neolithic baseline, far higher per km²); segments working the same
-  curve on a tile share it in proportion to their hours. People work only the hours their food needs,
-  up to their schedule's. A nation's farmers on a tile farm for all of that nation's segments there and
-  give what they don't need to the others; then the foragers, of every nation, work the land the farms
-  leave. Different nations never share food. People then consume each product at a daily rate per person that depends on age; a segment
+  curve on a tile share it in proportion to their hours. Farmers farm first, and the foragers, of every
+  nation, work the land the farms leave. Each segment keeps what it makes, whether or not it is enough:
+  segments don't feed each other (`received.npy` stays 0 until a leader's command provides for it). People then consume each product at a daily rate per person that depends on age; a segment
   with less than its people need cuts everyone's consumption by the same share, and the need and what
   was consumed are stored. What is left loses its decay rate (food: all of it) and the rest carries
   over as the segment's stock. The rules and their values are in
@@ -328,12 +327,14 @@ server.py ◄── memory-maps the arrays of the turn current.json names ◄─
   placeholders in `engine/decisions.py`, to be replaced by a decision model.
 - **Decisions.** Each year, after movement, the engine tells each segment's people their situation
   (`observe()`: their people by age, livelihood, whether they are settled or moving, the share of last
-  year's food need met, last year's hours, their tile's foraging and farming maxima and how many people
-  share it) and `decide()` in `engine/decisions.py` returns their choices: the most hours a day each age
-  will give each activity, and birth rates by age, per year so they don't depend on the turn's length.
+  year's food need met, last year's hours, their tile's foraging and farming curves and how many people
+  share it, and their food target: their need less what they hold, which a leader's command will
+  raise) and `decide()` in `engine/decisions.py` returns their choices: the hours a day each age
+  spends on each activity, and birth rates by age, per year so they don't depend on the turn's length.
   `decide()` sees nothing else and remembers nothing between years, so a trained model can replace it
   without touching the engine; `check()` refuses unusable choices. The engine carries the choices out:
-  `allocate()` works only the hours food needs, up to the chosen ones. Not chosen yet: migration and
+  `produce()` turns the chosen hours of work into food, which may fall short of the target or exceed
+  it. Not chosen yet: migration and
   livelihood (the leader's type sets it).
 - **Turns and years.** A turn lasts `years_per_turn` years (`engine/time.json`; 1 for now). The
   turn's orders are applied once, at its start; then `live_year()` lives each of its years in turn, by

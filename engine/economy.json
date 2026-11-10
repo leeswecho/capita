@@ -74,6 +74,6 @@
     "water_yield_per_km2": 50000
   },
   "sharing": {
-    "about": "How the segments on a tile feed themselves each year (allocate() in engine.py). Each segment first eats from what it holds. Farmers work first: a nation's farmers on a tile farm for the food that all of that nation's segments there still need (as far as their hours allow), keep what they need of it, and give the rest to their nation's other segments there, in proportion to what each still needs. Then every segment that forages works for what it still needs, all of them sharing whatever land the farms leave, whatever their nation. Segments of different nations never share food. People work only the hours their food needs, up to their schedule's hours (starting_hours() and farming_hours() in engine.py); the hours they don't need go to 'other'."
+    "about": "How the segments on a tile feed themselves each year (produce() in engine.py). Each segment's people choose the hours they work for food (decide() in decisions.py), aiming at their food target: what they need, less what they hold. Farmers work first, the farmers on a tile, of every nation, sharing the farming curve in proportion to their hours; then the foragers share the foraging curve on whatever land the farms leave. Each segment keeps what it makes, whether it falls short of its need or not: segments don't feed each other. A leader's command (to produce for everyone on the tile, say) will raise a segment's target and pass food to others."
   }
 }

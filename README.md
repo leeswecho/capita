@@ -134,8 +134,9 @@ engine.py init / step ─────────────┘
   segment for good: it farms instead of foraging, can't move, has more children and more infection, and
   nobody else, not even another of your own leaders, can settle its tile. Kings and lords can send out settling parties, which settle in turn. Each segment's people forage or farm for food (kcal),
   with returns that level off at what their tile's terrain can sustain for each, shared among the
-  segments there, and they work only the hours their food needs. Farmers feed their nation's other
-  segments on the tile with what they don't need; foragers work the land the farms leave. People eat according to
+  segments there, and they work the hours they reckon their own food needs. Foragers work the land the
+  farms leave. Each segment keeps what it makes, so a settling party on its king's tile has to feed
+  itself; a leader's command to provide for others is still to come. People eat according to
   their age, everyone in a segment eating less when it hasn't enough, and food that isn't eaten decays
   completely. The rules and their
   values are in `engine/economy.json`. Children are born at a placeholder rate by age
@@ -146,9 +147,9 @@ engine.py init / step ─────────────┘
   each (`engine/visibility.json`). Leader types are in `engine/leaders.json`.
 - **The people's decisions** go through one interface, `engine/decisions.py`: each year the engine
   tells each segment's people their situation and `decide()` returns how many hours a day each age
-  will give each activity and their birth rates. For now `decide()` is a placeholder (fixed schedules
-  by way of life, and the birth rates above); a decision model, such as a trained network, will
-  replace it there.
+  spends on each activity and their birth rates. For now `decide()` is a placeholder (working the
+  share of fixed schedules by way of life that should make their own food, and the birth rates above);
+  a decision model, such as a trained network, will replace it there.
 
 ## Data
 

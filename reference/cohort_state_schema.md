@@ -126,7 +126,7 @@ is the number of products. A tile is named by its flat grid index: `row * 720 + 
 | `production_max.npy` | `<f8` (float64) | `[S, P]` | The most the segment's tile could produce of each product in a year by the segment's activity (farming, or foraging on the land the farms leave): production levels off here however much labor goes in. **Shared** by every segment on the tile that does the same, so add it up once per tile and activity, not per segment. |
 | `need.npy` | `<f8` (float64) | `[S, P]` | How much of each product the segment's people needed that year: people × the per-person daily amount for their age × 365. 0 for products nobody consumes. |
 | `consumed.npy` | `<f8` (float64) | `[S, P]` | How much they actually consumed: the need, or all the segment held if that was less. A shortfall is shared evenly, so people of every age consumed `consumed / need` of their need. |
-| `received.npy` | `<f8` (float64) | `[S, P]` | How much of each product other segments gave the segment that year, less what it gave them (negative for a giver). The segment held its stock + production + received. |
+| `received.npy` | `<f8` (float64) | `[S, P]` | How much of each product other segments gave the segment that year, less what it gave them (negative for a giver). Always 0 for now: segments don't feed each other until a leader's command provides for it. The segment held its stock + production + received. |
 | `decay.npy` | `<f4` (float32) | `[S, P]` | The share of the segment's holdings of each product lost at the end of that year, 0–1. Per segment, so that future rules can change it locally. |
 | `stock.npy` | `<f8` (float64) | `[S, P]` | How much of each product the segment holds at the start of this turn, after decay. Holdings belong to the segment and travel with it. |
 | `deaths.npy` | `<f8` (float64) | `[S, C]` | How many people of the segment died of each cause in the **year that ended with this turn**, newborns included; `C` is the number of causes, in `manifest.causes` order. Fractions are allowed: people die in fractions, even below one. All zeros at turn 0. |
@@ -424,17 +424,17 @@ from what the engine tells them of their situation): for now rough smooth curves
 itself (its leader type's `activity`). Foragers (`starting_hours()`, also turn 0's hours) start
 `subsistence` work around age 10, peaking at 8.5 hours a day in adulthood; farmers (`farming_hours()`)
 start `farming` around 7, peak at about 9.5 hours and keep working longer. Babies sleep more, and
-childcare peaks around age 30. A schedule's hours of work are the most people give: they work only
-what their food needs (below), and the hours they don't need go to `other`.
+childcare peaks around age 30. A schedule's hours of work are the most people give: they work the
+share of them that should make their food target (below), and the hours they don't work go to `other`.
 
-**Production, before ageing** (`allocate()`): the year that is ending is worked by the current turn's
+**Production, before ageing** (`produce()`): the year that is ending is worked by the current turn's
 people, so production is computed before they age, and stored in the new turn. The rules and all their
 values are in `engine/economy.json`, which the engine reads on every step. For now the only product is
 **food**, in kcal, made by **foraging** (hunting and gathering, the `subsistence` activity) or
 **farming** (farming and herding as one activity, `farming`), whichever the segment's leader type has.
 
-- Labor `H` is a year's person-hours of the activity: people × hours a day × 365, summed over ages. Its
-  most is what the segment's schedule allows.
+- Labor `H` is a year's person-hours of the activity: people × the hours a day they chose × 365,
+  summed over ages.
 - Each activity on a tile has a curve, `max × (1 − e^(−r·H / max))`, where `H` is the labor of every
   segment working it there. While labor is light, each hour yields about `r` kcal (`return_per_hour`:
   1,000 foraging, 1,200 farming). As labor approaches what the tile can sustain, extra hours yield less,
@@ -449,14 +449,14 @@ values are in `engine/economy.json`, which the engine reads on every step. For n
   landform factor (hills 0.6, mountains 0.2), plus 2 million kcal per km² of the whole tile if a
   navigable river runs through it, all × a climate factor (1 to 40° latitude, 0.05 at 65°), plus the
   same fishing as foragers. `yield_modifiers()` is where technology will raise both.
-- People work only the hours their food needs. Each segment first counts what it holds. On each tile,
-  a nation's farmers farm for what all of that nation's segments there still need, as far as their hours
-  allow; they keep what they need and give the rest to the others in proportion to their needs
-  (`received.npy`). Then every forager there works for what it still needs, all of them, of every
-  nation, sharing the foraging curve on the land the farms leave: foraging's `max` × (1 − the share of
-  farming's `max` produced). Segments of different nations never share food. The labor each segment
-  needs is found by bisection on the curve's average return per hour, since that falls as the labor on
-  it rises. The hours of work they don't need go to `other` in `hours.npy`.
+- The hours are the people's choice (`decide()` in `engine/decisions.py`), aiming at their **food
+  target**: their need less what they hold. For now the placeholder reckons on a share of its tile's
+  curve in proportion to its people and inverts it, `H = −(max / r)·ln(1 − target / max)`, up to its
+  schedule's hours; that is exact when everyone on the tile lives the same way. On each tile the farmers
+  farm first; then the foragers, of every nation, share the foraging curve on the land the farms leave:
+  foraging's `max` × (1 − the share of farming's `max` produced). Each segment keeps what it makes,
+  short of its need or beyond it. Segments don't feed each other (`received.npy` is 0); a leader's
+  command to produce for others, raising their target, is still to come.
 
 **Consumption** (`consume()`): the same people (before ageing) consume each product listed under
 `consumption` in `economy.json`. Each product has a table of `[age, amount per person per day]` points,

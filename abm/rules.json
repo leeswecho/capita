@@ -17,6 +17,19 @@
     "care_from_age": 10,
     "memory_months": 12
   },
+  "luck": {
+    "about": "Each month each household's share of the tile's food is its share of the hours worked there x a random factor (lognormal, mean 1, sd_log for its way of life), normalised so the tile still makes exactly what the game's yield curve says. Hunting is a gamble, farming much less so.",
+    "sd_log": {"subsistence": 0.8, "farming": 0.3}
+  },
+  "sharing": {
+    "about": "How food moves between a segment's households each month, after it is made and before it is eaten, for each way of life. First a common pot: every household puts in pot of what it made, and the pot is shared out in proportion to need (foragers' big game goes to the whole camp). Then along links: a household holding more than its need plus buffer offers give of the excess to its linked households that are short, in proportion to the link's weight x how short each is, and nobody receives more than it lacks. Links are rebuilt every year: kin (weight kin_weight: households holding a person's parent or child, sibling, or grandparent or grandchild) and partners, partners_per_household non-kin households chosen at random (weight partner_weight). A partnership ends when, over a year in which food passed along it, one side gave back less than min_return of what it got.",
+    "pot": {"subsistence": 0.3, "farming": 0.05},
+    "give": {"subsistence": 0.5, "farming": 0.3},
+    "kin_weight": {"parent_child": 0.5, "sibling": 0.5, "grandparent": 0.25},
+    "partner_weight": 0.25,
+    "partners_per_household": 2,
+    "min_return": 0.2
+  },
   "marriage": {
     "about": "Each month, unmarried women aged women_from..women_to and unmarried men aged men_from..men_to are paired at random, and each pair marries with chance per_month (siblings don't). A couple keeps the household of whichever of them has children under 15, else sets up a new one.",
     "women_from": 17, "women_to": 45, "men_from": 18, "men_to": 60, "per_month": 0.05

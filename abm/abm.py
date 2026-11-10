@@ -1,8 +1,8 @@
 """Agent-based model (ABM) of one segment's people: individuals living month by month on one tile under
 the game's own rules, to make training data for the decision model (engine/decisions.py).
 
-    python abm/abm.py run [--scenarios 16] [--seed 1] [--workers N] [--out abm/data/run.npz]
-    python abm/abm.py compare [abm/data/run.npz]
+    python abm/abm.py run [--scenarios 16] [--seed 1] [--workers N] [--no-sharing] [--out abm/data/run.npz]
+    python abm/abm.py compare [abm/data/run.npz ...]
 
 The game can't afford to simulate individuals, and a cohort doesn't behave like one person, so this
 runs offline. Each scenario (a tile, a way of life and a starting population) is lived for
@@ -22,12 +22,16 @@ The interactions so far (version 1):
   and households plan on what the tile yielded the month before.
 - Households pool their food, their labour and their childcare: everyone gives the same share of their
   capacity, a nursing child is cared for by its mother first, and food security is the household's.
+- Luck: each household's take from the tile varies from month to month, foraging far more than farming.
+- Sharing between households: a common pot shared out by need, then food passed along kin ties and
+  partnerships to households that are short; partnerships that aren't returned end.
 - Marriage pairs people up and forms new households; births and deaths change who is in each, and so
   how many mouths each worker feeds.
-Still to come: sharing beyond the household, and social learning (norms that spread by imitation).
+Still to come: social learning (norms that spread by imitation), which will let households weigh
+working against what sharing brings them.
 
 `compare` puts the recorded situations to the present placeholder decide() and prints the two side by
-side, as a first check that the pipeline holds together.
+side (and any other runs given, such as one with --no-sharing, beside them).
 """
 import argparse
 import json
@@ -103,6 +107,16 @@ class Sim:
         self.work_hazard = demo["deaths"]["predation_and_accidents"]["hazard_per_hour"][live["activity"]]
         self.infection = sc["infection"]
         self.infection_factor = demo["settled"]["infection_factor"] if sc["farming"] else 1.0
+        self.luck = arules["luck"]["sd_log"][live["activity"]]
+        sh = arules["sharing"]
+        on = sc.get("sharing", True)
+        self.pot = sh["pot"][live["activity"]] if on else 0.0
+        self.give = sh["give"][live["activity"]] if on else 0.0
+        # Sharing links between households (directed: giver, receiver), rebuilt every year (_links()).
+        self.ga = self.rb = np.zeros(0, dtype=np.int64)
+        self.w, self.given = np.zeros(0), np.zeros(0)        # each link's weight, and food given along it this year
+        self.pair = np.zeros(0, dtype=np.int64)              # its partnership (an index into partners), -1 for kin
+        self.partners = np.zeros((0, 2), dtype=np.int64)     # partnerships: pairs of households
         names = [p["name"] for p in engine.product_list(erules)]
         self.eat_day = engine.consumption_rates(names, erules)[:, names.index(erules["foraging"]["product"])]
         ages = np.arange(AGES, dtype=np.float64)
@@ -209,7 +223,9 @@ class Sim:
         labor = work.sum() * days
         made = self.top * -np.expm1(-self.r * labor / self.top) if self.top > 0 else 0.0
         self.rho = made / labor if labor > 0 else self.r
-        held = self.store + per_hh(work) * days * self.rho
+        hours = per_hh(work) * (rng.lognormal(-self.luck ** 2 / 2, self.luck, H) if self.luck > 0 else 1.0)
+        made_h = made * hours / hours.sum() if hours.sum() > 0 else np.zeros(H)
+        held, from_others = self._share(self.store + made_h, made_h, need)
         eaten = np.minimum(need, held)
         met = np.divide(eaten, need, out=np.ones(H), where=need > 0)
         self.store = (held - eaten) * (1 - h["spoil_per_month"])
@@ -219,11 +235,12 @@ class Sim:
         short = np.clip(1 - np.divide(per_hh(care), care_needed, out=np.ones(H), where=care_needed > 0), 0, 1)
         risk = (work * self.work_hazard)[:, None]
         infection = np.full(len(i), self.infection)
-        total = np.zeros((len(i), 1))
-        for c in engine.CAUSES:
-            hz = engine.death_hazards(c, age[:, None], risk, self.food[hh], short[hh], infection, self.demo)
-            total = total + hz * (self.infection_factor if c == "infection" else 1.0)
-        dies = rng.random(len(i)) < -np.expm1(-total[:, 0] / 12)
+        hz = [engine.death_hazards(c, age[:, None], risk, self.food[hh], short[hh], infection, self.demo)[:, 0]
+              * (self.infection_factor if c == "infection" else 1.0) for c in engine.CAUSES]
+        total = np.zeros(len(i))
+        for h_c in hz:
+            total = total + h_c
+        dies = rng.random(len(i)) < -np.expm1(-total / 12)
 
         if acc is not None:
             other = 24 - self.sleep[b] - work - care
@@ -234,6 +251,9 @@ class Sim:
             acc["need"] += need.sum()
             acc["eaten"] += eaten.sum()
             acc["deaths"] += int(dies.sum())
+            acc["by_cause"] += [np.divide(h_c, total, out=np.zeros(len(i)), where=total > 0)[dies].sum() for h_c in hz]
+            acc["from_others"] += min(from_others.sum(), eaten.sum())
+            acc["short_months"] += int((met[hh] < 0.8).sum())
 
         dead = i[dies]
         self.alive[dead] = False
@@ -248,6 +268,98 @@ class Sim:
         self._marriages()
         self.age_m[:self.n][self.alive[:self.n]] += 1
         self.t += 1
+
+    def _share(self, held, made, need):
+        """Food passing between households in a month (rules.json "sharing"): the common pot, then along
+        the links. held, made, need: each household's [H]. Returns (what each then holds, how much of that
+        came from other households)."""
+        H = len(held)
+        put = self.pot * made
+        pot = put.sum()
+        got = pot * need / need.sum() if need.sum() > 0 else np.zeros(H)
+        held = held - put + got
+        from_others = got * (1 - np.divide(put, pot, out=np.zeros(H), where=pot > 0))
+        if len(self.ga) and self.give > 0:
+            surplus = np.maximum(held - need * (1 + self.a["household"]["buffer_months"]), 0)
+            lack = np.maximum(need - held, 0)
+            want = self.w * lack[self.rb]
+            ask = np.bincount(self.ga, weights=want, minlength=H)
+            offer = self.give * surplus[self.ga] * np.divide(want, ask[self.ga], out=np.zeros(len(want)), where=ask[self.ga] > 0)
+            offered = np.bincount(self.rb, weights=offer, minlength=H)
+            moved = offer * np.clip(np.divide(lack, offered, out=np.zeros(H), where=offered > 0), 0, 1)[self.rb]
+            into = np.bincount(self.rb, weights=moved, minlength=H)
+            held = held - np.bincount(self.ga, weights=moved, minlength=H) + into
+            from_others = from_others + into
+            self.given += moved
+        return held, from_others
+
+    def _links(self):
+        """Rebuild the year's sharing links (rules.json "sharing"): kin between the households of parents
+        and children, siblings, and grandparents and grandchildren; and partnerships, ending those one
+        side didn't return last year and choosing new ones at random up to partners_per_household."""
+        sh, rng = self.a["sharing"], self.rng
+        i = np.flatnonzero(self.alive[:self.n])
+        home = np.full(self.n, -1)
+        home[i] = self.hh[i]
+        at = lambda ids: np.where(ids >= 0, home[np.maximum(ids, 0)], -1)
+        kw = sh["kin_weight"]
+        xs, ys, ws = [], [], []
+        for parent in (self.mother[i], self.father[i]):
+            xs.append(self.hh[i]), ys.append(at(parent)), ws.append(np.full(len(i), kw["parent_child"]))
+            for grand in (self.mother, self.father):
+                g = np.where(parent >= 0, grand[np.maximum(parent, 0)], -1)
+                xs.append(self.hh[i]), ys.append(at(g)), ws.append(np.full(len(i), kw["grandparent"]))
+        mo = self.mother[i]
+        by_mother = {}
+        for m, h in zip(mo[mo >= 0].tolist(), self.hh[i][mo >= 0].tolist()):
+            by_mother.setdefault(m, set()).add(h)
+        sib = [(p, q) for hs in by_mother.values() if len(hs) > 1 for p in hs for q in hs if p < q]
+        if sib:
+            p, q = np.array(sib).T
+            xs.append(p), ys.append(q), ws.append(np.full(len(p), kw["sibling"]))
+        x, y, w = np.concatenate(xs), np.concatenate(ys), np.concatenate(ws)
+        ok = (x >= 0) & (y >= 0) & (x != y)
+        a, b, w = np.minimum(x, y)[ok], np.maximum(x, y)[ok], w[ok]
+        key, inv = np.unique(a * self.n_hh + b, return_inverse=True)
+        kin_w = np.zeros(len(key))
+        np.maximum.at(kin_w, inv, w)
+        kin = np.stack(np.divmod(key, self.n_hh), axis=1)
+
+        # Partnerships: keep those still between living households and returned last year.
+        lived = np.bincount(self.hh[i], minlength=self.n_hh) > 0
+        keep = []
+        if len(self.partners):
+            mine = self.pair >= 0
+            gave = np.zeros((len(self.partners), 2))
+            np.add.at(gave, (self.pair[mine], (self.ga[mine] != self.partners[self.pair[mine], 0]).astype(int)),
+                      self.given[mine])
+            most, least = gave.max(axis=1), gave.min(axis=1)
+            keep = lived[self.partners].all(axis=1) & ~((most > 0) & (least < sh["min_return"] * most))
+        partners = [tuple(pq) for pq in (self.partners[keep] if len(self.partners) else [])]
+        taken = set(partners) | set(map(tuple, kin.tolist()))
+        homes = np.flatnonzero(lived)
+        count = np.bincount(np.array(partners, dtype=np.int64).ravel(), minlength=self.n_hh) if partners \
+            else np.zeros(self.n_hh, dtype=np.int64)
+        if len(homes) > 1:
+            for h in homes[rng.permutation(len(homes))].tolist():
+                for other in rng.choice(homes, size=4 * sh["partners_per_household"]).tolist():
+                    if count[h] >= sh["partners_per_household"]:
+                        break
+                    pq = (min(h, other), max(h, other))
+                    if other != h and pq not in taken and count[other] < sh["partners_per_household"]:
+                        partners.append(pq), taken.add(pq)
+                        count[h] += 1
+                        count[other] += 1
+        self.partners = np.array(partners, dtype=np.int64).reshape(-1, 2)
+
+        pairs = np.concatenate([kin, self.partners])
+        weights = np.concatenate([kin_w, np.full(len(self.partners), sh["partner_weight"])])
+        which = np.concatenate([np.full(len(kin), -1), np.arange(len(self.partners))])
+        self.ga = np.concatenate([pairs[:, 0], pairs[:, 1]])
+        self.rb = np.concatenate([pairs[:, 1], pairs[:, 0]])
+        self.w = np.concatenate([weights, weights])
+        self.pair = np.concatenate([which, which])
+        self.given = np.zeros(len(self.ga))
 
     def _births(self, live, acc):
         f = self.a["fertility"]
@@ -323,7 +435,9 @@ class Sim:
         row = {"people": people, "food_met": self.prev_met, "hours_prev": self.prev_hours.copy(),
                "tile_people": people.sum(), "food_target": max(need - self.store.sum(), 0.0)}
         acc = {"hours": np.zeros((AGES, len(ACTIVITIES))), "months": np.zeros(AGES), "births": np.zeros(AGES),
-               "need": 0.0, "eaten": 0.0, "deaths": 0}
+               "need": 0.0, "eaten": 0.0, "deaths": 0, "by_cause": np.zeros(len(engine.CAUSES)),
+               "from_others": 0.0, "short_months": 0}
+        self._links()
         for _ in range(12):
             self.month(acc)
         self._rehome_orphans()
@@ -333,7 +447,9 @@ class Sim:
         self.prev_hours = hours
         self.prev_met = acc["eaten"] / acc["need"] if acc["need"] > 0 else 1.0
         row.update(hours=hours, birth_rate=births, food_met_year=self.prev_met, deaths_year=acc["deaths"],
-                   born_year=float(acc["births"].sum()))
+                   born_year=float(acc["births"].sum()), deaths_by_cause=acc["by_cause"],
+                   from_others_year=acc["from_others"] / acc["eaten"] if acc["eaten"] > 0 else 0.0,
+                   short_year=acc["short_months"] / months.sum() if months.sum() > 0 else 0.0)
         return row
 
 
@@ -367,7 +483,7 @@ def situation(d, rows=slice(None)):
 
 def run(args):
     arules, erules, demo = load_rules(), engine.load_rules(), engine.load_demography()
-    scenarios = pick_scenarios(args.scenarios, args.seed, arules, erules, demo)
+    scenarios = [{**sc, "sharing": not args.no_sharing} for sc in pick_scenarios(args.scenarios, args.seed, arules, erules, demo)]
     started, rows = time.time(), []
     with Pool(args.workers) as pool:
         for k, (sc, got) in enumerate(pool.imap_unordered(run_scenario, scenarios), 1):
@@ -393,44 +509,64 @@ def run(args):
         "hours_prev": np.stack([r["hours_prev"] for _, r in rows]).astype(np.float32),
         "hours": np.stack([r["hours"] for _, r in rows]),
         "birth_rate": np.stack([r["birth_rate"] for _, r in rows]),
+        "deaths_by_cause": np.stack([r["deaths_by_cause"] for _, r in rows]),
     }
-    for k in ("food_met", "tile_people", "food_target", "food_met_year", "deaths_year", "born_year"):
+    for k in ("food_met", "tile_people", "food_target", "food_met_year", "deaths_year", "born_year",
+              "from_others_year", "short_year"):
         out[k] = col(lambda sc, r: r[k])
     d = out
     decisions.check(decisions.Decisions(d["hours"], d["birth_rate"]), situation(d))
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     np.savez_compressed(args.out, **out, activities=np.array(ACTIVITIES),
-                        meta=np.array(json.dumps({"scenarios": scenarios, "abm_rules": arules, "seed": args.seed})))
+                        causes=np.array(engine.CAUSES),
+                        meta=np.array(json.dumps({"scenarios": scenarios, "abm_rules": arules, "seed": args.seed,
+                                                  "sharing": not args.no_sharing})))
     print(f"{len(rows)} recorded years from {len({sc['id'] for sc, _ in rows})} scenarios -> {args.out}")
 
 
 def compare(args):
-    """Print the ABM's recorded behaviour beside what the placeholder decide() chooses for the same
-    situations, by way of life: hours a day of work and childcare by age group, births, and food."""
-    d = dict(np.load(args.file))
+    """Print the ABM's recorded behaviour in each run given beside what the placeholder decide() chooses
+    for the first run's situations, by way of life: hours a day of work and childcare by age group,
+    births, deaths, and food."""
     demo = engine.load_demography()
-    placeholder = decisions.decide(situation(d), demo)
+    runs = [(os.path.splitext(os.path.basename(f))[0], dict(np.load(f))) for f in args.files]
+    first = runs[0][1]
+    placeholder = decisions.decide(situation(first), demo)
     bands = [("5-14", 5, 15), ("15-49", 15, 50), ("50-64", 50, 65), ("65+", 65, AGES)]
+    causes = list(first["causes"])
     for name, liv in (("foraging", "subsistence"), ("farming", "farming")):
-        rows = d["livelihood"] == ACTIVITIES.index(liv)
-        if not rows.any():
+        col = ACTIVITIES.index(liv)
+        pick = [(label, d, d["livelihood"] == col) for label, d in runs]
+        if not pick[0][2].any():
             continue
-        people = d["people"][rows]
-        print(f"\n{name}: {rows.sum()} recorded years from {len(np.unique(d['scenario'][rows]))} scenarios, "
-              f"{people.sum(axis=1).mean():,.0f} people on average")
-        print(f"  {'':28}{'ABM':>10}{'placeholder':>14}")
-        for label, col in (("work", ACTIVITIES.index(liv)), ("childcare", ACTIVITIES.index("childcare"))):
+        print(f"\n{name}: " + "; ".join(f"{label}: {rows.sum()} recorded years from "
+                                        f"{len(np.unique(d['scenario'][rows]))} scenarios, "
+                                        f"{d['people'][rows].sum(axis=1).mean():,.0f} people on average"
+                                        for label, d, rows in pick))
+        print(f"  {'':32}" + "".join(f"{label:>14}" for label, _, _ in pick) + f"{'placeholder':>14}")
+
+        def line(label, f, ph=None):
+            print(f"  {label:32}" + "".join(f"{f(d, rows):>14}" for _, d, rows in pick)
+                  + (f"{ph:>14}" if ph is not None else ""))
+
+        p_rows = pick[0][2]
+        for label, c in (("work", col), ("childcare", ACTIVITIES.index("childcare"))):
             for band, lo, hi in bands:
-                w = people[:, lo:hi]
-                abm = (d["hours"][rows][:, lo:hi, col] * w).sum() / w.sum()
-                ph = (placeholder.hours[rows][:, lo:hi, col] * w).sum() / w.sum()
-                print(f"  {label + ' h/day, ages ' + band:28}{abm:10.2f}{ph:14.2f}")
-        abm, ph = d["birth_rate"][rows], placeholder.birth_rate[rows]
-        print(f"  {'births per 1,000 a year':28}{1000 * (abm * people).sum() / people.sum():10.1f}"
-              f"{1000 * (ph * people).sum() / people.sum():14.1f}")
-        print(f"  {'children per woman':28}{2 * abm.sum(axis=1).mean():10.1f}{2 * ph.sum(axis=1).mean():14.1f}")
-        print(f"  {'deaths per 1,000 a year':28}{1000 * d['deaths_year'][rows].sum() / people.sum():10.1f}")
-        print(f"  {'food need met':28}{d['food_met_year'][rows].mean():10.1%}")
+                mean = lambda h, d, rows: f"{(h[:, lo:hi, c] * d['people'][rows][:, lo:hi]).sum() / d['people'][rows][:, lo:hi].sum():.2f}"
+                line(f"{label} h/day, ages {band}", lambda d, rows: mean(d["hours"][rows], d, rows),
+                     mean(placeholder.hours[p_rows], first, p_rows))
+        cbr = lambda rate, d, rows: f"{1000 * (rate * d['people'][rows]).sum() / d['people'][rows].sum():.1f}"
+        line("births per 1,000 a year", lambda d, rows: cbr(d["birth_rate"][rows], d, rows),
+             cbr(placeholder.birth_rate[p_rows], first, p_rows))
+        line("children per woman", lambda d, rows: f"{2 * d['birth_rate'][rows].sum(axis=1).mean():.1f}",
+             f"{2 * placeholder.birth_rate[p_rows].sum(axis=1).mean():.1f}")
+        per_k = lambda x, d, rows: f"{1000 * x.sum() / d['people'][rows].sum():.1f}"
+        line("deaths per 1,000 a year", lambda d, rows: per_k(d["deaths_year"][rows], d, rows))
+        for c in ("starvation", "child_mortality"):
+            line(f"  of {c.replace('_', ' ')}", lambda d, rows: per_k(d["deaths_by_cause"][rows][:, causes.index(c)], d, rows))
+        line("food need met", lambda d, rows: f"{d['food_met_year'][rows].mean():.1%}")
+        line("people in households <80% fed", lambda d, rows: f"{d['short_year'][rows].mean():.1%}")
+        line("food from other households", lambda d, rows: f"{d['from_others_year'][rows].mean():.1%}")
 
 
 def main():
@@ -440,9 +576,10 @@ def main():
     p.add_argument("--scenarios", type=int, default=16)
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--workers", type=int, default=os.cpu_count())
+    p.add_argument("--no-sharing", action="store_true", help="no sharing between households (to compare)")
     p.add_argument("--out", default=OUT)
-    p = sub.add_parser("compare", help="compare a run's behaviour with the placeholder decide()")
-    p.add_argument("file", nargs="?", default=OUT)
+    p = sub.add_parser("compare", help="compare runs' behaviour with the placeholder decide()")
+    p.add_argument("files", nargs="*", default=[OUT])
     args = ap.parse_args()
     return {"run": run, "compare": compare}[args.cmd](args) or 0
 

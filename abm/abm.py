@@ -124,7 +124,7 @@ class Sim:
         self.learning = sc.get("learning", True)
         self.trait_lo = np.array([lr["traits"][k]["range"][0] for k in TRAITS])
         self.trait_hi = np.array([lr["traits"][k]["range"][1] for k in TRAITS])
-        self.trait_start = np.array([lr["traits"][k]["start"] for k in TRAITS])
+        self.trait_start = np.array([lr["traits"][k]["start"][live["activity"]] for k in TRAITS])
         self.partners = np.zeros((0, 2), dtype=np.int64)     # partnerships: pairs of households
         names = [p["name"] for p in engine.product_list(erules)]
         self.eat_day = engine.consumption_rates(names, erules)[:, names.index(erules["foraging"]["product"])]

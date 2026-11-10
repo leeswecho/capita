@@ -31,11 +31,11 @@
     "min_return": 0.2
   },
   "learning": {
-    "about": "Social learning. Everyone carries three cultural traits, each within its range: diligence (how much of the work their household plans they actually do, up to their capacity), generosity (scales how much of its surplus their household passes along its links: the mean of its adults') and restraint (practices that space births, multiplying a woman's chance of conceiving; 1 is none). A child starts with its mother's traits, give or take inherit_sd. Once a year each person aged ages[0] to ages[1] compares themselves with another of those ages, within within_years of their own age, at random, and copies that person's traits (give or take inherit_sd) with chance per_year x (how much better the other is doing) / payoff_scale, at most per_year. Doing better means more living children per year of adult life (age - 14, at least 1): survival and children. Everyone starts at start, give or take inherit_sd.",
+    "about": "Social learning. Everyone carries three cultural traits, each within its range: diligence (how much of the work their household plans they actually do, up to their capacity), generosity (scales how much of its surplus their household passes along its links: the mean of its adults') and restraint (practices that space births, multiplying a woman's chance of conceiving; 1 is none). A child starts with its mother's traits, give or take inherit_sd. Once a year each person aged ages[0] to ages[1] compares themselves with another of those ages, within within_years of their own age, at random, and copies that person's traits (give or take inherit_sd) with chance per_year x (how much better the other is doing) / payoff_scale, at most per_year. Doing better means more living children per year of adult life (age - 14, at least 1): survival and children. Everyone starts at start for their way of life, give or take inherit_sd: where the traits settled after 600 years from 1 (16 scenarios, 2026-11), so a short burn-in reaches cultural equilibrium and learning goes on adjusting them to each scenario.",
     "traits": {
-      "diligence": {"start": 1.0, "range": [0.3, 1.5]},
-      "generosity": {"start": 1.0, "range": [0.0, 2.0]},
-      "restraint": {"start": 1.0, "range": [0.1, 1.0]}
+      "diligence": {"start": {"subsistence": 1.26, "farming": 1.22}, "range": [0.3, 1.5]},
+      "generosity": {"start": {"subsistence": 1.01, "farming": 1.29}, "range": [0.0, 2.0]},
+      "restraint": {"start": {"subsistence": 0.83, "farming": 0.81}, "range": [0.1, 1.0]}
     },
     "inherit_sd": 0.1,
     "within_years": 5,
@@ -63,7 +63,7 @@
     "farming_share": 0.3,
     "start_factor": [0.3, 1.2],
     "start_people": [60, 1500],
-    "burn_in_years": 150,
+    "burn_in_years": 60,
     "record_years": 40
   }
 }
